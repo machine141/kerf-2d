@@ -18,7 +18,7 @@
 import ClipperLib from 'clipper-lib';
 import { type Point, P, add, sub, mul, len, cross, dist } from '../geometry/vec';
 import { prims, lengthOf } from '../geometry/entity';
-import { offsetGeos, refit } from '../geometry/boolean';
+import { offsetGeos, refit, booleanShapes } from '../geometry/boolean';
 import { makeSource, offsetPaths, solidOf } from '../geometry/offset';
 import { vertexCorner, cornerAny } from '../geometry/corner';
 import { pieceToShape } from '../geometry/trim';
@@ -161,11 +161,15 @@ export function growPoly(pts: Point[], d: number): Point[] {
 }
 
 // ---------------- wrap a shape ----------------
-export type Joint = 'none' | 'plain' | 'shelf' | 'tabs';
+/** plain: just the shape · shelf: bigger plate + the shape glued on · tabs: tabs on the strip into slots in a bigger plate ·
+ *  through: tabs on the shape itself poke out through slots (or notches) in the strip */
+export type Joint = 'none' | 'plain' | 'shelf' | 'tabs' | 'through';
 export interface WrapOpts {
   H: number; t: number; kerf: number; mat: HMat; sf: number;
   pattern: Pattern; adapt: boolean; where: 'bends' | 'all';
   base: Joint; lid: Joint; tabs: number; tabW: number; lip: number; clearance: number;
+  /** 'through' joint: gap between the strip's edge and the plate (0 = open notches at the edge, else closed slots) */
+  raise?: number;
   /** longest strip piece that fits the bed */
   maxLen: number;
 }
@@ -204,7 +208,8 @@ export function wrapPlan(shapes: Shape[], o: WrapOpts): WrapPlan | { error: stri
   const flatAt = (x: number) => needR(rad, total, seam + x, 2);
   // tabs: evenly spaced, each nudged to the flattest spot nearby
   const tabs: number[] = [];
-  if ((o.base === 'tabs' || o.lid === 'tabs') && o.tabs > 0) {
+  const tabbed = (j: Joint) => j === 'tabs' || j === 'through';
+  if ((tabbed(o.base) || tabbed(o.lid)) && o.tabs > 0) {
     // the flattest spots, kept well spread out round the shape and away from the strip's ends
     const n = Math.round(o.tabs), sep = total / (n * 1.6), edge = o.tabW / 2 + 4, cand: { x: number; r: number }[] = [];
     for (let x = edge; x <= total - edge; x += 1) cand.push({ x, r: flatAt(x) });
@@ -267,18 +272,43 @@ export function wrapPlan(shapes: Shape[], o: WrapOpts): WrapPlan | { error: stri
     const tt = o.lid === 'tabs' ? tabs.filter(tx => tx > x0 && tx < x1).sort((a, b) => b - a) : [];
     for (const tx of tt) { const a = tx - x0 + o.tabW / 2, b = tx - x0 - o.tabW / 2; outline.push(P(a, o.H), P(a, o.H + t), P(b, o.H + t), P(b, o.H)); }
     outline.push(P(0, o.H));
+    // 'through' joints: the shape's tabs pass through the strip — open notches at the edge, or closed slots raised off it
+    const raise = Math.max(0, o.raise ?? t), holes: Shape[] = [], sw = (o.tabW + o.clearance - o.kerf) / 2, sh = (o.clearance - o.kerf) / 2;
+    const notch = (pts: Point[], tx: number, edge: 'bottom' | 'top') => {
+      const a = tx - x0 - (o.tabW + o.clearance) / 2, b = tx - x0 + (o.tabW + o.clearance) / 2, d = t + o.clearance;
+      // walk the outline and splice the notch into the right edge
+      if (edge === 'bottom') { const i = pts.findIndex((q, k) => k > 0 && q.y === 0 && q.x > a) ; pts.splice(i < 0 ? pts.length : i, 0, P(a, 0), P(a, d), P(b, d), P(b, 0)); }
+      else { const i = pts.findIndex(q => q.y === o.H && q.x < b); pts.splice(i < 0 ? pts.length : i, 0, P(b, o.H), P(b, o.H - d), P(a, o.H - d), P(a, o.H)); }
+    };
+    for (const [j, edge] of [[o.base, 'bottom'], [o.lid, 'top']] as const) {
+      if (j !== 'through') continue;
+      for (const tx of tabs.filter(q => q > x0 && q < x1)) {
+        if (raise < 0.01) { notch(outline, tx, edge); continue; }
+        const xc = tx - x0, y0 = edge === 'bottom' ? raise : o.H - raise - t, y1 = y0 + t;
+        holes.push(polyS([P(xc - sw, y0 - sh), P(xc + sw, y0 - sh), P(xc + sw, y1 + sh), P(xc - sw, y1 + sh)]));
+      }
+    }
     const grown = growPoly(outline, kw), slits: Shape[] = [], slitState: Column['state'][] = [];
+    for (const h of holes) cutLen += lengthOf(h);
     for (const c of columns) if (c.x > x0 && c.x < x1) for (const [y0, y1] of columnCuts(o.H, o.pattern, c.kind)) { slits.push(seg(P(c.x - x0, y0), P(c.x - x0, y1))); slitState.push(c.state); }
     slitCount += slits.length; addLen(slits);
     for (let j = 0; j < grown.length; j++) cutLen += dist(grown[j], grown[(j + 1) % grown.length]);
-    parts.push({ name: edges.length > 2 ? `Strip ${i + 1} of ${edges.length - 1}` : 'Strip', cut: [polyS(grown)], slits, slitState });
+    parts.push({ name: edges.length > 2 ? `Strip ${i + 1} of ${edges.length - 1}` : 'Strip', cut: [polyS(grown), ...holes], slits, slitState });
   }
   // base / lid plates
   const plate = (kind: Joint, name: string): Part | null => {
     if (kind === 'none') return null;
     const cut: Shape[] = [], mark: Shape[] = [];
     if (kind === 'plain') { const s = offsetOutline(shapes, kw); if (s) cut.push(s); }
-    else {
+    else if (kind === 'through') {
+      // the shape itself, with tabs reaching out through the strip (flush with its outside face)
+      const s = offsetOutline(shapes, kw), tabsP: Shape[] = [];
+      for (const tx of tabs) {
+        const w2 = (o.tabW + o.kerf) / 2, A = at(mid, seam + tx - w2), B = at(mid, seam + tx + w2), NA = P(A.t.y, -A.t.x), NB = P(B.t.y, -B.t.x);   // outward normals (the curve runs anticlockwise)
+        tabsP.push(polyS([add(A.p, mul(NA, -t / 2 - 2)), add(B.p, mul(NB, -t / 2 - 2)), add(B.p, mul(NB, t / 2 + kw)), add(A.p, mul(NA, t / 2 + kw))]));
+      }
+      if (s) { const u = tabsP.length ? booleanShapes('union', [s, ...tabsP]) : { shapes: [s] }; cut.push(...('error' in u ? [s, ...tabsP] : u.shapes)); }
+    } else {
       const big = offsetOutline(shapes, t + o.lip + kw); if (big) cut.push(big);
       if (kind === 'tabs') for (const tx of tabs) {
         const { p, t: T } = at(mid, seam + tx), N = P(-T.y, T.x), R = flatAt(tx), sag = isFinite(R) ? o.tabW * o.tabW / (8 * R) : 0;
@@ -288,15 +318,15 @@ export function wrapPlan(shapes: Shape[], o: WrapOpts): WrapPlan | { error: stri
       // engraved guide: where the strip's inside face sits, and where the strip starts
       const g = offsetOutline(shapes, 0); if (g) mark.push(g);
     }
-    const s0 = at(mid, seam), N0 = P(-s0.t.y, s0.t.x);
+    const s0 = at(mid, seam), N0 = P(s0.t.y, -s0.t.x);   // outward
     // start mark: across the strip's place on the plate (on a plain plate, just inside its edge)
-    mark.push(kind === 'plain' ? seg(add(s0.p, mul(N0, -t / 2 - 5)), add(s0.p, mul(N0, -t / 2 - 0.5))) : seg(add(s0.p, mul(N0, -t / 2)), add(s0.p, mul(N0, t / 2 + Math.max(o.lip, 2) * 0.8))));
+    mark.push(kind === 'plain' || kind === 'through' ? seg(add(s0.p, mul(N0, -t / 2 - 5)), add(s0.p, mul(N0, -t / 2 - 0.5))) : seg(add(s0.p, mul(N0, -t / 2)), add(s0.p, mul(N0, t / 2 + Math.max(o.lip, 2) * 0.8))));
     for (const e of cut) cutLen += lengthOf(e);
     return { name, cut, mark };
   };
-  const pb = plate(o.base, o.base === 'shelf' ? 'Base' : o.base === 'tabs' ? 'Base (with slots)' : 'Base'); if (pb) parts.push(pb);
+  const pb = plate(o.base, o.base === 'tabs' ? 'Base (with slots)' : o.base === 'through' ? 'Base (with tabs)' : 'Base'); if (pb) parts.push(pb);
   if (o.base === 'shelf') { const s = offsetOutline(shapes, kw); if (s) { parts.push({ name: 'Shelf (glue on the base)', cut: [s] }); cutLen += lengthOf(s); } }
-  const pl = plate(o.lid, 'Lid'); if (pl) parts.push(pl);
+  const pl = plate(o.lid, o.lid === 'through' ? 'Lid (with tabs)' : 'Lid'); if (pl) parts.push(pl);
   if (o.lid === 'shelf') { const s = offsetOutline(shapes, kw); if (s) { parts.push({ name: 'Lid shelf (glue under the lid)', cut: [s] }); cutLen += lengthOf(s); } }
   return { total, tightest, hollow, seam, corners, columns, tabs, splits, slitCount, cutLen, parts, warnings, state, Drange: columns.length ? [Dmin, Dmax] : [0, 0] };
 }

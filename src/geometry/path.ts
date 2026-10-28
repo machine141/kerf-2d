@@ -90,8 +90,10 @@ export function subPath(p: PathLike, s0: number, s1: number, exact?: (s: number)
       const lo = Math.max(s0, a0), hi = Math.min(s1, a1);
       if (hi - lo <= 1e-9 || s.len < 1e-12) continue;
       const t0 = (lo - a0) / s.len, t1 = (hi - a0) / s.len;
-      if (!pts.length) pts.push(at(lo % (total || 1)) || cp(segPoint(s, t0)));
-      pts.push(at(hi % (total || 1)) || (t1 >= 1 - 1e-12 ? s.b : cp(segPoint(s, t1))));
+      // only a closed path wraps round (its end is its start); on an open path the end is never the start
+      const wrap = (x: number) => p.closed ? x % (total || 1) : x;
+      if (!pts.length) pts.push(at(wrap(lo)) || cp(segPoint(s, t0)));
+      pts.push(at(wrap(hi)) || (t1 >= 1 - 1e-12 ? s.b : cp(segPoint(s, t1))));
       bulge.push(pieceBulge(s, t0, t1));
     }
   }

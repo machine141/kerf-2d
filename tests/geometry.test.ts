@@ -110,7 +110,9 @@ describe('trim (Delete Part)', () => {
     const whole: any = trimShape(r, P(40, 0), cut([diag]), 'whole');
     expect(whole.length).toBe(1); expect(whole[0].type).toBe('poly'); expect(whole[0].closed).toBe(false);
     const segs: any = trimShape(r, P(38, 0), cut([diag]), 'segments');
-    expect(segs.length).toBe(4); // 4 sides, the bottom one shortened
-    expect(segs.find((s: any) => s.a.y === 0 && s.b.y === 0)?.b.x).toBeCloseTo(35, 9);
+    // only the bit of the bottom side between the crossing and the corner goes; the rest stays one path
+    expect(segs.length).toBe(1); expect(segs[0].type).toBe('poly'); expect(segs[0].closed).toBe(false);
+    const ends = [segs[0].pts[0], segs[0].pts[segs[0].pts.length - 1]].map((p: any) => [+p.x.toFixed(6), +p.y.toFixed(6)]).sort();
+    expect(ends).toEqual([[35, 0], [40, 0]]);
   });
 });

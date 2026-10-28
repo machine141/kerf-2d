@@ -47,16 +47,11 @@ const touchesOn = (my: Prim[], touch?: Touch) => { const out: Point[] = []; if (
 /** Trim with full detail: the pieces kept, the pieces removed (for preview), or why it can't be done. */
 export function trimInfo(e: Shape, click: Point, cutters: Prim[], mode: TrimMode = 'whole', touch?: Touch): TrimResult {
   if (e.type === 'dim') return { error: 'Dimensions cannot be trimmed' };
+  // segment-by-segment: a path's own corners (a spline's knots) also count as cut points
+  let knots: Point[] | null = null;
+  if (mode === 'segments' && e.type === 'poly') knots = e.pts;
+  if (mode === 'segments' && e.type === 'spline') knots = (e as any).pts;
   if (e.type === 'ellipse' || e.type === 'spline') e = { ...(e as any), type: 'poly', closed: e.type === 'ellipse' || !!(e as any).closed, pts: flatten(e, 0.005).pts.map(cp) } as Shape;
-  if (e.type === 'poly' && mode === 'segments') {
-    const parts = explodePath(e);
-    let bi = 0, bd = Infinity;
-    parts.forEach((l, i) => { const d = Math.min(...prims(l).map(pr => dist(click, nearestOnPrim(click, pr)))); if (d < bd) { bd = d; bi = i; } });
-    const others = cutters.concat(parts.filter((_, i) => i !== bi).flatMap(l => prims(l)));
-    const r = trimInfo(parts[bi], click, others, 'whole', touch);
-    if ('error' in r) return r;
-    return { keep: parts.slice(0, bi).concat(r.keep, parts.slice(bi + 1)), removed: r.removed };
-  }
   const cutsOf = (my: Prim[]) => { const out: Point[] = []; for (const m of my) for (const c of cutters) out.push(...intersect(m, c)); return out.concat(touchesOn(my, touch)); };
   if (e.type === 'line') {
     const cuts = cutsOf(prims(e)), d = sub(e.b, e.a), L = dot(d, d), tAt = (p: Point) => dot(sub(p, e.a), d) / L, tc = tAt(click);
@@ -84,7 +79,7 @@ export function trimInfo(e: Shape, click: Point, cutters: Prim[], mode: TrimMode
     if (hi < span - 1e-9) keep.push({ type: 'arc', c: e.c, r: e.r, a0: normA(e.a0 + hi), a1: e.a1 } as Shape);
     return { keep, removed: [{ type: 'arc', c: e.c, r: e.r, a0: normA(e.a0 + lo), a1: normA(e.a0 + hi) } as Shape] };
   }
-  if (e.type === 'poly') return trimPath(e, click, cutters, touch);
+  if (e.type === 'poly') return trimPath(e, click, cutters, touch, knots);
   return { error: 'This object cannot be trimmed' };
 }
 const closedMsg = (n: number) => n === 0
@@ -92,7 +87,7 @@ const closedMsg = (n: number) => n === 0
   : 'Only one crossing on this closed shape — trimming needs two. Zoom in and check the shapes really cross.';
 
 /** Trim a path as a whole between the two nearest cuts around the click. */
-function trimPath(e: PathLike, click: Point, cutters: Prim[], touch?: Touch): TrimResult {
+function trimPath(e: PathLike, click: Point, cutters: Prim[], touch?: Touch, knots?: Point[] | null): TrimResult {
   const segs = segsOf(e), cum = [0];
   for (const s of segs) cum.push(cum[cum.length - 1] + s.len);
   const total = cum[segs.length];
@@ -110,6 +105,11 @@ function trimPath(e: PathLike, click: Point, cutters: Prim[], touch?: Touch): Tr
     }
     for (const p of touchesOn([pr], touch)) cuts.push({ s: cum[i] + clamp01(segParam(s, p)) * s.len, p });
   });
+  // knots (segment-by-segment): every path vertex that is a knot is a cut too
+  if (knots?.length) {
+    const kset = knots.map(cp);
+    for (let i = 0; i <= segs.length; i++) { const q = i < segs.length ? segs[i].a : segs[segs.length - 1].b; if (kset.some(k => dist(k, q) < 1e-6)) cuts.push({ s: cum[i], p: q }); }
+  }
   const exact = (s: number) => cuts.find(c => Math.abs(c.s - s) < 1e-6)?.p;
   if (!e.closed) {
     const ss = uniq(cuts.map(c => c.s).filter(s => s > 1e-7 && s < total - 1e-7));

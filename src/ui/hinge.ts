@@ -16,10 +16,10 @@ type Mode = 'wrap' | 'fill' | 'test';
 const S = {
   mode: 'wrap' as Mode, useCircle: false, circD: 250, H: 60, mat: 'ply', t: 3, kerf: 0.15,
   where: 'bends' as 'bends' | 'all', adapt: true, D: 2.5, m: 2, G: 3.6, open: true,
-  base: 'shelf' as Joint, lid: 'none' as Joint, tabs: 5, tabW: 12, lip: 5, clearance: 0.1,
+  base: 'shelf' as Joint, lid: 'none' as Joint, tabs: 5, tabW: 12, lip: 5, clearance: 0.1, raise: 3,
   speed: 15, passes: 1, vertical: true, fillR: 40, fillL: 30, gap: 8, recommended: false,
 };
-const JOINTS: [Joint, string][] = [['none', 'None'], ['plain', 'Plain (just the shape)'], ['shelf', 'Shelf (two layers, easiest)'], ['tabs', 'Slots and tabs']];
+const JOINTS: [Joint, string][] = [['none', 'None'], ['plain', 'Plain (just the shape)'], ['shelf', 'Shelf (two layers, easiest)'], ['through', 'Tabs on the shape, through the strip'], ['tabs', 'Tabs on the strip, into a bigger base']];
 const mins = (s: number) => s < 90 ? `${Math.round(s)} s` : s < 5400 ? `${Math.round(s / 60)} min` : `${(s / 3600).toFixed(1)} h`;
 const metres = (mm: number) => mm >= 1000 ? `${fmt(mm / 1000, 1)} m` : `${fmt(mm, 0)} mm`;
 
@@ -74,6 +74,7 @@ export function openHinge(ed: Editor) {
           <label class="sl">Base ${sel('hBase', JOINTS)}</label>
           <label class="sl">Lid ${sel('hLid', JOINTS)}</label>
           <div id="hTabRow">${num('hTabs', 'Tabs', S.tabs, 1, '', 1)}${num('hTabW', 'Tab width', S.tabW, 1, 'mm', 3)}${num('hFit', 'Slot clearance', S.clearance, 0.05, 'mm', 0)}</div>
+          <div id="hRaiseRow">${num('hRaise', 'Slots up from the edge', S.raise, 0.5, 'mm', 0, '0 = open notches at the edge of the strip (easy to slide on); more = closed slots that hold the shape in place')}</div>
           <div id="hLipRow">${num('hLip', 'Ledge round the strip', S.lip, 1, 'mm', 1)}</div>
         </div>
         <h4>Laser time</h4>
@@ -95,7 +96,7 @@ export function openHinge(ed: Editor) {
   const mat = () => MATERIALS.find(m => m.id === S.mat) || MATERIALS[0];
   const shapes = (): Shape[] => S.useCircle || !selShapes().length ? [{ type: 'circle', c: P(0, 0), r: S.circD / 2 } as Shape] : selShapes().map(e => structuredClone(e) as Shape);
   const opts = (): WrapOpts => ({ H: S.H, t: S.t, kerf: S.kerf, mat: mat(), sf: 1.5, pattern: { D: S.D, m: Math.max(1, Math.round(S.m)), G: S.G, open: S.open },
-    adapt: S.adapt, where: S.where, base: S.base, lid: S.lid, tabs: S.tabs, tabW: S.tabW, lip: S.lip, clearance: S.clearance, maxLen: ed.doc.page.w - 10 });
+    adapt: S.adapt, where: S.where, base: S.base, lid: S.lid, tabs: S.tabs, tabW: S.tabW, lip: S.lip, clearance: S.clearance, raise: S.raise, maxLen: ed.doc.page.w - 10 });
   /** tightest radius the hinge part of the shape needs (for Recommend) */
   const tightest = (): number => {
     const o = outlineOf(shapes()); if (!o) return 50;
@@ -129,7 +130,8 @@ export function openHinge(ed: Editor) {
     $('#hCircRow').hidden = !S.useCircle && hasSel;
     $('#hFillInfo').innerHTML = hasSel ? 'Fills your selected shape with slits, keeping a gap from its edge.' : '<b>Select a closed shape first</b> (use Select, V), then open Living hinge again.';
     $('#hDRow').hidden = S.mode === 'wrap' && S.adapt;
-    $('#hTabRow').hidden = !(S.base === 'tabs' || S.lid === 'tabs'); $('#hLipRow').hidden = !(['shelf', 'tabs'].includes(S.base) || ['shelf', 'tabs'].includes(S.lid));
+    const tb = (j: Joint) => j === 'tabs' || j === 'through';
+    $('#hTabRow').hidden = !(tb(S.base) || tb(S.lid)); $('#hRaiseRow').hidden = !(S.base === 'through' || S.lid === 'through'); $('#hLipRow').hidden = !(['shelf', 'tabs'].includes(S.base) || ['shelf', 'tabs'].includes(S.lid));
     const u1 = root.querySelector<HTMLElement>('#hUseSel'), u2 = root.querySelector<HTMLElement>('#hUseCirc');
     if (u1) u1.onclick = () => { S.useCircle = false; update(); }; if (u2) u2.onclick = () => { S.useCircle = true; update(); };
     $('#hHelp').innerHTML = S.mode === 'wrap'
@@ -155,7 +157,7 @@ export function openHinge(ed: Editor) {
       lines.push(`<text x="${fmt((g.x0 + g.x1) / 2 + ghostOff.x, 1)}" y="${fmt(-(g.y1 + ghostOff.y) - 2, 1)}">your shape (not cut)</text>`);
     } else if (current.ghost?.length) for (const s of current.ghost) lines.push(`<path class="ghost" d="${d(s)}"/>`);
     if (current.plan?.corners.length) {
-      const base = lay.find(l => l.part.name.startsWith('Base') || l.part.name === 'Lid'), off = base ? P(base.dx, base.dy) : ghostOff;
+      const base = lay.find(l => l.part.name.startsWith('Base') || l.part.name.startsWith('Lid')), off = base ? P(base.dx, base.dy) : ghostOff;
       if (off) for (const c of current.plan.corners) lines.push(`<circle class="bad" cx="${fmt(c.x + off.x, 2)}" cy="${fmt(-(c.y + off.y), 2)}" r="${fmt(Math.max(3, S.t * 2), 1)}"/>`);
     }
     const svg = $('#hSvg');
@@ -219,14 +221,14 @@ export function openHinge(ed: Editor) {
   function syncInputs() {
     const set = (id: string, v: number) => { const el = $<HTMLInputElement>(id); if (document.activeElement !== el) el.value = String(+v.toFixed(3)); };
     set('#hD', S.D); set('#hM', S.m); set('#hG', S.G); set('#hCircD', S.circD); set('#hH', S.H); set('#hT', S.t); set('#hK', S.kerf);
-    set('#hTabs', S.tabs); set('#hTabW', S.tabW); set('#hFit', S.clearance); set('#hLip', S.lip); set('#hSp', S.speed); set('#hPa', S.passes); set('#hFillR', S.fillR); set('#hFillL', S.fillL);
+    set('#hTabs', S.tabs); set('#hRaise', S.raise); set('#hTabW', S.tabW); set('#hFit', S.clearance); set('#hLip', S.lip); set('#hSp', S.speed); set('#hPa', S.passes); set('#hFillR', S.fillR); set('#hFillL', S.fillL);
   }
   let timer = 0;
   function update() { compute(); render(); }
   const later = () => { clearTimeout(timer); timer = window.setTimeout(update, 120); };
   const bindNum = (id: string, key: keyof typeof S, min = 0) => { const el = $<HTMLInputElement>(id); el.addEventListener('input', () => { const v = parseFloat(el.value); if (isFinite(v) && v >= min) { (S as any)[key] = v; later(); } }); };
   bindNum('#hCircD', 'circD', 10); bindNum('#hH', 'H', 8); bindNum('#hT', 't', 0.5); bindNum('#hK', 'kerf', 0); bindNum('#hD', 'D', 0.3); bindNum('#hM', 'm', 1); bindNum('#hG', 'G', 0.5);
-  bindNum('#hTabs', 'tabs', 1); bindNum('#hTabW', 'tabW', 3); bindNum('#hFit', 'clearance', 0); bindNum('#hLip', 'lip', 1); bindNum('#hSp', 'speed', 0.5); bindNum('#hPa', 'passes', 1);
+  bindNum('#hTabs', 'tabs', 1); bindNum('#hRaise', 'raise', 0); bindNum('#hTabW', 'tabW', 3); bindNum('#hFit', 'clearance', 0); bindNum('#hLip', 'lip', 1); bindNum('#hSp', 'speed', 0.5); bindNum('#hPa', 'passes', 1);
   bindNum('#hFillR', 'fillR', 2); bindNum('#hFillL', 'fillL', 4);
   const segBind = (id: string, f: (v: string) => void) => root.querySelectorAll<HTMLElement>(`#${id} button`).forEach(b => b.onclick = () => { f(b.dataset.v!); update(); });
   segBind('hMode', v => S.mode = v as Mode); segBind('hWhere', v => S.where = v as any); segBind('hAdapt', v => S.adapt = v === '1'); segBind('hDir', v => S.vertical = v === '1');

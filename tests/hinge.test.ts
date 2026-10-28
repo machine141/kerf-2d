@@ -105,3 +105,24 @@ describe('bend radius measurement', () => {
     expect(sq.R.filter(x => !isFinite(x)).length).toBeGreaterThan(sq.R.length * 0.8);
   });
 });
+import { areaOf } from '../src/geometry/boolean';
+describe('tabs on the shape, through the strip (v0.9.1)', () => {
+  it('base gets tabs reaching to the strip\'s outside face; strip gets matching slots', () => {
+    const w = plan(circle(60), { base: 'through', tabs: 4, tabW: 12, raise: 3, kerf: 0 });
+    const b = w.parts.find(p => p.name === 'Base (with tabs)')!; expect(b.cut.length).toBe(1);
+    // the plate reaches out to R 63 (shape + t) at the tabs: farthest point
+    const f = flatten(b.cut[0], 0.01).pts, far = Math.max(...f.map(p => Math.hypot(p.x, p.y)));
+    expect(far).toBeGreaterThan(62.9); expect(far).toBeLessThan(63.2);
+    expect(areaOf(b.cut[0])).toBeGreaterThan(Math.PI * 60 * 60 + 4 * 12 * 3 * 0.9);
+    const strip = w.parts[0], holes = strip.cut.slice(1);
+    expect(holes.length).toBe(4);
+    for (const h of holes as any[]) { const ys = h.pts.map((p: any) => p.y), xs = h.pts.map((p: any) => p.x); expect(Math.min(...ys)).toBeCloseTo(3 - 0.05, 6); expect(Math.max(...ys)).toBeCloseTo(6 + 0.05, 6); expect(Math.max(...xs) - Math.min(...xs)).toBeCloseTo(12.1, 6); }
+    for (const tx of w.tabs) expect(w.columns.every(c => Math.abs(c.x - tx) >= 6)).toBe(true);
+  });
+  it('raise 0 makes open notches in the strip edge instead of holes', () => {
+    const w = plan(circle(60), { base: 'through', lid: 'through', tabs: 3, raise: 0, kerf: 0 });
+    const strip: any = w.parts[0].cut[0]; expect(w.parts[0].cut.length).toBe(1);
+    expect(strip.pts.length).toBe(4 + 3 * 4 * 2);   // 3 notches at the bottom and 3 at the top
+    expect(Math.min(...strip.pts.map((p: any) => p.y))).toBeCloseTo(0, 6);
+  });
+});
