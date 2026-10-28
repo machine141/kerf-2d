@@ -42,3 +42,23 @@ describe('polygons', () => {
     expect(st.pts.length).toBe(10); expect(Math.hypot(st.pts[1].x, st.pts[1].y)).toBeCloseTo(4, 9);
   });
 });
+import { makeSpiral } from '../src/tools/draw';
+import { flatten } from '../src/geometry/entity';
+describe('spiral', () => {
+  it('even coils: constant gap, ends on the outer point', () => {
+    const s: any = makeSpiral(P(0, 0), P(40, 0), 4, 0, 'even', true, 0);
+    expect(dist(s.pts.at(-1), P(40, 0))).toBeLessThan(1e-9);
+    const f = flatten(s, 0.001).pts;
+    // points on the +x axis (crossings) should be 10 mm apart: 10, 20, 30, 40
+    const xs = f.filter((p, i) => i > 0 && Math.abs(p.y) < 0.05 && p.x > 1).map(p => Math.round(p.x));
+    for (const r of [10, 20, 30, 40]) expect(xs.some(x => Math.abs(x - r) <= 1)).toBe(true);
+    // the Bézier fit stays on the true spiral: r = 40·u with angle 8π·u
+    const dense = Array.from({ length: 20001 }, (_, i) => { const u = i / 20000, r = 40 * u, a = 8 * Math.PI * u - 8 * Math.PI; return P(r * Math.cos(a), r * Math.sin(a)); });
+    let worst = 0; for (const p of f) { let m = Infinity; for (const q of dense) m = Math.min(m, dist(p, q)); worst = Math.max(worst, m); }
+    expect(worst).toBeLessThan(0.05);
+  });
+  it('growing coils get wider each turn', () => {
+    const s: any = makeSpiral(P(0, 0), P(40, 0), 3, 2, 'grow', true, 0);
+    expect(dist(s.pts[0], P(0, 0))).toBeCloseTo(2, 9);
+  });
+});

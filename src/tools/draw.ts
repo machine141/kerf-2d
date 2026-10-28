@@ -221,3 +221,51 @@ const splineBase = pointTool({
   },
 });
 export const splineTool: Tool = { ...splineBase, closes: true };
+
+// ---------- spiral ----------
+/**
+ * Spiral from a centre outwards, as exact-ish cubic Béziers (one per 45°, built
+ * from the curve's own tangents, so it is smooth and accurate).
+ *  • Even: Archimedean — the gap between coils is the same all the way (tight or loose coil).
+ *  • Growing: logarithmic — each coil wider than the last (shell / flower look).
+ */
+export function makeSpiral(c: Point, outer: Point, turns: number, innerR: number, kind: 'even' | 'grow', ccw: boolean, stepDeg: number): Shape | null {
+  const R = dist(c, outer), T = Math.max(0.25, Math.min(50, turns)), r0 = Math.max(0, Math.min(innerR, R * 0.95));
+  if (R < 1e-6) return null;
+  let a1 = angOf(c, outer); if (stepDeg > 0) a1 = Math.round(a1 / (stepDeg * DEG)) * stepDeg * DEG;
+  const span = T * 2 * Math.PI, s = ccw ? 1 : -1, a0 = a1 - s * span;
+  const rAt = (u: number) => kind === 'grow' ? Math.max(r0, R * 0.02) * Math.pow(R / Math.max(r0, R * 0.02), u) : r0 + (R - r0) * u;   // u: 0 → 1 from inside out
+  const drdu = (u: number) => kind === 'grow' ? rAt(u) * Math.log(R / Math.max(r0, R * 0.02)) : (R - r0);
+  const pt = (u: number) => { const a = a0 + s * span * u, r = rAt(u); return P(c.x + r * Math.cos(a), c.y + r * Math.sin(a)); };
+  const der = (u: number) => { const a = a0 + s * span * u, r = rAt(u), dr = drdu(u), da = s * span; return P(dr * Math.cos(a) - r * da * Math.sin(a), dr * Math.sin(a) + r * da * Math.cos(a)); };
+  const n = Math.max(2, Math.ceil(T * 8)), pts: Point[] = [], h: [Point, Point][] = [];
+  for (let i = 0; i <= n; i++) {
+    const u = i / n, p = pt(u), d = der(u), k = 1 / (3 * n);
+    pts.push(cp(p)); h.push([cp(P(p.x - d.x * k, p.y - d.y * k)), cp(P(p.x + d.x * k, p.y + d.y * k))]);
+  }
+  h[0][0] = pts[0]; h[n][1] = pts[n];
+  return { type: 'spline', pts, h, closed: false } as Shape;
+}
+const spiralArgs = (ed: Editor, c: Point, q: Point) => makeSpiral(c, q, +ed.opt.spTurns, +ed.opt.spInner, ed.opt.spKind, ed.opt.spDir === 'ccw', ed.mods.shift ? 0 : 15);
+const spiralBase = pointTool({
+  id: 'spiral', label: 'Spiral', key: 'J', group: 1, need: 2,
+  icon: '<path d="M12 12a1.5 1.5 0 0 1 3 0 3 3 0 0 1-6 0 4.5 4.5 0 0 1 9 0 6 6 0 0 1-12 0 7.5 7.5 0 0 1 15 0"/>',
+  prompts: ['Locate the centre of the spiral', 'Locate the outer end (sets the size and where it finishes) · wheel = turns · Shift = free angle'],
+  options: [
+    { key: 'spKind', label: 'Coils', type: 'seg', choices: [['even', 'Even'], ['grow', 'Growing']] },
+    { key: 'spTurns', label: 'Turns', type: 'number', min: 0.25, max: 50, step: 0.5 },
+    { key: 'spInner', label: 'Inner radius', type: 'number', min: 0, step: 1, unit: 'mm' },
+    { key: 'spDir', label: 'Direction', type: 'seg', choices: [['ccw', '↺'], ['cw', '↻']] },
+  ],
+  make(ed, p) { const s = spiralArgs(ed, p[0], p[1]); if (s) addShape(ed, s); },
+  preview(ed, p, cur, o) {
+    const s = spiralArgs(ed, p[0], cur); if (!s) return; o.ghost(s);
+    const R = dist(p[0], cur), r0 = Math.min(+ed.opt.spInner || 0, R * 0.95), T = +ed.opt.spTurns;
+    o.label(ed.opt.spKind === 'even' ? `R ${fmt(R, 2)} · ${fmt(T, 2)} turns · gap ${fmt((R - r0) / Math.max(0.25, T), 2)} mm` : `R ${fmt(R, 2)} · ${fmt(T, 2)} turns · each coil ×${fmt(Math.pow(R / Math.max(r0, R * 0.02), 1 / Math.max(0.25, T)), 2)}`);
+  },
+});
+export const spiralTool: Tool = {
+  ...spiralBase,
+  /** after the centre is placed, the wheel changes the number of turns (Shift = quarter turns) */
+  wheel(ed, dir, info) { if (ed.pts.length !== 1) return false; ed.opt.spTurns = Math.max(0.25, Math.min(50, Math.round((+ed.opt.spTurns + dir * (info.shift ? 0.25 : 0.5)) * 4) / 4)); ed.changed('opts'); return true; },
+};
