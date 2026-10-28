@@ -14,14 +14,33 @@ const S: Settings = { mode: 'silhouette', threshold: 128, auto: true, invert: fa
 const esc = (s: string) => s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' } as any)[c]);
 export const tolFromDetail = (d: number) => 0.25 * Math.pow(1.35, 10 - d);
 
-export function openTrace(ed: Editor, file: File) {
-  const url = URL.createObjectURL(file), im = new Image();
-  im.onload = () => { build(ed, im, file.name); URL.revokeObjectURL(url); };
-  im.onerror = () => { ed.toast('That file could not be read as an image'); URL.revokeObjectURL(url); };
-  im.src = url;
+/** A decoded picture: anything canvas can draw, with its pixel size. */
+interface Pic { src: CanvasImageSource; naturalWidth: number; naturalHeight: number }
+
+/**
+ * Decode a picture file. Tries createImageBitmap first (needs no URL, so it
+ * works inside sandboxed pages that block blob: images), then a data: URL,
+ * then a blob: URL.
+ */
+export async function decodeImage(file: Blob): Promise<Pic> {
+  const errors: string[] = [];
+  if (typeof createImageBitmap === 'function') {
+    try { const b = await createImageBitmap(file); return { src: b, naturalWidth: b.width, naturalHeight: b.height }; } catch (e: any) { errors.push(e?.message || 'bitmap'); }
+  }
+  const viaUrl = (url: string) => new Promise<Pic>((ok, bad) => { const im = new Image(); im.onload = () => ok({ src: im, naturalWidth: im.naturalWidth, naturalHeight: im.naturalHeight }); im.onerror = () => bad(new Error('image')); im.src = url; });
+  try { const url = await new Promise<string>((ok, bad) => { const r = new FileReader(); r.onload = () => ok(String(r.result)); r.onerror = () => bad(r.error); r.readAsDataURL(file); }); return await viaUrl(url); } catch (e: any) { errors.push(e?.message || 'data'); }
+  const u = URL.createObjectURL(file);
+  try { return await viaUrl(u); } finally { URL.revokeObjectURL(u); }
 }
 
-function build(ed: Editor, im: HTMLImageElement, name: string) {
+export async function openTrace(ed: Editor, file: Blob, name = (file as File).name || 'pasted image') {
+  if (file.type && /heic|heif/i.test(file.type + name)) { ed.toast('HEIC photos (iPhone) cannot be read by browsers — save it as JPEG or PNG first'); return; }
+  ed.toast('Opening ' + name + '…');
+  try { build(ed, await decodeImage(file), name); }
+  catch { ed.toast(`${name} could not be read as an image — try saving it as PNG or JPEG`); }
+}
+
+function build(ed: Editor, im: Pic, name: string) {
   document.querySelector('#trace')?.remove();
   const root = document.createElement('div'); root.id = 'trace';
   root.innerHTML = `<div class="box" role="dialog" aria-modal="true" aria-labelledby="tTitle">
@@ -63,7 +82,7 @@ function build(ed: Editor, im: HTMLImageElement, name: string) {
 
   function load() {
     const k = Math.min(1, S.res / Math.max(im.naturalWidth, im.naturalHeight)), w = Math.max(8, Math.round(im.naturalWidth * k)), h = Math.max(8, Math.round(im.naturalHeight * k));
-    const c = document.createElement('canvas'); c.width = w; c.height = h; const x = c.getContext('2d')!; x.drawImage(im, 0, 0, w, h);
+    const c = document.createElement('canvas'); c.width = w; c.height = h; const x = c.getContext('2d')!; x.drawImage(im.src, 0, 0, w, h);
     const old = img, oldE = erase; img = { w, h, data: x.getImageData(0, 0, w, h).data };
     erase = new Uint8Array(w * h);
     if (old && oldE) for (let y = 0; y < h; y++) for (let x2 = 0; x2 < w; x2++) erase[y * w + x2] = oldE[Math.min(old.h - 1, Math.floor(y * old.h / h)) * old.w + Math.min(old.w - 1, Math.floor(x2 * old.w / w))];
@@ -91,7 +110,7 @@ function build(ed: Editor, im: HTMLImageElement, name: string) {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, W, H);
     const k = Math.min(W / img.w, H / img.h) * 0.96; fit = { k, ox: (W - img.w * k) / 2, oy: (H - img.h * k) / 2 };
     ctx.fillStyle = '#fff'; ctx.fillRect(fit.ox, fit.oy, img.w * k, img.h * k);
-    if (S.showImg) { ctx.globalAlpha = .45; ctx.drawImage(im, fit.ox, fit.oy, img.w * k, img.h * k); ctx.globalAlpha = 1; }
+    if (S.showImg) { ctx.globalAlpha = .45; ctx.drawImage(im.src, fit.ox, fit.oy, img.w * k, img.h * k); ctx.globalAlpha = 1; }
     // erased areas
     ctx.fillStyle = 'rgba(224,49,49,.28)';
     for (let y = 0; y < img.h; y++) { let x0 = -1; for (let x = 0; x <= img.w; x++) { const on = x < img.w && erase[y * img.w + x]; if (on && x0 < 0) x0 = x; if (!on && x0 >= 0) { ctx.fillRect(fit.ox + x0 * k, fit.oy + y * k, (x - x0) * k, k + .5); x0 = -1; } } }

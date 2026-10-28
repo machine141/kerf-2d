@@ -221,11 +221,24 @@ export function startUI(ed: Editor) {
   const saveNative = () => saveFile(base() + '.json', JSON.stringify(ed.doc, null, 1));
   $('#bSave').onclick = saveNative; $('#bSvg').onclick = () => showExport('svg'); $('#bDxf').onclick = () => showExport('dxf');
   $('#bOpen').onclick = () => $('#fileIn').click();
-  const isImage = (f: File) => /^image\/(png|jpe?g|gif|webp|bmp)$/i.test(f.type) || /\.(png|jpe?g|gif|webp|bmp)$/i.test(f.name);
+  const isImage = (f: File) => /^image\//i.test(f.type) || /\.(png|jpe?g|jfif|gif|webp|bmp|avif|heic|heif)$/i.test(f.name);
   $('#bTrace').onclick = () => $('#imgIn').click();
   $<HTMLInputElement>('#imgIn').onchange = ev => { const inp = ev.target as HTMLInputElement, f = inp.files?.[0]; inp.value = ''; if (f) openTrace(ed, f); };
-  $('#main').addEventListener('dragover', ev => { ev.preventDefault(); });
-  $('#main').addEventListener('drop', ev => { ev.preventDefault(); const f = ev.dataTransfer?.files?.[0]; if (!f) return; if (isImage(f)) openTrace(ed, f); else { const dt = new DataTransfer(); dt.items.add(f); const inp = $<HTMLInputElement>('#fileIn'); inp.files = dt.files; inp.dispatchEvent(new Event('change')); } });
+  // drop a picture (or drawing) anywhere on the window; paste a picture with Ctrl/Cmd+V
+  const hasFiles = (ev: DragEvent) => [...(ev.dataTransfer?.types || [])].includes('Files');
+  window.addEventListener('dragover', ev => { if (!hasFiles(ev)) return; ev.preventDefault(); if (ev.dataTransfer) ev.dataTransfer.dropEffect = 'copy'; document.body.classList.add('dropping'); });
+  window.addEventListener('dragleave', ev => { if (!ev.relatedTarget) document.body.classList.remove('dropping'); });
+  window.addEventListener('drop', ev => {
+    document.body.classList.remove('dropping');
+    const f = ev.dataTransfer?.files?.[0]; if (!f) return; ev.preventDefault();
+    if (isImage(f)) openTrace(ed, f);
+    else { const dt = new DataTransfer(); dt.items.add(f); const inp = $<HTMLInputElement>('#fileIn'); inp.files = dt.files; inp.dispatchEvent(new Event('change')); }
+  });
+  window.addEventListener('paste', ev => {
+    const t = ev.target as HTMLElement; if (t?.matches?.('input,textarea')) return;
+    const item = [...(ev.clipboardData?.items || [])].find(i => i.kind === 'file' && i.type.startsWith('image/'));
+    const f = item?.getAsFile(); if (!f) return; ev.preventDefault(); openTrace(ed, f, 'pasted image');
+  });
   $<HTMLInputElement>('#fileIn').onchange = async ev => {
     const inp = ev.target as HTMLInputElement, f = inp.files?.[0]; if (!f) return; inp.value = '';
     if (isImage(f)) { openTrace(ed, f); return; }
