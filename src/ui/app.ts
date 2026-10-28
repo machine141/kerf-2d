@@ -5,7 +5,8 @@ import { affMove, affScale, affRot } from '../geometry/affine';
 import { geomSettings } from '../geometry/entity';
 import type { BoolOp } from '../geometry/boolean';
 import { openTrace } from './trace';
-import { openElements } from './elements';
+import { openElements, saveSelectionAsElement } from './elements';
+import { helpHtml, GUIDES } from './help';
 import { openBox } from './box';
 import { DEFAULT_OPTS, type Editor, type CoordMode } from '../editor/editor';
 import type { OptionSpec, PointerInfo } from '../editor/tool';
@@ -23,7 +24,7 @@ const esc = (s: string) => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<
 export function startUI(ed: Editor) {
   const cv = $<HTMLCanvasElement>('#cv'), R = new Renderer(cv, ed);
   const prefs = loadPrefs(); if (prefs.joinTol != null) ed.opt.joinTol = prefs.joinTol; if (prefs.pickPx != null) ed.opt.pickPx = prefs.pickPx;
-  const ui = { alignTo: 'sel' as 'sel' | 'page', ptsOpen: false, tab: 'props', spaceDown: false, lastTest: null as null | { results: TestResult[]; doc: string | null }, exportOpts: { splitArcs: false, includeHidden: false, curveTol: 0.01, skipDims: true } as DxfOptions };
+  const ui = { helpShow: null as string | null, alignTo: 'sel' as 'sel' | 'page', ptsOpen: false, tab: 'props', spaceDown: false, lastTest: null as null | { results: TestResult[]; doc: string | null }, exportOpts: { splitArcs: false, includeHidden: false, curveTol: 0.01, skipDims: true } as DxfOptions };
   let DL: any = null;
   (async () => { try { DL = (window as any).claude?.use ? await (window as any).claude.use('downloads') : null; } catch { DL = null; } })();
 
@@ -70,7 +71,7 @@ export function startUI(ed: Editor) {
     if (k === 'view') { R.request(); return; }
     if (k === 'doc') { renderAttr(); renderPane(); syncButtons(); }
     if (k === 'sel') { renderAttr(); if (ui.tab === 'props') renderPane(); }
-    if (k === 'tool') { renderToolbox(); renderOptions(); }
+    if (k === 'tool') { renderToolbox(); renderOptions(); ui.helpShow = null; if (ui.tab === 'help') renderPane(); coach(); }
     if (k === 'opts') syncOptions();
     if (k === 'aids') { renderToggles(); if (ui.tab === 'aids') renderPane(); }
     updatePrompt(); R.request();
@@ -247,7 +248,9 @@ export function startUI(ed: Editor) {
   $('#bOpen').onclick = () => $('#fileIn').click();
   const isImage = (f: File) => /^image\//i.test(f.type) || /\.(png|jpe?g|jfif|gif|webp|bmp|avif|heic|heif)$/i.test(f.name);
   $('#bTrace').onclick = () => { document.querySelector<HTMLElement>('#mkMenu .pop')!.hidden = true; $('#imgIn').click(); };
-  $('#bElements').onclick = () => { closeMake(); openElements(ed); };
+  $('#bElements').onclick = () => { closeMake(); openElements(ed, saveFile); };
+  $('#bSaveEl').onclick = () => { closeMake(); saveSelectionAsElement(ed); };
+  $('#bHelp').onclick = () => openHelp();
   $('#bBox').onclick = () => { closeMake(); openBox(ed); };
   const makePop = () => document.querySelector<HTMLElement>('#mkMenu .pop')!;
   const closeMake = () => { makePop().hidden = true; $('#bMake').setAttribute('aria-expanded', 'false'); };
@@ -337,6 +340,26 @@ export function startUI(ed: Editor) {
     const go = document.querySelector<HTMLElement>('#pRotGo'); if (go) go.onclick = () => { const b = ed.selBox(), t = parseFloat($<HTMLInputElement>('#pRot').value) * DEG; if (!b || !isFinite(t)) return; ed.store.change(() => ed.transformSel(affRot(boxCentre(b), t))); };
     const fh = document.querySelector<HTMLElement>('#pFlipH'); if (fh) fh.onclick = () => ed.flipSel('h');
     const fv = document.querySelector<HTMLElement>('#pFlipV'); if (fv) fv.onclick = () => ed.flipSel('v');
+  }
+  /** Open the Help tab, optionally at a guide. */
+  function openHelp(id: string | null = null) {
+    ui.tab = 'help'; ui.helpShow = id && id !== ed.tool.id ? id : null;
+    document.querySelectorAll('.tabs button').forEach(x => x.setAttribute('aria-selected', String((x as HTMLElement).dataset.tab === 'help')));
+    renderPane(); $('#pane').scrollTop = 0; document.querySelector('#coach')?.remove();
+    if (matchMedia('(max-width: 900px)').matches) $('#side').scrollIntoView({ behavior: 'smooth' });
+  }
+  /** First time a tool is used: a small card offering its picture guide. */
+  function coach() {
+    document.querySelector('#coach')?.remove();
+    const id = ed.tool.id, g = GUIDES.find(x => x.id === id);
+    if (!g || prefs.noTips || id === 'select' || (prefs.seen || []).includes(id) || ui.tab === 'help') return;
+    prefs.seen = [...(prefs.seen || []), id]; savePrefs(prefs);
+    const c = document.createElement('div'); c.id = 'coach'; c.setAttribute('role', 'status');
+    c.innerHTML = `<span class="hicon"><svg viewBox="0 0 24 24">${ed.tool.icon}</svg></span><div><b>New tool: ${ed.tool.label}</b><p>${g.steps[0].t}</p><div class="row"><button class="btn primary" id="cShow">Show me how</button><button class="btn" id="cOk">Got it</button><label class="chk"><input type="checkbox" id="cOff">No more tips</label></div></div>`;
+    $('#main').append(c);
+    c.querySelector<HTMLElement>('#cShow')!.onclick = () => openHelp();
+    c.querySelector<HTMLElement>('#cOk')!.onclick = () => c.remove();
+    c.querySelector<HTMLInputElement>('#cOff')!.onchange = e => { prefs.noTips = (e.target as HTMLInputElement).checked; savePrefs(prefs); if (prefs.noTips) c.remove(); };
   }
   /** Re-render the side panel, keeping the focused number box focused (so the wheel keeps working). */
   function renderPane() {
@@ -438,7 +461,10 @@ export function startUI(ed: Editor) {
         <h3>Mouse &amp; trackpad</h3><div class="row"><label class="chk"><input type="radio" name="wh" value="zoom" ${prefs.wheelPans ? '' : 'checked'}>Wheel zooms at pointer</label><label class="chk"><input type="radio" name="wh" value="pan" ${prefs.wheelPans ? 'checked' : ''}>Two-finger scroll pans (pinch zooms)</label></div>
         <p class="hint">Click reach: how far from a line (in screen pixels) a click still picks it — the nearest line wins. Decimals shown: sizes are kept exactly; this only rounds what you see (hover a box for the exact value). Close gaps: Make Path and Trim treat ends this close as touching. Curve tolerance is how closely contours follow curves (mm). Smaller is more accurate but makes bigger files. These settings, except tolerance, are saved with the drawing.</p>
         <h3>Defaults</h3><div class="row"><button class="btn" id="sReset" title="Grid, snaps, dimensions, click reach, tool options… back to how they started. Your drawing is not changed.">Reset all settings to defaults</button></div>
+        <h3>Help</h3><div class="row"><label class="chk"><input type="checkbox" id="sTips" ${prefs.noTips ? '' : 'checked'}>Show a tip the first time each tool is used</label><button class="btn" id="sTipsAgain" title="Show the first-time tips again, for a new person on this computer">Show tips again</button></div>
         <p class="hint">Tip: click in any number box, then use the mouse wheel to change it (Shift = finer, Alt = coarser).</p>`;
+      $<HTMLInputElement>('#sTips').onchange = e => { prefs.noTips = !(e.target as HTMLInputElement).checked; savePrefs(prefs); };
+      $('#sTipsAgain').onclick = () => { prefs.seen = []; prefs.noTips = false; savePrefs(prefs); renderPane(); ed.toast('Tips will show again the first time each tool is used'); };
       ($('#sPre') as HTMLSelectElement).value = pg.preset || 'CUSTOM';
       const du = $<HTMLSelectElement>('#sDu'), dc = $<HTMLSelectElement>('#sDc'); du.value = ed.doc.dim.unit; dc.value = ed.doc.dim.color;
       du.onchange = () => { ed.doc.dim.unit = du.value as any; ed.changed('view'); };
@@ -462,6 +488,10 @@ export function startUI(ed: Editor) {
       num('sJt', v => { ed.opt.joinTol = Math.min(2, Math.max(0, v)); prefs.joinTol = ed.opt.joinTol; savePrefs(prefs); });
       pane.querySelectorAll<HTMLInputElement>('[name=wh]').forEach(r => r.onchange = () => { prefs.wheelPans = r.value === 'pan'; savePrefs(prefs); });
       pane.querySelectorAll<HTMLInputElement>('[data-a]').forEach(c => c.onchange = () => { (at as any)[c.dataset.a!] = c.checked; });
+    } else if (t === 'help') {
+      const icons = Object.fromEntries(Object.values(ed.tools).map(x => [x.id, { icon: x.icon, label: x.label, key: x.key }]));
+      pane.innerHTML = helpHtml(ed.tool.id, ui.helpShow, icons);
+      pane.querySelectorAll<HTMLElement>('[data-help]').forEach(b => b.onclick = () => { ui.helpShow = b.dataset.help === ed.tool.id ? null : b.dataset.help!; renderPane(); pane.scrollTop = 0; });
     } else if (t === 'test') {
       pane.innerHTML = `<h3>Accuracy self-test</h3><p class="hint">Runs real tool workflows in a separate, hidden drawing and measures the results: typed coordinates, rectangle and circle modes, trimming, rotate with repeats, snapping (incl. tangent and perpendicular), contours (incl. an area bounded by crossing lines), the glasses and key-ring examples, handles, point editing, dimensions, undo, and SVG/DXF round trips.</p>
         <div class="row"><button class="btn primary" id="tRun">Run test</button><button class="btn" id="tShow" ${ui.lastTest?.doc ? '' : 'disabled'}>Open test drawing</button></div><div id="tOut"></div>`;
@@ -483,6 +513,6 @@ export function startUI(ed: Editor) {
 export { clean, prims };
 
 /** Per-browser conveniences (never essential; storage may be unavailable). */
-interface Prefs { wheelPans?: boolean; joinTol?: number; dp?: number; pickPx?: number }
+interface Prefs { noTips?: boolean; seen?: string[]; wheelPans?: boolean; joinTol?: number; dp?: number; pickPx?: number }
 function loadPrefs(): Prefs { try { return JSON.parse(localStorage.getItem('kerf2d.prefs') || '{}') || {}; } catch { return {}; } }
 function savePrefs(p: Prefs) { try { localStorage.setItem('kerf2d.prefs', JSON.stringify(p)); } catch { /* ignore */ } }

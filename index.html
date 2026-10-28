@@ -138,7 +138,7 @@ table.res td:last-child{text-align:right;white-space:nowrap}
 #modal .foot .hint{margin-right:auto}
 .dropping-x{}
 #boxmaker{position:fixed;inset:0;background:rgba(10,15,12,.45);display:grid;place-items:center;z-index:21;padding:12px}
-#boxmaker .box{background:var(--panel);border:1px solid var(--line);border-radius:8px;width:min(1000px,100%);height:min(680px,100%);display:flex;flex-direction:column;box-shadow:0 10px 40px var(--shadow)}
+#boxmaker .box{background:var(--panel);border:1px solid var(--line);border-radius:8px;width:min(1000px,100%);height:min(680px,calc(100dvh - 24px));display:flex;flex-direction:column;box-shadow:0 10px 40px var(--shadow)}
 #boxmaker .head,#boxmaker .foot{display:flex;gap:8px;align-items:center;padding:10px 14px}
 #boxmaker .head{justify-content:space-between;border-bottom:1px solid var(--line)}
 #boxmaker .foot{justify-content:flex-end;border-top:1px solid var(--line);flex-wrap:wrap}
@@ -154,17 +154,61 @@ table.res td:last-child{text-align:right;white-space:nowrap}
 #boxmaker .stat{font-size:12px;color:var(--muted);margin:6px 0 0}
 @media (max-width:760px){#boxmaker .body{grid-template-columns:1fr;grid-template-rows:45% 1fr}#boxmaker .ctl{border-left:0;border-top:1px solid var(--line)}}
 #elements{position:fixed;inset:0;background:rgba(10,15,12,.45);display:grid;place-items:center;z-index:21;padding:12px}
-#elements .box{background:var(--panel);border:1px solid var(--line);border-radius:8px;width:min(860px,100%);max-height:min(720px,100%);display:flex;flex-direction:column;box-shadow:0 10px 40px var(--shadow)}
+#elements .box{background:var(--panel);border:1px solid var(--line);border-radius:8px;width:min(860px,100%);max-height:min(720px,calc(100dvh - 24px));display:flex;flex-direction:column;box-shadow:0 10px 40px var(--shadow)}
 #elements .head{display:flex;gap:14px;align-items:center;padding:10px 14px;border-bottom:1px solid var(--line)}
 #elements .head strong{margin-right:auto}
 #elements .sz input{width:60px}
 #elements .x{border:0;background:none;color:var(--fg);font-size:16px;cursor:pointer}
+/* help tab */
+.tabs .helptab{color:var(--accent);font-weight:700}
+.help h3{margin-top:14px}
+.help .hhead{display:flex;gap:10px;align-items:flex-start}
+.help .hhead h3{margin:2px 0 4px}
+.help kbd{font:600 11px var(--f-mono,monospace);border:1px solid var(--line);border-radius:4px;padding:0 5px;color:var(--muted)}
+.hicon{flex:none;width:34px;height:34px;display:grid;place-items:center;border-radius:8px;background:color-mix(in srgb,var(--accent) 14%,transparent);color:var(--accent)}
+.hicon svg,.hbtn svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.help .hhead h3{text-transform:none;letter-spacing:0;font-size:15px;color:var(--fg)}
+.hicon.hq{font-weight:800;font-size:18px}
+.hsteps{list-style:none;margin:10px 0 0;padding:0;display:flex;flex-direction:column;gap:12px}
+.hstep{display:grid;grid-template-columns:24px minmax(0,1fr);gap:8px}
+.hnum{width:22px;height:22px;border-radius:50%;background:var(--accent);color:#fff;font-weight:700;font-size:12px;display:grid;place-items:center}
+.hstep p{margin:1px 0 6px;font-size:13px;line-height:1.45}
+.hstep svg{display:block;width:100%;max-width:260px;background:var(--sheet);border:1px solid var(--line);border-radius:6px;font-family:var(--f-sans,sans-serif)}
+.htip{font-size:12.5px;background:color-mix(in srgb,var(--accent) 8%,transparent);border-radius:6px;padding:7px 9px;margin:12px 0}
+.htopics{display:flex;flex-direction:column;gap:4px}
+.htopic{text-align:left;border:1px solid var(--line);background:var(--sheet);color:var(--fg);border-radius:6px;padding:6px 9px;font:inherit;font-size:12.5px;cursor:pointer}
+.hgrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px}
+.hbtn{display:flex;align-items:center;gap:6px;border:1px solid var(--line);background:var(--sheet);color:var(--fg);border-radius:6px;padding:4px 6px;font:inherit;font-size:12px;cursor:pointer;text-align:left}
+.hbtn svg{width:18px;height:18px;flex:none;color:var(--accent)}
+.hbtn.on,.htopic.on{border-color:var(--accent);box-shadow:0 0 0 2px color-mix(in srgb,var(--accent) 25%,transparent)}
+.hbtn:hover,.htopic:hover{border-color:var(--accent)}
+/* first-time tip card */
+#coach{position:absolute;left:12px;top:12px;max-width:min(360px,calc(100% - 24px));display:flex;gap:10px;background:var(--panel);border:1px solid var(--accent);border-radius:10px;padding:10px 12px;box-shadow:0 8px 28px var(--shadow);z-index:5;font-size:13px}
+#coach p{margin:4px 0 8px;line-height:1.4}
+#coach .row{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+#coach .chk{font-size:12px;color:var(--muted)}
+/* my elements */
+#elements .card{position:relative}
+#elements .card.add{border-style:dashed;color:var(--accent)}
+#elements .card.add svg{stroke-width:2.4}
+#elements .card .del{position:absolute;top:3px;right:3px;border:0;background:none;color:var(--muted);font-size:12px;cursor:pointer;padding:2px 4px;border-radius:4px}
+#elements .card .del:hover,#elements .card .del.sure{background:var(--c-red,#e03131);color:#fff}
+#elements .empty{grid-column:1/-1}
+#elements .foot .btn{font-size:12px;padding:3px 9px;margin:2px 0}
+#elname{position:fixed;inset:0;background:rgba(10,15,12,.45);display:grid;place-items:center;z-index:30;padding:12px}
+#elname .box{background:var(--panel);border:1px solid var(--line);border-radius:8px;width:min(380px,100%);box-shadow:0 10px 40px var(--shadow)}
+#elname .head,#elname .foot{display:flex;gap:8px;padding:10px 14px;justify-content:flex-end}
+#elname .head{justify-content:flex-start;border-bottom:1px solid var(--line)}
+#elname .nbody{padding:12px 14px;display:flex;flex-direction:column;gap:8px;align-items:center}
+#elname .nbody svg{width:90px;height:90px;fill:none;stroke:currentColor;stroke-width:1.3}
+#elname label{display:flex;gap:8px;align-items:center;width:100%}
+#elname input{flex:1;padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:var(--sheet);color:var(--fg);font:inherit}
 #elements .etabs{display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:8px 14px 0}
 #elements .etabs button{border:1px solid var(--line);background:var(--sheet);color:var(--fg);border-radius:14px;padding:4px 11px;font:inherit;font-size:12px;cursor:pointer}
 #elements .etabs button[aria-selected=true]{background:var(--accent);border-color:var(--accent);color:#fff}
 #elements .etabs input{margin-left:auto;width:130px;padding:4px 8px;border:1px solid var(--line);border-radius:6px;background:var(--sheet);color:var(--fg);font:inherit;font-size:12px}
 #elements .card[hidden]{display:none}
-#elements .grid{overflow:auto;padding:12px;display:grid;grid-template-columns:repeat(auto-fill,minmax(104px,1fr));gap:8px}
+#elements .grid{overflow:auto;min-height:0;flex:1 1 auto;overscroll-behavior:contain;padding:12px;display:grid;grid-template-columns:repeat(auto-fill,minmax(104px,1fr));gap:8px}
 #elements .card{display:flex;flex-direction:column;align-items:center;gap:4px;padding:8px 6px;border:1px solid var(--line);border-radius:8px;background:var(--sheet);color:var(--fg);cursor:pointer;font-size:12px}
 #elements .card:hover{border-color:var(--accent);box-shadow:0 0 0 2px color-mix(in srgb,var(--accent) 25%,transparent)}
 #elements .card svg{width:64px;height:64px;fill:none;stroke:currentColor;stroke-width:1.3;stroke-linejoin:round}
@@ -172,7 +216,7 @@ table.res td:last-child{text-align:right;white-space:nowrap}
 #elements a{color:var(--accent)}
 body.dropping #main{outline:3px dashed var(--accent);outline-offset:-6px}
 #trace{position:fixed;inset:0;background:rgba(10,15,12,.45);display:grid;place-items:center;z-index:21;padding:12px}
-#trace .box{background:var(--panel);border:1px solid var(--line);border-radius:8px;width:min(1100px,100%);height:min(780px,100%);display:flex;flex-direction:column;box-shadow:0 10px 40px var(--shadow)}
+#trace .box{background:var(--panel);border:1px solid var(--line);border-radius:8px;width:min(1100px,100%);height:min(780px,calc(100dvh - 24px));display:flex;flex-direction:column;box-shadow:0 10px 40px var(--shadow)}
 #trace .head{display:flex;justify-content:space-between;align-items:center;padding:10px 14px;border-bottom:1px solid var(--line)}
 #trace .head strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #trace .x{border:0;background:none;color:var(--fg);font-size:16px;cursor:pointer}
@@ -213,7 +257,7 @@ body.dropping #main{outline:3px dashed var(--accent);outline-offset:-6px}
 </head>
 <body>
 <header>
-  <div class="brand"><b>Kerf 2D</b><span>precision drafting · v0.8.2</span></div>
+  <div class="brand"><b>Kerf 2D</b><span>precision drafting · v0.8.3</span></div>
   <input id="docName" aria-label="Drawing name" value="Glasses front">
   <div class="actions">
     <button class="btn" id="bNew">New</button>
@@ -222,7 +266,8 @@ body.dropping #main{outline:3px dashed var(--accent);outline-offset:-6px}
       <button class="btn" id="bMake" aria-haspopup="true" aria-expanded="false" title="Box maker, elements and picture tracing">Make ▾</button>
       <div class="pop" role="menu" hidden>
         <button role="menuitem" id="bBox"><b>Box maker…</b><span>Finger-jointed box, kerf compensated</span></button>
-        <button role="menuitem" id="bElements"><b>Elements…</b><span>Hearts, stars, flowers, clouds…</span></button>
+        <button role="menuitem" id="bElements"><b>Elements…</b><span>Hearts, animals, key-ring blanks… and your own</span></button>
+        <button role="menuitem" id="bSaveEl"><b>Save selection as element…</b><span>Keep your design to use again</span></button>
         <button role="menuitem" id="bTrace"><b>Trace image…</b><span>Turn a picture into outlines (or drop / paste one)</span></button>
       </div>
     </div>
@@ -230,6 +275,7 @@ body.dropping #main{outline:3px dashed var(--accent);outline-offset:-6px}
     <button class="btn" id="bUndo" title="Undo (Ctrl+Z)">Undo</button>
     <button class="btn" id="bRedo" title="Redo (Ctrl+Y)">Redo</button>
     <button class="btn" id="bFit" title="Zoom to page (F)">Fit page</button>
+    <button class="btn" id="bHelp" title="How to use the tool you have picked, with pictures">? Help</button>
     <button class="btn primary" id="bSvg">Export SVG</button>
     <button class="btn primary" id="bDxf">Export DXF</button>
     <input type="file" id="fileIn" accept=".json,.dxf,.svg,.png,.jpg,.jpeg,.gif,.webp,.bmp" hidden><input type="file" id="imgIn" accept="image/*" hidden>
@@ -252,6 +298,7 @@ body.dropping #main{outline:3px dashed var(--accent);outline-offset:-6px}
     <button role="tab" data-tab="layers" aria-selected="false">Layers</button>
     <button role="tab" data-tab="aids" aria-selected="false">Setup</button>
     <button role="tab" data-tab="test" aria-selected="false">Accuracy</button>
+    <button role="tab" data-tab="help" aria-selected="false" class="helptab" title="How to use each tool, with pictures">? Help</button>
   </div>
   <div class="pane" id="pane"></div>
 </aside>
