@@ -153,6 +153,39 @@ table.res td:last-child{text-align:right;white-space:nowrap}
 #boxmaker .sl{display:grid;grid-template-columns:1fr 70px auto;gap:6px;align-items:center;font-size:12.5px}
 #boxmaker .stat{font-size:12px;color:var(--muted);margin:6px 0 0}
 @media (max-width:760px){#boxmaker .body{grid-template-columns:1fr;grid-template-rows:45% 1fr}#boxmaker .ctl{border-left:0;border-top:1px solid var(--line)}}
+#hinge{position:fixed;inset:0;background:rgba(10,15,12,.45);display:grid;place-items:center;z-index:21;padding:12px}
+#hinge .box{background:var(--panel);border:1px solid var(--line);border-radius:8px;width:min(1180px,100%);height:min(820px,calc(100dvh - 24px));display:flex;flex-direction:column;box-shadow:0 10px 40px var(--shadow)}
+#hinge .head,#hinge .foot{display:flex;gap:10px;align-items:center;padding:9px 14px}
+#hinge .head{border-bottom:1px solid var(--line);flex-wrap:wrap}
+#hinge .head strong{margin-right:6px}
+#hinge .head .x{margin-left:auto;border:0;background:none;color:var(--fg);font-size:16px;cursor:pointer}
+#hinge .foot{border-top:1px solid var(--line);align-items:flex-end}
+#hinge .foot .warn{margin-right:auto;font-size:12.5px;display:flex;flex-direction:column;gap:3px;max-height:110px;overflow:auto;min-width:0}
+#hinge .foot .warn .btn{font-size:12px;padding:3px 9px}
+#hinge .ok{color:#2b8a3e;font-weight:600}#hinge .tight{color:#e67700;font-weight:600}#hinge .bad{color:var(--c-red,#e03131);font-weight:600}
+#hinge .body{flex:1;min-height:0;display:grid;grid-template-columns:1fr 320px}
+#hinge .view{min-width:0;min-height:0;display:flex;flex-direction:column;background:var(--sheet);padding:10px}
+#hinge svg{flex:1;min-height:0;width:100%}
+#hinge svg path{fill:none;vector-effect:non-scaling-stroke;stroke-linejoin:round}
+#hinge svg .cut{stroke:var(--ink);stroke-width:1;fill:color-mix(in srgb,var(--accent) 6%,transparent)}
+#hinge svg .sl{stroke-width:.8}#hinge svg .sl.ok{stroke:#2b8a3e}#hinge svg .sl.tight{stroke:#e67700}#hinge svg .sl.bad{stroke:var(--c-red,#e03131)}
+#hinge svg .mk{stroke:#1c7ed6;stroke-width:.8;stroke-dasharray:4 3}
+#hinge svg .ghost{stroke:var(--muted);stroke-width:1;stroke-dasharray:2 3}
+#hinge svg circle.bad{fill:none;stroke:var(--c-red,#e03131);stroke-width:2;vector-effect:non-scaling-stroke}
+#hinge svg text{font-size:6px;fill:var(--muted);text-anchor:middle;font-family:var(--f-sans,sans-serif)}
+#hinge .key{display:flex;gap:12px;font-size:11.5px;color:var(--muted);flex-wrap:wrap}
+#hinge .key .k-ok{color:#2b8a3e}#hinge .key .k-tight{color:#e67700}#hinge .key .k-bad{color:var(--c-red,#e03131)}#hinge .key .k-mark{color:#1c7ed6}
+#hinge .stat{font-size:12.5px;margin:6px 0 4px;line-height:1.45}
+#hinge .ctl{overflow:auto;overscroll-behavior:contain;padding:10px 14px;border-left:1px solid var(--line);display:flex;flex-direction:column;gap:7px}
+#hinge .ctl>div{display:flex;flex-direction:column;gap:7px}
+#hinge .ctl [hidden]{display:none!important}
+#hinge h4{margin:8px 0 0;font-size:12.5px;display:flex;align-items:center;justify-content:space-between;gap:6px}
+#hinge .rec{font-size:12px;padding:3px 10px}
+#hinge .sl{display:grid;grid-template-columns:1fr 72px auto;gap:6px;align-items:center;font-size:12.5px}
+#hinge label.sl select{grid-column:2 / span 2}
+#hinge .segc{flex-wrap:wrap}
+#hinge .lnk{border:0;background:none;color:var(--accent);text-decoration:underline;cursor:pointer;padding:0;font:inherit}
+@media (max-width:760px){#hinge .body{grid-template-columns:1fr;grid-template-rows:40% 1fr}#hinge .ctl{border-left:0;border-top:1px solid var(--line)}}
 #elements{position:fixed;inset:0;background:rgba(10,15,12,.45);display:grid;place-items:center;z-index:21;padding:12px}
 #elements .box{background:var(--panel);border:1px solid var(--line);border-radius:8px;width:min(860px,100%);max-height:min(720px,calc(100dvh - 24px));display:flex;flex-direction:column;box-shadow:0 10px 40px var(--shadow)}
 #elements .head{display:flex;gap:14px;align-items:center;padding:10px 14px;border-bottom:1px solid var(--line)}
@@ -257,7 +290,7 @@ body.dropping #main{outline:3px dashed var(--accent);outline-offset:-6px}
 </head>
 <body>
 <header>
-  <div class="brand"><b>Kerf 2D</b><span>precision drafting · v0.8.3</span></div>
+  <div class="brand"><b>Kerf 2D</b><span>precision drafting · v0.9</span></div>
   <input id="docName" aria-label="Drawing name" value="Glasses front">
   <div class="actions">
     <button class="btn" id="bNew">New</button>
@@ -266,6 +299,7 @@ body.dropping #main{outline:3px dashed var(--accent);outline-offset:-6px}
       <button class="btn" id="bMake" aria-haspopup="true" aria-expanded="false" title="Box maker, elements and picture tracing">Make ▾</button>
       <div class="pop" role="menu" hidden>
         <button role="menuitem" id="bBox"><b>Box maker…</b><span>Finger-jointed box, kerf compensated</span></button>
+        <button role="menuitem" id="bHinge"><b>Living hinge…</b><span>Bendy wood: wrap a shape, or test strips</span></button>
         <button role="menuitem" id="bElements"><b>Elements…</b><span>Hearts, animals, key-ring blanks… and your own</span></button>
         <button role="menuitem" id="bSaveEl"><b>Save selection as element…</b><span>Keep your design to use again</span></button>
         <button role="menuitem" id="bTrace"><b>Trace image…</b><span>Turn a picture into outlines (or drop / paste one)</span></button>

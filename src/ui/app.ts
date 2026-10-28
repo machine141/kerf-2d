@@ -8,6 +8,7 @@ import { openTrace } from './trace';
 import { openElements, saveSelectionAsElement } from './elements';
 import { helpHtml, GUIDES } from './help';
 import { openBox } from './box';
+import { openHinge } from './hinge';
 import { DEFAULT_OPTS, type Editor, type CoordMode } from '../editor/editor';
 import type { OptionSpec, PointerInfo } from '../editor/tool';
 import { Renderer } from '../render/renderer';
@@ -252,6 +253,7 @@ export function startUI(ed: Editor) {
   $('#bSaveEl').onclick = () => { closeMake(); saveSelectionAsElement(ed); };
   $('#bHelp').onclick = () => openHelp();
   $('#bBox').onclick = () => { closeMake(); openBox(ed); };
+  $('#bHinge').onclick = () => { closeMake(); openHinge(ed); };
   const makePop = () => document.querySelector<HTMLElement>('#mkMenu .pop')!;
   const closeMake = () => { makePop().hidden = true; $('#bMake').setAttribute('aria-expanded', 'false'); };
   $('#bMake').onclick = ev => { ev.stopPropagation(); const p = makePop(); p.hidden = !p.hidden; $('#bMake').setAttribute('aria-expanded', String(!p.hidden)); };

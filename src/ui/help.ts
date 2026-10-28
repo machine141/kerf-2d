@@ -141,8 +141,16 @@ export const GUIDES: HelpGuide[] = [
     { t: '<b>Box maker</b>: type the box size and material thickness. It draws all the sides with finger joints that slot together.', svg: pic(solid('M30 30h50v40h-50z') + solid('M90 30h50v40h-50z') + '<path d="M80 34h-5v6h5v6h-5v6h5v6h-5v6h5" fill="none" stroke="var(--accent)" stroke-width="1.4"/>') },
     { t: '<b>Elements</b>: hearts, animals, blanks for key rings… Click one to place it, then resize it.', svg: pic(solid('M50 70C20 50 25 25 50 38C75 25 80 50 50 70Z') + solid('M120 30l6 14 15 1-12 9 4 15-13-8-13 8 4-15-12-9 15-1z')) },
     { t: '<b>Save your own element</b>: select your shapes, then choose <b>Make ▾ → Save selection as element</b> and give it a name. It appears under <b>My elements</b>.', svg: pic(solid('M30 30h40v40h-40z', true) + arrow(80, 50, 115, 50, A) + `<rect x="120" y="28" width="60" height="44" rx="5" fill="none" stroke="${A}"/>` + txt(150, 64, 'My design', INK)) },
+    { t: '<b>Living hinge</b>: slits that let wood bend round a shape — see the Living hinge topic.' },
     { t: '<b>Trace image</b>: drop in a picture and it turns into outlines you can cut.' },
   ] },
+  { id: 'hinge', title: 'Living hinge (bendy wood)', intro: 'Rows of slits let flat plywood bend like a snake — to wrap round a shape, make a curved wall, or a bendy cover. Find it under <b>Make ▾ → Living hinge</b>.', steps: [
+    { t: '<b>Draw or pick your shape</b> (a jelly bean, a circle…), select it, then open <b>Make ▾ → Living hinge</b>. No shape selected? It wraps a circle of the size you type.', svg: pic(solid('M30 60C30 30 70 25 90 40S140 45 150 60S120 90 90 80S30 85 30 60Z', true) + dash('M24 60C24 24 72 18 92 34S146 38 157 60S124 97 90 87S24 92 24 60Z')) },
+    { t: 'Press <b>★ Recommend</b>. It works out the strip’s exact length, where it needs slits and how far apart — closer on tight curves, wider on gentle ones, none on straight bits.', svg: pic(solid('M10 30h180v40h-180z') + [20, 24, 28, 32, 36, 40, 60, 80, 100, 120, 140, 160, 164, 168, 172, 176].map((x, i) => `<path d="M${x} ${i % 2 ? 30 : 34}V${i % 2 ? 48 : 66}${i % 2 ? `M${x} 52V70` : ''}" stroke="#2b8a3e" stroke-width="1.2"/>`).join('') + txt(30, 85, 'tight curve', MUTED) + txt(100, 85, 'gentle', MUTED) + txt(170, 85, 'tight', MUTED)) },
+    { t: 'Check the colours: <b style="color:#2b8a3e">green</b> bends fine, <b style="color:#e67700">orange</b> is tight, <b style="color:#e03131">red</b> is too tight. Red rings show corners that are too sharp — press <b>Round the corners</b>.', svg: pic(solid(polyD(hexPts(60, 52, 32))) + hexPts(60, 52, 32).map(([x, y]) => `<circle cx="${x}" cy="${y}" r="6" fill="none" stroke="${RED}" stroke-width="1.5"/>`).join('') + arrow(100, 52, 120, 52, A) + `<path d="M${hexPts(160, 52, 32).map(([x, y]) => `${x} ${y}`).join('L')}Z" fill="none" stroke="${INK}" stroke-width="5" stroke-linejoin="round" opacity=".25"/>` + solid('M147 24h26q6 0 9 5l13 22q3 5 0 10l-13 22q-3 5 -9 5h-26q-6 0 -9 -5l-13 -22q-3 -5 0 -10l13 -22q3 -5 9 -5z')) },
+    { t: 'Choose how it joins: <b>Shelf</b> (a bigger base with your shape glued on top — the strip sits round it; easiest) or <b>Slots and tabs</b> (tabs on the strip drop into slots in the base).', svg: pic(solid('M30 70h140v10h-140z', true) + solid('M45 60h110v10h-110z', true) + `<path d="M40 70V25M160 70V25" stroke="${A}" stroke-width="3"/>` + txt(100, 92, 'base · shelf · strip round it', MUTED)) },
+    { t: '<b>Cut test strips first</b> (the Test strips tab) from the same wood: bend each one, and use the widest spacing that doesn’t crack.' },
+  ], tip: 'Shapes with straight sides and sharp corners (like a hexagon) can’t fold to a point — round the corners first. Straight sides need no slits, so “Only where it bends” saves laser time. Hundreds of slits take a while: the window shows the cutting time.' },
   { id: 'laser', title: 'Getting ready to cut', intro: 'A few checks before you send your design to the laser.', steps: [
     { t: 'Put lines to <b>cut</b> on the Cut layer and lines to <b>mark</b> (draw on the surface) on the Engrave layer, using the bar at the top.', svg: barPic('Layer [Cut ▾]   Colour [Black ▾]') },
     { t: 'Check your design fits on the <b>Bed</b> (the sheet size) and that small parts aren’t thinner than about 2 mm.' },
@@ -150,7 +158,7 @@ export const GUIDES: HelpGuide[] = [
   ] },
 ];
 
-const TOPICS = ['start', 'lock', 'view', 'make', 'laser'];
+const TOPICS = ['start', 'lock', 'view', 'make', 'hinge', 'laser'];
 
 /** HTML for the Help tab. `toolId` = the tool in use; `showId` = the guide to show (defaults to the tool's). */
 export function helpHtml(toolId: string, showId: string | null, icons: Record<string, { icon: string; label: string; key: string }>): string {
