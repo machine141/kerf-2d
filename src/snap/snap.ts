@@ -8,8 +8,8 @@ import { type Point, P, sub, add, mul, dot, dist, angOf, polar, DEG, cp } from '
 import { prims, keypoints, intersect, nearestOnPrim, bbox, type Prim, type SnapKind } from '../geometry/entity';
 import type { Aids, Entity, Shape } from '../model/types';
 
-export type SnapLabel = SnapKind | 'grid' | 'step' | 'radial' | null;
-export interface SnapResult { p: Point; k: SnapLabel }
+export type SnapLabel = SnapKind | 'grid' | 'step' | 'radial' | 'track' | null;
+export interface SnapResult { p: Point; k: SnapLabel; guides?: { from: Point; to: Point }[] }
 export interface SnapContext {
   ents: Entity[];
   visible: (e: Entity) => boolean;
@@ -24,6 +24,8 @@ export interface SnapContext {
   drawing: boolean;
   exclude?: Set<string>;
   geomPrims?: (e: Entity) => Prim[];
+  /** recently touched snap points used for alignment guides */
+  track?: Point[];
 }
 
 export function snapPoint(raw: Point, c: SnapContext): SnapResult {
@@ -59,6 +61,7 @@ export function snapPoint(raw: Point, c: SnapContext): SnapResult {
       if (over) return { p: cp(over.p), k: over.k };
     }
     if (best) return { p: cp((best as any).p), k: (best as any).k };
+    const tr = trackSnap(raw, c, tol); if (tr) return tr;
     if (at.nearest && near.length) {
       let nb: Point | null = null, nd = Infinity;
       for (const { pr } of near) { const q = nearestOnPrim(raw, pr), d = dist(q, raw); if (d < nd) { nd = d; nb = q; } }
@@ -74,6 +77,25 @@ export function snapPoint(raw: Point, c: SnapContext): SnapResult {
   if (A.gridLock) { const g = A.grid.spacing; return { p: cp(P(Math.round(raw.x / g) * g, Math.round(raw.y / g) * g)), k: 'grid' }; }
   if (A.stepLock) { const g = A.step; return { p: cp(P(Math.round(raw.x / g) * g, Math.round(raw.y / g) * g)), k: 'step' }; }
   return { p: raw, k: null };
+}
+
+/**
+ * Alignment guides: if the cursor lines up horizontally or vertically with a
+ * recently touched snap point, lock to that line (or to the crossing of two).
+ */
+function trackSnap(raw: Point, c: SnapContext, tol: number): SnapResult | null {
+  if (!c.aids.track || !c.drawing || !c.track?.length) return null;
+  let bx: { t: Point; d: number } | null = null, by: { t: Point; d: number } | null = null;
+  for (const t of c.track) {
+    const dx = Math.abs(raw.x - t.x), dy = Math.abs(raw.y - t.y);
+    if (dx <= tol && (!bx || dx < bx.d)) bx = { t, d: dx };
+    if (dy <= tol && (!by || dy < by.d)) by = { t, d: dy };
+  }
+  if (!bx && !by) return null;
+  const g = c.aids.gridLock ? c.aids.grid.spacing : c.aids.stepLock ? c.aids.step : 0, rnd = (v: number) => g ? Math.round(v / g) * g : v;
+  if (bx && by && bx.t !== by.t) { const p = cp(P(bx.t.x, by.t.y)); return { p, k: 'track', guides: [{ from: bx.t, to: p }, { from: by.t, to: p }] }; }
+  if (bx && (!by || bx.d <= by.d)) { const p = cp(P(bx.t.x, rnd(raw.y))); return { p, k: 'track', guides: [{ from: bx.t, to: p }] }; }
+  const p = cp(P(rnd(raw.x), by!.t.y)); return { p, k: 'track', guides: [{ from: by!.t, to: p }] };
 }
 
 /** Foot of the perpendicular from p onto a primitive (if it lands on it). */

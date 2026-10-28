@@ -96,7 +96,17 @@ export function startUI(ed: Editor) {
     $('#aLayer').innerHTML = dash(lv === '') + ed.doc.layers.map(l => `<option value="${l.id}">${esc(l.name)}</option>`).join(''); ($('#aLayer') as HTMLSelectElement).value = lv;
     $('#aColor').innerHTML = dash(cv2 === '') + Object.entries(COLORS).map(([k, c]) => `<option value="${k}">${c.label}</option>`).join(''); ($('#aColor') as HTMLSelectElement).value = cv2;
     $('#aWidth').innerHTML = dash(wv === '') + WIDTHS.map(w => `<option value="${w}">${w} mm</option>`).join(''); ($('#aWidth') as HTMLSelectElement).value = String(wv);
+    renderBed();
   }
+  function renderBed() {
+    const pg = ed.doc.page, bed = $<HTMLSelectElement>('#aBed');
+    if (!bed.options.length) bed.innerHTML = Object.entries(PAGES).map(([k, v]) => `<option value="${k}">${v[2]}</option>`).join('');
+    bed.value = PAGES[pg.preset] ? pg.preset : 'CUSTOM';
+    const W = $<HTMLInputElement>('#aBedW'), H = $<HTMLInputElement>('#aBedH');
+    if (document.activeElement !== W) W.value = fmt(pg.w, 3); if (document.activeElement !== H) H.value = fmt(pg.h, 3);
+  }
+  $<HTMLSelectElement>('#aBed').onchange = ev => { const k = (ev.target as HTMLSelectElement).value, v = PAGES[k], pg = ed.doc.page; pg.preset = k; if (v[0]) { pg.w = v[0]; pg.h = v[1]; } renderBed(); ed.fit(); if (ui.tab === 'aids') renderPane(); };
+  for (const id of ['#aBedW', '#aBedH']) $<HTMLInputElement>(id).onchange = ev => { const v = parseLength((ev.target as HTMLInputElement).value); if (!(v > 0)) { renderBed(); return; } const pg = ed.doc.page; if (id === '#aBedW') pg.w = v; else pg.h = v; pg.preset = 'CUSTOM'; renderBed(); ed.fit(); };
   const applyAttr = (key: 'layer' | 'color' | 'w', val: any) => {
     if (ed.sel.size) ed.store.change(() => { for (const e of ed.selected()) (e as any)[key] = val; });
     else { if (key === 'layer') ed.doc.current = val; else (ed.doc.attrs as any)[key] = val; renderAttr(); renderPane(); }
@@ -106,15 +116,16 @@ export function startUI(ed: Editor) {
   ($('#aWidth') as HTMLSelectElement).onchange = e => { const v = (e.target as HTMLSelectElement).value; if (v) applyAttr('w', +v); };
 
   // ---------- toggles / prompt / readout ----------
-  const TOGGLES: [string, string, () => boolean, () => void][] = [
-    ['grid', 'GRID', () => ed.doc.aids.grid.show, () => ed.doc.aids.grid.show = !ed.doc.aids.grid.show],
-    ['gridLock', 'GRID LOCK', () => ed.doc.aids.gridLock, () => ed.doc.aids.gridLock = !ed.doc.aids.gridLock],
-    ['stepLock', 'STEP', () => ed.doc.aids.stepLock, () => ed.doc.aids.stepLock = !ed.doc.aids.stepLock],
-    ['radial', 'RADIAL', () => ed.doc.aids.radial.on, () => ed.doc.aids.radial.on = !ed.doc.aids.radial.on],
-    ['attach', 'ATTACH', () => ed.doc.aids.attach.on, () => ed.doc.aids.attach.on = !ed.doc.aids.attach.on],
+  const TOGGLES: [string, string, () => boolean, () => void, string][] = [
+    ['grid', 'GRID', () => ed.doc.aids.grid.show, () => ed.doc.aids.grid.show = !ed.doc.aids.grid.show, 'F4'],
+    ['gridLock', 'GRID LOCK', () => ed.doc.aids.gridLock, () => ed.doc.aids.gridLock = !ed.doc.aids.gridLock, 'F5'],
+    ['stepLock', 'STEP', () => ed.doc.aids.stepLock, () => ed.doc.aids.stepLock = !ed.doc.aids.stepLock, 'F6'],
+    ['attach', 'ATTACH', () => ed.doc.aids.attach.on, () => ed.doc.aids.attach.on = !ed.doc.aids.attach.on, 'F7'],
+    ['radial', 'RADIAL', () => ed.doc.aids.radial.on, () => ed.doc.aids.radial.on = !ed.doc.aids.radial.on, 'F8'],
+    ['track', 'GUIDES', () => ed.doc.aids.track, () => ed.doc.aids.track = !ed.doc.aids.track, 'F10'],
   ];
   const toggle = (k: string) => { TOGGLES.find(t => t[0] === k)?.[3](); ed.changed('aids'); };
-  function renderToggles() { $('#toggles').innerHTML = TOGGLES.map(([k, l, g]) => `<button class="tg" data-k="${k}" aria-pressed="${g()}">${l}</button>`).join(''); $('#toggles').querySelectorAll<HTMLElement>('.tg').forEach(b => b.onclick = () => toggle(b.dataset.k!)); }
+  function renderToggles() { $('#toggles').innerHTML = TOGGLES.map(([k, l, g, , f]) => `<button class="tg" data-k="${k}" aria-pressed="${g()}" title="${l} (${f})">${l} <span class="fk">${f}</span></button>`).join(''); $('#toggles').querySelectorAll<HTMLElement>('.tg').forEach(b => b.onclick = () => toggle(b.dataset.k!)); }
   function updatePrompt() { $('#prompt').innerHTML = `<b>${esc(ed.tool.label)}</b>${esc(ed.tool.prompt(ed))}`; }
   function updateReadout() { const r = ed.readout(); $('#readout').innerHTML = `<span>Abs <b>${fmt(r.p.x, 3)}, ${fmt(r.p.y, 3)}</b></span><span>Rel <b>${fmt(r.r.x, 3)}, ${fmt(r.r.y, 3)}</b></span><span>Dist <b>${fmt(r.dist, 3)}</b></span><span>Angle <b>${fmt(r.ang, 2)}°</b></span>`; }
 
@@ -144,10 +155,13 @@ export function startUI(ed: Editor) {
       else if (c === 'a') { ev.preventDefault(); ed.selectAll(); }
       else if (c === 's') { ev.preventDefault(); saveNative(); }
       else if (c === 'e') { ev.preventDefault(); ed.explodeSel(); }
+      else if (c === 'g') { ev.preventDefault(); ed.groupSel(); }
+      else if (c === 'u') { ev.preventDefault(); ed.ungroupSel(); }
+      else if (c === 'h') { ev.preventDefault(); ed.makePathSel(); }
       return;
     }
     if (typing || !$('#modal').hidden) return;
-    const fkeys: Record<string, () => void> = { F3: () => resetRel(), F4: () => toggle('grid'), F5: () => toggle('gridLock'), F6: () => toggle('stepLock'), F7: () => toggle('attach'), F8: () => toggle('radial'), F9: () => ed.setTool('select') };
+    const fkeys: Record<string, () => void> = { F3: () => resetRel(), F4: () => toggle('grid'), F5: () => toggle('gridLock'), F6: () => toggle('stepLock'), F7: () => toggle('attach'), F8: () => toggle('radial'), F9: () => ed.setTool('select'), F10: () => toggle('track') };
     if (fkeys[k]) { ev.preventDefault(); fkeys[k](); return; }
     if (k === ' ') { ev.preventDefault(); if (!ui.spaceDown) resetRel(); ui.spaceDown = true; return; }
     if (ed.tool.onKey?.(ed, k, { shift: ev.shiftKey, alt: ev.altKey, ctrl: ev.ctrlKey })) { ev.preventDefault(); return; }
@@ -249,8 +263,11 @@ export function startUI(ed: Editor) {
       const sz = sizeBlock();
       if (sel.length > 1) {
         const types: Record<string, number> = {}; sel.forEach(e => types[e.type] = (types[e.type] || 0) + 1);
-        pane.innerHTML = `<h3>${sel.length} objects selected</h3><p class="hint">${Object.entries(types).map(([k, v]) => `${v} × ${k}`).join(', ')}</p>${sz.html}<div class="row"><button class="btn" id="pExplode">Explode</button><button class="btn" id="pDel">Delete</button></div>`;
-        bindFields(sz.fields); bindSize(); $('#pExplode').onclick = () => ed.explodeSel(); $('#pDel').onclick = () => ed.deleteSel(); return;
+        const grouped = sel.some(e => e.group?.length), roots = new Set(sel.map(e => ed.groupRoot(e)).filter(Boolean));
+        pane.innerHTML = `<h3>${sel.length} objects selected</h3><p class="hint">${Object.entries(types).map(([k, v]) => `${v} × ${k}`).join(', ')}${grouped ? ` · ${roots.size === 1 && sel.every(e => e.group?.length) ? 'one group' : 'includes groups'}` : ''}</p>${sz.html}
+          <div class="row"><button class="btn" id="pGroup" title="Ctrl+G">Group</button><button class="btn" id="pUngroup" title="Ctrl+U" ${grouped ? '' : 'disabled'}>Ungroup</button><button class="btn" id="pPath" title="Join touching lines and arcs into one path (Ctrl+H)">Make path</button><button class="btn" id="pExplode" title="Ctrl+E">Explode</button><button class="btn" id="pDel">Delete</button></div>
+          <p class="hint">Explode ungroups one level at a time; on paths it breaks them into lines and arcs.</p>`;
+        bindFields(sz.fields); bindSize(); $('#pExplode').onclick = () => ed.explodeSel(); $('#pDel').onclick = () => ed.deleteSel(); $('#pGroup').onclick = () => ed.groupSel(); $('#pUngroup').onclick = () => ed.ungroupSel(); $('#pPath').onclick = () => ed.makePathSel(); return;
       }
       const e: any = sel[0], F: Field[] = [];
       const pt = (lbl: string, k: string) => { F.push(numField(lbl + ' X', e[k].x, v => { (ed.store.byId(e.id) as any)[k] = P(v, e[k].y); })); F.push(numField(lbl + ' Y', e[k].y, v => { (ed.store.byId(e.id) as any)[k] = P(e[k].x, v); })); };

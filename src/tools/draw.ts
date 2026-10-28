@@ -4,6 +4,7 @@ import { pointTool, type Tool } from '../editor/tool';
 import type { Editor } from '../editor/editor';
 import type { Shape } from '../model/types';
 import { ICONS } from './icons';
+import { arc3, tangentArc, endTangent } from '../geometry/arcs';
 
 const addShape = (ed: Editor, s: Shape) => { const e = ed.store.change(() => ed.store.add(s)); return e; };
 
@@ -78,14 +79,39 @@ export const circleTool: Tool = pointTool({
   },
 });
 
+const ARC_PROMPTS: Record<string, string[]> = {
+  '3pt': ['Locate start point', 'Locate end point', 'Move to bend the arc, then click a point it passes through'],
+  centre: ['Locate centre', 'Locate start point (sets the radius)', 'Locate end point (anticlockwise from start)'],
+  tangent: ['Start at the end of a line or arc (snaps to its end)', 'Locate end point — the arc leaves the line smoothly'],
+};
+function arcFrom(ed: Editor, p: Point[]): Shape | null {
+  const mode = ed.opt.arcMode;
+  if (mode === 'centre') { const r = clean(dist(p[0], p[1])); return r < 1e-9 ? null : { type: 'arc', c: p[0], r, a0: normA(angOf(p[0], p[1])), a1: normA(angOf(p[0], p[2])) } as Shape; }
+  if (mode === 'tangent') { const dir = ed.state.tanDir; return dir ? tangentArc(p[0], dir, p[1]) : null; }
+  return arc3(p[0], p[1], p[2]);
+}
 export const arcTool: Tool = pointTool({
-  id: 'arc', label: 'Arc · centre, start, end', key: 'A', icon: ICONS.arc, group: 1, need: 3,
-  prompts: ['Locate centre', 'Locate start point (sets the radius)', 'Locate end point (anticlockwise from start)'],
-  make(ed, p) { const r = clean(dist(p[0], p[1])); if (r < 1e-9) return; addShape(ed, { type: 'arc', c: p[0], r, a0: normA(angOf(p[0], p[1])), a1: normA(angOf(p[0], p[2])) } as Shape); },
+  id: 'arc', label: 'Arc', key: 'A', icon: ICONS.arc, group: 1,
+  need: ed => ed.opt.arcMode === 'tangent' ? 2 : 3,
+  prompts: ed => ARC_PROMPTS[ed.opt.arcMode] || ARC_PROMPTS['3pt'],
+  options: [
+    { key: 'arcMode', label: 'Arc', type: 'seg', choices: [['3pt', '3 points'], ['tangent', 'Tangent'], ['centre', 'Centre, start, end']] },
+    { key: 'arcHint', label: 'Snaps to line ends — e.g. join two parallel lines with a 3-point arc', type: 'hint', show: ed => ed.opt.arcMode === '3pt' },
+  ],
+  intercept(ed, p) {
+    if (ed.opt.arcMode !== 'tangent' || ed.pts.length) return false;
+    const dir = endTangent(ed.doc.ents.filter(ed.store.visible) as Shape[], p);
+    if (!dir) { ed.toast('Start a tangent arc on the end of a line, arc or open path'); return true; }
+    ed.state.tanDir = dir; return false;
+  },
+  make(ed, p) { const a = arcFrom(ed, p); if (!a) return ed.toast('Those points are in a straight line — no arc'); addShape(ed, a); if (ed.opt.arcMode === 'tangent') ed.state.tanDir = null; },
   preview(ed, p, cur, o) {
-    if (p.length === 1) { o.ghost({ type: 'line', a: p[0], b: cur } as Shape); o.label(`R ${fmt(dist(p[0], cur), 3)}`); return; }
-    const r = dist(p[0], p[1]); o.ghost({ type: 'arc', c: p[0], r, a0: angOf(p[0], p[1]), a1: angOf(p[0], cur) } as Shape);
-    o.label(`span ${fmt(normA(angOf(p[0], cur) - angOf(p[0], p[1])) / DEG, 2)}°`);
+    const mode = ed.opt.arcMode;
+    if (mode === 'centre' && p.length === 1) { o.ghost({ type: 'line', a: p[0], b: cur } as Shape); o.label(`R ${fmt(dist(p[0], cur), 3)}`); return; }
+    if (mode === '3pt' && p.length === 1) { o.ghost({ type: 'line', a: p[0], b: cur } as Shape); o.label(`chord ${fmt(dist(p[0], cur), 3)}`); return; }
+    const a: any = arcFrom(ed, [...p, cur]);
+    if (!a) { o.ghost({ type: 'line', a: p[p.length - 1], b: cur } as Shape); return; }
+    o.ghost(a); o.label(`R ${fmt(a.r, 3)}  span ${fmt(normA(a.a1 - a.a0) / DEG, 2)}°`);
   },
 });
 

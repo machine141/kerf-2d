@@ -4,6 +4,7 @@ import type { Editor } from '../editor/editor';
 import type { Overlay, GhostStyle } from '../editor/tool';
 import { COLORS, type Entity, type Shape } from '../model/types';
 import { hasBulge, segsOf } from '../geometry/path';
+import { keypoints } from '../geometry/entity';
 
 const TOKENS = ['--desk', '--sheet', '--grid', '--grid-major', '--ink', '--sel', '--snap', '--muted', '--accent', '--shadow', '--node-start', '--node-end', '--node', '--source', ...Object.values(COLORS).map(c => c.tok)];
 const SNAP_NAMES: Record<string, string> = { end: 'Endpoint', mid: 'Midpoint', centre: 'Centre', quad: 'Quadrant', inter: 'Intersection', nearest: 'Nearest', perp: 'Perpendicular', tangent: 'Tangent' };
@@ -93,6 +94,26 @@ export class Renderer {
     for (const fn of customs) { ctx.save(); fn(ctx, ed, C); ctx.restore(); }
     for (const l of labels) this.label(l.t, l.at);
 
+    // snap points of shapes under the cursor (so centres and N/E/S/W points are easy to find)
+    const drawingNow = ed.tool.draws || ed.state.drag || ed.state.hdrag || ed.state.ndrag;
+    if (ed.hover && drawingNow && ed.doc.aids.attach.on) {
+      ctx.setLineDash([]); ctx.lineWidth = 1; ctx.strokeStyle = C['--muted']; ctx.globalAlpha = .75;
+      for (const e of ed.nearEntities(ed.cur)) for (const kp of keypoints(e as Shape)) {
+        const s = ed.w2s(kp.p); ctx.beginPath();
+        if (kp.k === 'centre') { ctx.arc(s.x, s.y, 3.5, 0, TAU); ctx.moveTo(s.x - 6, s.y); ctx.lineTo(s.x + 6, s.y); ctx.moveTo(s.x, s.y - 6); ctx.lineTo(s.x, s.y + 6); }
+        else if (kp.k === 'quad') { ctx.moveTo(s.x, s.y - 4); ctx.lineTo(s.x + 4, s.y); ctx.lineTo(s.x, s.y + 4); ctx.lineTo(s.x - 4, s.y); ctx.closePath(); }
+        else if (kp.k === 'mid') { ctx.moveTo(s.x, s.y - 4); ctx.lineTo(s.x + 4, s.y + 3); ctx.lineTo(s.x - 4, s.y + 3); ctx.closePath(); }
+        else ctx.rect(s.x - 3, s.y - 3, 6, 6);
+        ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+    }
+    // alignment guides
+    if (ed.hover && ed.snapRes?.guides) {
+      ctx.setLineDash([4, 4]); ctx.strokeStyle = C['--snap']; ctx.lineWidth = 1;
+      for (const g of ed.snapRes.guides) { const a = ed.w2s(g.from), b = ed.w2s(g.to); ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke(); ctx.setLineDash([]); ctx.beginPath(); ctx.moveTo(a.x - 3, a.y - 3); ctx.lineTo(a.x + 3, a.y + 3); ctx.moveTo(a.x + 3, a.y - 3); ctx.lineTo(a.x - 3, a.y + 3); ctx.stroke(); ctx.setLineDash([4, 4]); }
+      ctx.setLineDash([]);
+    }
     // snap marker
     const cur = ed.cursorPoint(), sp = ed.w2s(cur), sk = ed.snapRes?.k;
     if (sk && SNAP_NAMES[sk]) {

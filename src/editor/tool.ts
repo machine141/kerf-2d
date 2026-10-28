@@ -64,9 +64,9 @@ export interface Tool {
 /** Definition for the common "locate N points, then make something" tool. */
 export interface PointToolDef {
   id: string; label: string; key: string; icon: string; group: number;
-  need: number | 'open';
+  need: number | 'open' | ((ed: Editor) => number);
   minPoints?: number;
-  prompts: string[];
+  prompts: string[] | ((ed: Editor) => string[]);
   drag?: boolean;
   constrain45?: boolean;
   needsSelection?: boolean;
@@ -82,7 +82,7 @@ export function pointTool(def: PointToolDef): Tool {
   const t: Tool = {
     id: def.id, label: def.label, key: def.key, icon: def.icon, group: def.group, draws: true, constrain45: def.constrain45,
     needsSelection: def.needsSelection, options: def.options,
-    prompt: ed => def.prompts[Math.min(ed.pts.length, def.prompts.length - 1)],
+    prompt: ed => { const pr = typeof def.prompts === 'function' ? def.prompts(ed) : def.prompts; return pr[Math.min(ed.pts.length, pr.length - 1)]; },
     down(ed, raw, info) {
       const s = ed.snapAt(raw); ed.snapRes = s; const before = ed.pts.length;
       ed.locate(s.p);
@@ -95,7 +95,8 @@ export function pointTool(def: PointToolDef): Tool {
     located(ed, p) {
       if (def.intercept?.(ed, p)) return;
       ed.pts.push(p); ed.rel = p;
-      if (typeof def.need === 'number' && ed.pts.length >= def.need) { const pts = ed.pts.slice(); ed.pts = []; def.make(ed, pts); }
+      const need = typeof def.need === 'function' ? def.need(ed) : def.need;
+      if (typeof need === 'number' && ed.pts.length >= need) { const pts = ed.pts.slice(); ed.pts = []; def.make(ed, pts); }
       ed.changed('prompt');
     },
     finish(ed) {

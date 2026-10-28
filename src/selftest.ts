@@ -15,6 +15,9 @@ import { handles, handleTransform, nodeHandles, nodeApply } from './tools/select
 import { exportDXF, importDXF } from './io/dxf';
 import { exportSVG, importSVG } from './io/svg';
 import type { Entity, Shape } from './model/types';
+import { applyAllCorners, applyCorner } from './tools/fillet';
+import { pathCorner, linesCorner } from './geometry/corner';
+import { pathLength, hasBulge, segsOf } from './geometry/path';
 
 export interface TestResult { name: string; ok: boolean; detail: string }
 
@@ -23,7 +26,7 @@ function coordsOf(e: any): number[] {
   if (e.type === 'circle') return [e.c.x, e.c.y, e.r];
   if (e.type === 'ellipse') return [e.c.x, e.c.y, e.rx, e.ry, Math.cos(2 * e.rot), Math.sin(2 * e.rot)];
   if (e.type === 'arc') { const s = polar(e.c, e.r, e.a0), f = polar(e.c, e.r, e.a1); return [e.c.x, e.c.y, e.r, s.x, s.y, f.x, f.y]; }
-  if (e.type === 'poly') return e.pts.flatMap((p: Point) => [p.x, p.y]);
+  if (e.type === 'poly') return e.pts.flatMap((p: Point) => [p.x, p.y]).concat((e.bulge || []).map((b: number) => b * 1000));
   return [];
 }
 function maxDev(A: any[], B: any[]) {
@@ -41,6 +44,7 @@ export function runSelfTest(): { results: TestResult[]; doc: string | null } {
   const R: TestResult[] = [], ok = (name: string, pass: any, detail: string) => R.push({ name, ok: !!pass, detail });
   const ed = new Editor(ALL_TOOLS);
   ed.view = { k: 4, ox: 0, oy: 0, W: 1600, H: 1200 };
+  ed.opt.arcMode = 'centre';
   const d = ed.doc; d.name = 'Accuracy test'; d.page = { w: 600, h: 400, preset: 'BED' }; d.aids.attach.on = false;
   d.layers = [{ id: 'L1', name: 'Test', visible: true, active: true }];
   const typed = (...pts: [any, number, number][]) => pts.forEach(([m, a, b]) => ed.typed(m, a, b));
@@ -159,6 +163,39 @@ export function runSelfTest(): { results: TestResult[]; doc: string | null } {
     ed.opt.dimMode = 'a'; ed.setTool('dim'); typed(['abs', 250, 90], ['pol', 75.42, 45], ['abs', 300, 100]); d.current = 'L1'; d.attrs.color = 'red';
     const dm: any = last(); ok('Aligned dimension reads true length', Math.abs(ed.dimGeom(dm).val - 75.42) < 1e-9, `measured ${fmt(ed.dimGeom(dm).val, 9)} mm`);
     ed.setTool('select');
+    // 12a · v0.4 features
+    ed.setTool('rect'); ed.opt.rectFrom = 'corner'; typed(['abs', 450, 60], ['rel', 40, 20]); const fr: any = last(); ed.setTool('select');
+    ed.setSelection([fr.id]); ed.opt.filletMode = 'fillet'; ed.opt.filletR = 5; applyAllCorners(ed);
+    const frn: any = byId(fr.id), expLen = 2 * (40 + 20) - 8 * 5 + 2 * Math.PI * 5;
+    const arcsOK = hasBulge(frn) && segsOf(frn).filter(sg => sg.kind === 'arc').every((sg: any) => Math.abs(sg.r - 5) < 1e-9 && Math.abs(Math.abs(sg.sweep) - Math.PI / 2) < 1e-9);
+    ok('Fillet all corners: rectangle keeps true arcs', frn.pts.length === 8 && arcsOK && Math.abs(pathLength(frn) - expLen) < 1e-9, `perimeter ${fmt(pathLength(frn), 9)} mm (expected ${fmt(expLen, 9)}), four R5 quarter arcs`);
+    ed.setTool('rect'); typed(['abs', 450, 110], ['rel', 40, 20]); const cr: any = last(); ed.setTool('select');
+    const ci2 = cr.pts.findIndex((q: Point) => q.x === 450 && q.y === 110); ed.opt.filletMode = 'chamfer';
+    applyCorner(ed, { kind: 'vertex', id: cr.id, i: ci2, V: cr.pts[ci2], theta: pathCorner(cr, ci2)!.theta }, 5); ed.opt.filletMode = 'fillet';
+    const crn: any = byId(cr.id), cLen = 120 - 10 + 5 * Math.SQRT2;
+    ok('Chamfer one corner exactly', crn.pts.length === 5 && Math.abs(pathLength(crn) - cLen) < 1e-9, `perimeter ${fmt(pathLength(crn), 9)} mm (expected ${fmt(cLen, 9)})`);
+    ed.setTool('line'); typed(['abs', 450, 150], ['abs', 480, 150]); ed.finish(); const la: any = last(); typed(['abs', 490, 160], ['abs', 490, 190]); ed.finish(); const lb: any = last(); ed.setTool('select');
+    const lg: any = linesCorner(la, P(460, 150), lb, P(490, 180));
+    applyCorner(ed, { kind: 'lines', idA: la.id, clickA: P(460, 150), idB: lb.id, clickB: P(490, 180), V: lg.X, theta: lg.theta }, 5);
+    const lan: any = byId(la.id), lbn: any = byId(lb.id), fa: any = last();
+    ok('Fillet two lines that do not meet', lan.b.x === 485 && lan.b.y === 150 && lbn.b.x === 490 && lbn.b.y === 155 && fa.type === 'arc' && fa.c.x === 485 && fa.c.y === 155 && fa.r === 5,
+      `lines trimmed/extended to (485, 150) and (490, 155); R5 arc centred (${fa.c.x}, ${fa.c.y})`);
+    ed.setTool('line'); typed(['abs', 530, 150], ['abs', 530, 180]); ed.finish(); typed(['abs', 550, 150], ['abs', 550, 180]); ed.finish();
+    ed.opt.arcMode = '3pt'; ed.setTool('arc'); typed(['abs', 530, 180], ['abs', 550, 180], ['abs', 540, 190]); const a3: any = last();
+    ok('3-point arc joins two parallel lines', a3.type === 'arc' && a3.c.x === 540 && a3.c.y === 180 && a3.r === 10 && Math.abs(normA(a3.a1 - a3.a0) - Math.PI) < 1e-9, `centre (${a3.c.x}, ${a3.c.y}), R ${a3.r}, 180° sweep`);
+    ed.setTool('line'); typed(['abs', 530, 200], ['abs', 550, 200]); ed.finish();
+    ed.opt.arcMode = 'tangent'; ed.setTool('arc'); typed(['abs', 550, 200], ['abs', 550, 220]); const ta2: any = last(); ed.opt.arcMode = 'centre'; ed.setTool('select');
+    ok('Tangent arc leaves a line smoothly', ta2.type === 'arc' && ta2.c.x === 550 && ta2.c.y === 210 && ta2.r === 10, `centre (${ta2.c.x}, ${ta2.c.y}) sits square to the line end, R ${ta2.r}`);
+    ed.setSelection([fr.id]); const copyIds = ed.store.change(() => ed.transformSel({ a: 1, b: 0, c: 0, d: 1, e: 0, f: -40 } as any, 1));
+    ed.setSelection(copyIds); ed.explodeSel(); const pieces = [...ed.sel]; ed.makePathSel(); const mp: any = ed.selected()[0];
+    ok('Explode then Make Path rebuilds one closed path', pieces.length === 8 && ed.sel.size === 1 && mp.closed && hasBulge(mp) && Math.abs(pathLength(mp) - expLen) < 1e-9, `${pieces.length} pieces → 1 closed path, perimeter ${fmt(pathLength(mp), 9)} mm`);
+    ed.setSelection([lensL.id, lensR.id]); ed.groupSel(); const gsel = ed.withGroups([lensL.id]);
+    ed.setSelection(gsel); ed.explodeSel(); const ungrouped = !byId(lensL.id).group && !byId(lensR.id).group;
+    ok('Group selects together; Explode ungroups', gsel.size === 2 && ungrouped, 'clicking one lens selects both · Explode removed the group');
+    d.aids.attach.on = true; ed.setTool('line'); ed.track = [P(565, 310)];
+    const tk1 = ed.snapAt(P(565.4, 350)); ed.track = [P(565, 310), P(590, 380)]; const tk2 = ed.snapAt(P(565.3, 379.6));
+    ed.setTool('select'); d.aids.attach.on = false;
+    ok('Alignment guides lock to touched points', tk1.k === 'track' && tk1.p.x === 565 && tk1.p.y === 350 && tk2.k === 'track' && tk2.p.x === 565 && tk2.p.y === 380, `vertical guide → (${tk1.p.x}, ${tk1.p.y}) · crossing of two guides → (${tk2.p.x}, ${tk2.p.y})`);
     // 12 · file round trips
     d.layers[1].visible = false;
     const geo = ed.doc.ents.filter(e => e.type !== 'dim'), geoNoEll = geo.filter(e => e.type !== 'ellipse');

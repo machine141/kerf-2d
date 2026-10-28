@@ -17,7 +17,7 @@ export type CoordMode = 'abs' | 'rel' | 'pol';
 export type ChangeKind = 'doc' | 'sel' | 'tool' | 'prompt' | 'view' | 'aids' | 'opts';
 
 export const DEFAULT_OPTS: Record<string, any> = {
-  rectFrom: 'corner', circFrom: 'centre', fixedR: '', dimMode: 'a', rotAngle: 60, rotCopies: 5, moveCopy: false, mirKeep: true,
+  rectFrom: 'corner', circFrom: 'centre', arcMode: '3pt', filletMode: 'fillet', filletR: 5, filletFollow: false, fixedR: '', dimMode: 'a', rotAngle: 60, rotCopies: 5, moveCopy: false, mirKeep: true,
   offMode: 'shape', offSide: 'auto', offD: 5, offRound: '1', offCount: 1, offFollow: false, trimMode: 'whole', lockAspect: false,
 };
 
@@ -34,6 +34,8 @@ export class Editor {
   mods = { shift: false, alt: false, ctrl: false };
   cmode: CoordMode = 'abs';
   hover = false;
+  /** recently touched snap points (for alignment guides) */
+  track: Point[] = [];
   opt: Record<string, any> = { ...DEFAULT_OPTS };
   /** scratch space for the active tool */
   state: Record<string, any> = {};
@@ -80,7 +82,7 @@ export class Editor {
     return snapPoint(raw, {
       ents: this.doc.ents, visible: this.store.visible, aids: this.doc.aids, k: this.view.k,
       last: this.pts[this.pts.length - 1], constrain45: this.mods.shift && !!this.tool.constrain45,
-      drawing: o.drawing ?? !!this.tool.draws, exclude: o.exclude,
+      drawing: o.drawing ?? !!this.tool.draws, exclude: o.exclude, track: this.track,
     });
   }
   /** Current cursor position after snapping (what a click would locate). */
@@ -91,7 +93,7 @@ export class Editor {
     const t = this.tools[id]; if (!t) return false;
     if (t.needsSelection && !this.sel.size) { this.toast(`Select objects first, then choose ${t.label.toLowerCase()}`); return false; }
     this.tool.deactivate?.(this);
-    this.tool = t; this.pts = []; this.state = {};
+    this.tool = t; this.pts = []; this.state = {}; this.track = [];
     t.activate?.(this);
     this.changed('tool'); return true;
   }
@@ -108,8 +110,26 @@ export class Editor {
     if (!this.tool.draws) { this.toast('Choose a drawing tool, then type coordinates'); return false; }
     const p = this.typedPoint(mode, a, b); this.cur = p; this.snapRes = { p, k: null }; this.locate(p); return true;
   }
+  /** Remember snap points the cursor has touched, for alignment guides (most recent first, max 3). */
+  acquire() {
+    const s = this.snapRes; if (!s || !s.k || !['end', 'mid', 'centre', 'quad', 'inter', 'tangent', 'perp'].includes(s.k)) return;
+    if (this.track.some(t => Math.abs(t.x - s.p.x) < 1e-9 && Math.abs(t.y - s.p.y) < 1e-9)) return;
+    this.track.unshift(s.p); if (this.track.length > 3) this.track.pop();
+  }
+  /** Entities whose outline passes within px of the point (for showing their snap points on hover). */
+  nearEntities(raw: Point, px = 14, max = 6): Entity[] {
+    const tol = px / this.view.k, out: { e: Entity; d: number }[] = [];
+    for (const e of this.doc.ents) {
+      if (!this.store.visible(e) || e.type === 'dim') continue;
+      const b = this.bbox(e); if (raw.x < b.x0 - tol || raw.x > b.x1 + tol || raw.y < b.y0 - tol || raw.y > b.y1 + tol) continue;
+      let d = Infinity; for (const pr of this.geomPrims(e)) d = Math.min(d, pr.t === 'seg' ? segDist(raw, pr.a, pr.b) : arcDist(raw, pr));
+      if (d <= tol) out.push({ e, d });
+    }
+    return out.sort((a, b) => a.d - b.d).slice(0, max).map(x => x.e);
+  }
   finish() { this.tool.finish?.(this); }
   cancel() {
+    this.track = [];
     if (this.tool.cancel?.(this)) return;
     if (this.tool.id !== 'select') { this.setTool('select'); return; }
     if (this.sel.size) { this.sel.clear(); this.changed('sel'); }
@@ -128,6 +148,7 @@ export class Editor {
     if (this.pan) { this.view.ox = this.pan.ox - (info.sp.x - this.pan.sp.x) / this.view.k; this.view.oy = this.pan.oy + (info.sp.y - this.pan.sp.y) / this.view.k; this.changed('view'); return; }
     this.snapRes = this.tool.draws ? this.snapAt(raw) : null;
     this.tool.move?.(this, raw, info);
+    this.acquire();
     this.changed('view');
   }
   pointerUp(raw: Point, info: PointerInfo) {
