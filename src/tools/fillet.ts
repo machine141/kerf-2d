@@ -160,7 +160,7 @@ function twoEdges(ed: Editor, first: { id: string; click: Point; seg: number }, 
   return { error: 'Click two lines, or two edges of the same shape next to the corner' };
 }
 function pickEdge(ed: Editor, raw: Point): { id: string; click: Point; seg: number } | null {
-  const hit = ed.pick(raw, 7, e => e.type === 'line' || e.type === 'arc' || e.type === 'poly'); if (!hit) return null;
+  const hit = ed.pick(raw, undefined, e => e.type === 'line' || e.type === 'arc' || e.type === 'poly'); if (!hit) return null;
   let seg = 0;
   if (hit.e.type === 'poly') { let bd = Infinity; segsOf(hit.e).forEach((s, k) => { const d = dist(raw, nearestOnPrim(raw, segPrim(s) as Prim)); if (d < bd) { bd = d; seg = k; } }); }
   return { id: hit.e.id, click: raw, seg };

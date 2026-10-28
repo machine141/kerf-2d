@@ -3,7 +3,7 @@
  * place them in the drawing at an exact size. Includes an eraser brush for
  * the picture (drag to remove flakes and background; Alt-drag restores).
  */
-import { trace, whyEmpty, type TraceOpts, type TraceResult, type Img } from '../trace/trace';
+import { trace, whyEmpty, lastLabelMap, type TraceOpts, type TraceResult, type Img } from '../trace/trace';
 import { P, fmt } from '../geometry/vec';
 import type { Editor } from '../editor/editor';
 import type { Shape } from '../model/types';
@@ -48,7 +48,8 @@ function build(ed: Editor, im: Pic, name: string) {
   root.innerHTML = `<div class="box" role="dialog" aria-modal="true" aria-labelledby="tTitle">
     <div class="head"><strong id="tTitle">Trace image · ${esc(name)}</strong><button class="x" id="tClose" aria-label="Close">✕</button></div>
     <div class="body">
-      <div class="view"><canvas id="tCv" aria-label="Trace preview"></canvas><div class="vbar"><button class="btn" id="tErase" aria-pressed="false" title="Drag over the picture to remove flakes and background · Alt-drag restores · wheel = brush size">Eraser brush</button><span class="hint" id="tBrush"></span><button class="btn" id="tClear">Clear erasing</button><label class="chk"><input type="checkbox" id="tShow">Show picture</label></div></div>
+      <div class="view"><canvas id="tCv" aria-label="Trace preview"></canvas><div class="vbar"><span class="segc" role="group" aria-label="Brush"><button type="button" id="tErase" aria-pressed="false" title="Drag to remove flakes, detail or background · Alt-drag restores · wheel = brush size">Erase</button><button type="button" id="tFillB" aria-pressed="false" title="Drag to paint solid shape — fills holes and gaps (Colours: paints the colour where you start) · Alt-drag restores · wheel = brush size">Fill</button></span><span class="hint" id="tBrush"></span><button class="btn" id="tClear" title="Remove all erase and fill painting">Clear brush</button>
+        <label class="chk">Line <select id="tLine"><option value="#ff1493">Pink</option><option value="#00b4d8">Cyan</option><option value="#ff7a00">Orange</option><option value="#12b886">Green</option><option value="#000000">Black</option></select></label><label class="chk"><input type="checkbox" id="tShow">Show picture</label></div></div>
       <div class="ctl">
         <div class="row"><button class="btn" id="tUndo" title="Undo (Ctrl/Cmd+Z)">Undo</button><button class="btn" id="tRedo" title="Redo (Ctrl/Cmd+Y)">Redo</button><button class="btn" id="tReset" title="Back to the starting settings and clear erasing">Reset</button></div>
         <div class="segc" role="group" id="tMode"><button type="button" data-v="silhouette">Silhouette</button><button type="button" data-v="colours">Colours</button></div>
@@ -63,7 +64,7 @@ function build(ed: Editor, im: Pic, name: string) {
           <label class="chk"><input type="checkbox" id="tMerge">Join kept colours into one silhouette</label>
         </div>
         <label class="chk"><input type="checkbox" id="tFlat">Even out a graduated background</label>
-        <label class="chk"><input type="checkbox" id="tFill">Fill holes</label>
+        <label class="chk" title="Fills every enclosed area, so only the outer edge is traced — e.g. just the head-and-shoulders outline of a portrait"><input type="checkbox" id="tFill">Outer outline only (fill holes)</label>
         <label class="sl">Noise clean-up <input type="range" id="tClean" min="0" max="5"><output id="tCleanO"></output></label>
         <label class="sl">Ignore specks under <input type="text" id="tSpeck" class="mono" inputmode="decimal"> mm</label>
         <label class="sl">Detail <input type="range" id="tDet" min="1" max="10"><output id="tDetO"></output></label>
@@ -78,7 +79,8 @@ function build(ed: Editor, im: Pic, name: string) {
   document.body.append(root);
   const $ = <T extends HTMLElement = HTMLElement>(s: string) => root.querySelector(s) as T;
   const cv = $<HTMLCanvasElement>('#tCv'), ctx = cv.getContext('2d')!;
-  let img: Img, erase: Uint8Array, res: TraceResult | null = null, keep: boolean[] | undefined, timer = 0, erasing = false, painting = false;
+  let img: Img, erase: Uint8Array, res: TraceResult | null = null, keep: boolean[] | undefined, timer = 0, painting = false, brush: 'off' | 'erase' | 'fill' = 'off', paintVal = 1, lineCol = '#ff1493';
+  const erasing = () => brush !== 'off';
   const close = () => { root.remove(); window.removeEventListener('keydown', onKey, true); };
   const onKey = (e: KeyboardEvent) => {
     if (e.key === 'Escape') { e.stopImmediatePropagation(); close(); return; }
@@ -141,31 +143,46 @@ function build(ed: Editor, im: Pic, name: string) {
     const k = Math.min(W / img.w, H / img.h) * 0.96; fit = { k, ox: (W - img.w * k) / 2, oy: (H - img.h * k) / 2 };
     ctx.fillStyle = '#fff'; ctx.fillRect(fit.ox, fit.oy, img.w * k, img.h * k);
     if (S.showImg) { ctx.globalAlpha = .45; ctx.drawImage(im.src, fit.ox, fit.oy, img.w * k, img.h * k); ctx.globalAlpha = 1; }
-    // erased areas
-    ctx.fillStyle = 'rgba(224,49,49,.28)';
-    for (let y = 0; y < img.h; y++) { let x0 = -1; for (let x = 0; x <= img.w; x++) { const on = x < img.w && erase[y * img.w + x]; if (on && x0 < 0) x0 = x; if (!on && x0 >= 0) { ctx.fillRect(fit.ox + x0 * k, fit.oy + y * k, (x - x0) * k, k + .5); x0 = -1; } } }
+    // brush painting: erased (red) and filled (green)
+    for (const [val, col] of [[1, 'rgba(224,49,49,.30)'], [2, 'rgba(18,184,134,.32)']] as [number, string][]) {
+      ctx.fillStyle = col;
+      for (let y = 0; y < img.h; y++) { let x0 = -1; for (let x = 0; x <= img.w; x++) { const e = x < img.w ? erase[y * img.w + x] : 0, on = val === 1 ? e === 1 : e >= 2; if (on && x0 < 0) x0 = x; if (!on && x0 >= 0) { ctx.fillRect(fit.ox + x0 * k, fit.oy + y * k, (x - x0) * k, k + .5); x0 = -1; } } }
+    }
     if (res) {
-      ctx.strokeStyle = '#0b7285'; ctx.lineWidth = 1.4; ctx.beginPath();
-      for (const l of res.loops) { l.pts.forEach((p, i) => { const X = fit.ox + p.x * k, Y = fit.oy + p.y * k; i ? ctx.lineTo(X, Y) : ctx.moveTo(X, Y); }); ctx.closePath(); }
-      ctx.stroke();
+      ctx.beginPath();
+      for (const l of res.loops) { l.pts.forEach((p, i) => { const X = fit.ox + p.x * k, Y = fit.oy + p.y * k; i ? ctx.lineTo(X, Y) : ctx.moveTo(X, Y); }); if (l.closed !== false) ctx.closePath(); }
+      ctx.lineJoin = 'round'; ctx.strokeStyle = lineCol === '#000000' ? '#ffffff' : 'rgba(255,255,255,.9)'; ctx.lineWidth = 4; ctx.stroke();
+      ctx.strokeStyle = lineCol; ctx.lineWidth = 1.8; ctx.stroke();
     }
     $('#tBrush').textContent = `brush ${fmt(S.brush / pxPerMm(), 1)} mm`;
   }
   const toImg = (ev: PointerEvent | WheelEvent) => { const r = cv.getBoundingClientRect(); return P((ev.clientX - r.left - fit.ox) / fit.k, (ev.clientY - r.top - fit.oy) / fit.k); };
   function paint(ev: PointerEvent) {
-    const p = toImg(ev), R = S.brush, v = ev.altKey ? 0 : 1;
+    const p = toImg(ev), R = S.brush, v = ev.altKey ? 0 : paintVal;
     for (let y = Math.max(0, Math.floor(p.y - R)); y <= Math.min(img.h - 1, Math.ceil(p.y + R)); y++)
       for (let x = Math.max(0, Math.floor(p.x - R)); x <= Math.min(img.w - 1, Math.ceil(p.x + R)); x++) if ((x + .5 - p.x) ** 2 + (y + .5 - p.y) ** 2 <= R * R) erase[y * img.w + x] = v;
     draw(); brushRing(ev);
   }
   function brushRing(ev: PointerEvent | WheelEvent) {
-    if (!erasing) return; const r = cv.getBoundingClientRect(), x = ev.clientX - r.left, y = ev.clientY - r.top;
-    ctx.strokeStyle = '#e03131'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(x, y, S.brush * fit.k, 0, Math.PI * 2); ctx.stroke();
+    if (!erasing()) return; const r = cv.getBoundingClientRect(), x = ev.clientX - r.left, y = ev.clientY - r.top;
+    ctx.strokeStyle = brush === 'fill' ? '#12b886' : '#e03131'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(x, y, S.brush * fit.k, 0, Math.PI * 2); ctx.stroke();
   }
-  cv.addEventListener('pointerdown', ev => { if (!erasing) return; painting = true; erase = erase.slice(); cv.setPointerCapture(ev.pointerId); paint(ev); });
-  cv.addEventListener('pointermove', ev => { if (painting) paint(ev); else if (erasing) { draw(); brushRing(ev); } });
+  cv.addEventListener('pointerdown', ev => {
+    if (!erasing()) return;
+    paintVal = 1;
+    if (brush === 'fill') {
+      paintVal = 2;
+      if (S.mode === 'colours' && !S.merge) {
+        const p = toImg(ev), L = lastLabelMap(), i = Math.min(img.h - 1, Math.max(0, Math.floor(p.y))) * img.w + Math.min(img.w - 1, Math.max(0, Math.floor(p.x)));
+        const lab = L && L.length === img.w * img.h ? L[i] : 255;
+        if (lab === 255) { ed.toast('Start a Fill stroke inside a colour you are keeping — it paints that colour'); return; }
+        paintVal = 2 + lab;
+      }
+    }
+    painting = true; erase = erase.slice(); cv.setPointerCapture(ev.pointerId); paint(ev); });
+  cv.addEventListener('pointermove', ev => { if (painting) paint(ev); else if (erasing()) { draw(); brushRing(ev); } });
   cv.addEventListener('pointerup', () => { if (painting) { painting = false; run(); commit(true); } });
-  cv.addEventListener('wheel', ev => { if (!erasing) return; ev.preventDefault(); S.brush = Math.max(1, Math.min(200, Math.round(S.brush * (ev.deltaY < 0 ? 1.15 : 1 / 1.15)))); draw(); brushRing(ev); }, { passive: false });
+  cv.addEventListener('wheel', ev => { if (!erasing()) return; ev.preventDefault(); S.brush = Math.max(1, Math.min(200, Math.round(S.brush * (ev.deltaY < 0 ? 1.15 : 1 / 1.15)))); draw(); brushRing(ev); }, { passive: false });
 
   // ---- controls ----
   function renderPal() {
@@ -198,7 +215,9 @@ function build(ed: Editor, im: Pic, name: string) {
   bind('#tW', e => { const v = parseFloat(e.value); if (v > 0) { S.widthMm = Math.min(3000, Math.max(5, v)); if (v < 5) ed.toast('Smallest width is 5 mm'); } }, 'change');
   $<HTMLSelectElement>('#tRes').onchange = e => { S.res = +(e.target as HTMLSelectElement).value; load(); sync(); run(); commit(true); };
   $<HTMLInputElement>('#tShow').onchange = e => { S.showImg = (e.target as HTMLInputElement).checked; draw(); };
-  $('#tErase').onclick = () => { erasing = !erasing; $('#tErase').setAttribute('aria-pressed', String(erasing)); cv.style.cursor = erasing ? 'crosshair' : ''; };
+  const setBrush = (b: typeof brush) => { brush = brush === b ? 'off' : b; $('#tErase').setAttribute('aria-pressed', String(brush === 'erase')); $('#tFillB').setAttribute('aria-pressed', String(brush === 'fill')); cv.style.cursor = erasing() ? 'crosshair' : ''; draw(); };
+  $('#tErase').onclick = () => setBrush('erase'); $('#tFillB').onclick = () => setBrush('fill');
+  $<HTMLSelectElement>('#tLine').onchange = e => { lineCol = (e.target as HTMLSelectElement).value; draw(); };
   $('#tClear').onclick = () => { erase = new Uint8Array(img.w * img.h); run(); commit(true); };
   $('#tUndo').onclick = undo; $('#tRedo').onclick = redo; $('#tReset').onclick = reset;
   $('#tClose').onclick = close; $('#tCancel').onclick = close;
@@ -206,7 +225,7 @@ function build(ed: Editor, im: Pic, name: string) {
   $('#tPlace').onclick = () => {
     if (!res || !res.loops.length) { ed.toast('Nothing traced yet'); return; }
     const s = S.widthMm / img.w, pg = ed.doc.page, H = img.h * s, ox = (pg.w - S.widthMm) / 2, oy = (pg.h - H) / 2;
-    const shapes = res.loops.map(l => ({ type: 'poly', closed: true, pts: l.pts.map(p => P(+(ox + p.x * s).toFixed(4), +(oy + (img.h - p.y) * s).toFixed(4))) }) as Shape);
+    const shapes = res.loops.map(l => ({ type: 'poly', closed: l.closed !== false, pts: l.pts.map(p => P(+(ox + p.x * s).toFixed(4), +(oy + (img.h - p.y) * s).toFixed(4))) }) as Shape);
     const g = 'g' + (ed.doc.seq++);
     const ids = ed.store.change(() => shapes.map(sh => { const e = ed.store.add(sh); if (shapes.length > 1) e.group = [g]; return e.id; }));
     ed.setSelection(ids); close();

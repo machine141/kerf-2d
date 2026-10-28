@@ -23,7 +23,7 @@ export function openEndPoints(ed: Editor, skip?: string): Point[] {
   return out;
 }
 
-function plan(ed: Editor, raw: Point, tolPx = 7): { e: Entity; r: TrimResult } | null {
+function plan(ed: Editor, raw: Point, tolPx?: number): { e: Entity; r: TrimResult } | null {
   const hit = ed.pick(raw, tolPx, e => e.type !== 'dim');
   if (!hit) return null;
   const cutters = ed.doc.ents.filter(o => o.id !== hit.e.id && ed.store.visible(o)).flatMap(o => ed.geomPrims(o));
@@ -31,7 +31,7 @@ function plan(ed: Editor, raw: Point, tolPx = 7): { e: Entity; r: TrimResult } |
   return { e: hit.e, r: trimInfo(hit.e as Shape, raw, cutters, ed.opt.trimMode, touch) };
 }
 
-export function trimAt(ed: Editor, raw: Point, tolPx = 7): boolean {
+export function trimAt(ed: Editor, raw: Point, tolPx?: number): boolean {
   const p = plan(ed, raw, tolPx);
   if (!p) { ed.toast('Nothing to trim here'); return false; }
   if ('error' in p.r) { ed.toast(p.r.error); return false; }

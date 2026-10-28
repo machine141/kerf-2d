@@ -66,7 +66,7 @@ export function offsetCommit(ed: Editor, cur: Point): string[] {
 }
 /** Pick a source at a click: an edge, a shape group, or an enclosed area. */
 export function offsetPick(ed: Editor, raw: Point): boolean {
-  const hit = ed.pick(raw, 7, e => e.type !== 'dim');
+  const hit = ed.pick(raw, undefined, e => e.type !== 'dim');
   if (hit) {
     if (ed.opt.offMode === 'edge' && hit.e.type !== 'ellipse' && hit.e.type !== 'poly') { offsetBegin(ed, [hit.e as Shape], [hit.e.id], { edge: hit.pr }); return true; }
     if (ed.opt.offMode === 'edge' && hit.e.type === 'poly' && hit.pr.t === 'seg') { offsetBegin(ed, [{ type: 'line', a: hit.pr.a, b: hit.pr.b } as Shape], [hit.e.id], { edge: hit.pr }); return true; }

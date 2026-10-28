@@ -20,7 +20,7 @@ const esc = (s: string) => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<
 
 export function startUI(ed: Editor) {
   const cv = $<HTMLCanvasElement>('#cv'), R = new Renderer(cv, ed);
-  const prefs = loadPrefs(); if (prefs.joinTol != null) ed.opt.joinTol = prefs.joinTol;
+  const prefs = loadPrefs(); if (prefs.joinTol != null) ed.opt.joinTol = prefs.joinTol; if (prefs.pickPx != null) ed.opt.pickPx = prefs.pickPx;
   const ui = { ptsOpen: false, tab: 'props', spaceDown: false, lastTest: null as null | { results: TestResult[]; doc: string | null }, exportOpts: { splitArcs: false, includeHidden: false, curveTol: 0.01, skipDims: true } as DxfOptions };
   let DL: any = null;
   (async () => { try { DL = (window as any).claude?.use ? await (window as any).claude.use('downloads') : null; } catch { DL = null; } })();
@@ -369,9 +369,9 @@ export function startUI(ed: Editor) {
         <label for="sDu">Units shown</label><select id="sDu"><option value="mm">mm</option><option value="in">inches</option><option value="none">none</option></select>
         <label for="sDc">Colour</label><select id="sDc">${Object.entries(COLORS).map(([k, c]) => `<option value="${k}">${c.label}</option>`).join('')}</select></div>
         <p class="hint">New dimensions use this colour. Dimensions are left out of SVG/DXF exports unless you tick "Include dimensions", so they are never cut.</p>
-        <h3>Accuracy</h3><div class="grid2"><label for="sTol">Curve tolerance</label><input type="text" id="sTol" value="${geomSettings.flatTol}"><label for="sJt">Close gaps up to mm</label><input type="text" id="sJt" value="${ed.opt.joinTol}"><label for="sDp">Decimals shown</label><input type="text" id="sDp" value="${dp()}"></div>
+        <h3>Accuracy</h3><div class="grid2"><label for="sTol">Curve tolerance</label><input type="text" id="sTol" value="${geomSettings.flatTol}"><label for="sJt">Close gaps up to mm</label><input type="text" id="sJt" value="${ed.opt.joinTol}"><label for="sDp">Decimals shown</label><input type="text" id="sDp" value="${dp()}"><label for="sPk">Click reach px</label><input type="text" id="sPk" value="${ed.opt.pickPx}"></div>
         <h3>Mouse &amp; trackpad</h3><div class="row"><label class="chk"><input type="radio" name="wh" value="zoom" ${prefs.wheelPans ? '' : 'checked'}>Wheel zooms at pointer</label><label class="chk"><input type="radio" name="wh" value="pan" ${prefs.wheelPans ? 'checked' : ''}>Two-finger scroll pans (pinch zooms)</label></div>
-        <p class="hint">Decimals shown: sizes are kept exactly; this only rounds what you see (hover a box for the exact value). Close gaps: Make Path and Trim treat ends this close as touching. Curve tolerance is how closely contours follow curves (mm). Smaller is more accurate but makes bigger files. These settings, except tolerance, are saved with the drawing.</p>`;
+        <p class="hint">Click reach: how far from a line (in screen pixels) a click still picks it — the nearest line wins. Decimals shown: sizes are kept exactly; this only rounds what you see (hover a box for the exact value). Close gaps: Make Path and Trim treat ends this close as touching. Curve tolerance is how closely contours follow curves (mm). Smaller is more accurate but makes bigger files. These settings, except tolerance, are saved with the drawing.</p>`;
       ($('#sPre') as HTMLSelectElement).value = pg.preset || 'CUSTOM';
       const du = $<HTMLSelectElement>('#sDu'), dc = $<HTMLSelectElement>('#sDc'); du.value = ed.doc.dim.unit; dc.value = ed.doc.dim.color;
       du.onchange = () => { ed.doc.dim.unit = du.value as any; ed.changed('view'); };
@@ -383,6 +383,7 @@ export function startUI(ed: Editor) {
       num('sRs', v => A.radial.start = v, false); num('sRp', v => A.radial.step = Math.max(0.1, v), false);
       num('sBox', v => at.box = Math.max(4, v), false); num('sDd', v => ed.doc.dim.dec = Math.min(6, Math.max(0, Math.round(v))), false); num('sDh', v => ed.doc.dim.textH = Math.max(0.5, v));
       num('sTol', v => { geomSettings.flatTol = Math.min(0.1, Math.max(0.0001, v)); });
+      num('sPk', v => { ed.opt.pickPx = Math.min(60, Math.max(3, Math.round(v))); prefs.pickPx = ed.opt.pickPx; savePrefs(prefs); }, false);
       num('sDp', v => { prefs.dp = Math.min(6, Math.max(0, Math.round(v))); savePrefs(prefs); }, false);
       num('sJt', v => { ed.opt.joinTol = Math.min(2, Math.max(0, v)); prefs.joinTol = ed.opt.joinTol; savePrefs(prefs); });
       pane.querySelectorAll<HTMLInputElement>('[name=wh]').forEach(r => r.onchange = () => { prefs.wheelPans = r.value === 'pan'; savePrefs(prefs); });
@@ -408,6 +409,6 @@ export function startUI(ed: Editor) {
 export { clean, prims };
 
 /** Per-browser conveniences (never essential; storage may be unavailable). */
-interface Prefs { wheelPans?: boolean; joinTol?: number; dp?: number }
+interface Prefs { wheelPans?: boolean; joinTol?: number; dp?: number; pickPx?: number }
 function loadPrefs(): Prefs { try { return JSON.parse(localStorage.getItem('kerf2d.prefs') || '{}') || {}; } catch { return {}; } }
 function savePrefs(p: Prefs) { try { localStorage.setItem('kerf2d.prefs', JSON.stringify(p)); } catch { /* ignore */ } }

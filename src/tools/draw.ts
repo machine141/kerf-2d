@@ -131,7 +131,7 @@ const radial = (ed: Editor) => ed.opt.dimMode === 'r' || ed.opt.dimMode === 'd';
 
 /** Circle, arc or curved path segment under the cursor: its centre, radius and the nearest point on it. */
 export function pickRound(ed: Editor, raw: Point): { c: Point; r: number; id: string } | null {
-  const hit = ed.pick(raw, 10, e => e.type === 'circle' || e.type === 'arc' || (e.type === 'poly' && hasBulge(e)));
+  const hit = ed.pick(raw, Math.max(10, +ed.opt.pickPx || 14), e => e.type === 'circle' || e.type === 'arc' || (e.type === 'poly' && hasBulge(e)));
   if (!hit) return null;
   if (hit.pr.t === 'arc') return { c: hit.pr.c, r: hit.pr.r, id: hit.e.id };
   return null;

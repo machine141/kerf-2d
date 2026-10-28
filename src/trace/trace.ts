@@ -33,10 +33,10 @@ export interface TraceOpts {
   speckPx: number;
   /** simplification tolerance in px (smaller = more detail) */
   tolPx: number;
-  /** 1 = erased (treated as background) */
+  /** brush edits per pixel: 0 none, 1 erased (background), 2+k filled (silhouette: shape; colours: colour k) */
   erase?: Uint8Array;
 }
-export interface Loop { pts: { x: number; y: number }[]; area: number; colour: number }
+export interface Loop { pts: { x: number; y: number }[]; area: number; colour: number; closed?: boolean }
 export interface TraceResult { loops: Loop[]; palette: [number, number, number][]; background: number; backgrounds: number[]; threshold: number; points: number; diag: { found: number; largestPx: number; coverage: number; masks: number; keptColours: number } }
 
 // ---------- image preparation ----------
@@ -222,7 +222,15 @@ export function trace(img: Img, o: TraceOpts): TraceResult {
   const { w, h } = img, n = w * h;
   const masks: { mask: Uint8Array; colour: number }[] = [];
   let palette: [number, number, number][] = [], background = -1, backgrounds: number[] = [], threshold = 0;
-  const erase = (m: Uint8Array) => { if (o.erase) for (let i = 0; i < n; i++) if (o.erase[i]) m[i] = 0; return m; };
+  const E = o.erase;
+  /** brush edits on a binary mask: fills first, then fill holes, then erasing */
+  const edit = (m: Uint8Array, holes: boolean) => {
+    if (E) for (let i = 0; i < n; i++) if (E[i] >= 2) m[i] = 1;
+    if (holes) m = fillHoles(m, w, h);
+    if (E) for (let i = 0; i < n; i++) if (E[i] === 1) m[i] = 0;
+    return m;
+  };
+  let network: { x: number; y: number }[][] | null = null, netClosed: boolean[] = [];
   if (o.mode === 'silhouette') {
     let g = toGrey(img);
     if (o.clean >= 1) g = median3(g, w, h);
@@ -230,7 +238,7 @@ export function trace(img: Img, o: TraceOpts): TraceResult {
     if (o.flatten) g = flattenBackground(g, w, h, o.invert);
     threshold = o.threshold === 'auto' ? otsu(g) : o.threshold;
     const m = new Uint8Array(n); for (let i = 0; i < n; i++) m[i] = (o.invert ? g[i] > threshold : g[i] < threshold) ? 1 : 0;
-    masks.push({ mask: erase(o.fillHoles ? fillHoles(m, w, h) : m), colour: 0 });
+    masks.push({ mask: edit(m, o.fillHoles), colour: 0 });
   } else {
     const k = Math.max(2, Math.min(12, Math.round(o.colours)));
     let src = img;
@@ -247,10 +255,32 @@ export function trace(img: Img, o: TraceOpts): TraceResult {
     let lab = q.labels; if (o.clean >= 1) lab = modeFilter(lab, w, h, palette.length);
     backgrounds = borderLabels(lab, w, h, palette.length); background = backgrounds[0];
     const keep = palette.map((_, j) => o.keep?.[j] ?? !backgrounds.includes(j));
-    if (o.merge) { const m = new Uint8Array(n); for (let i = 0; i < n; i++) m[i] = keep[lab[i]] ? 1 : 0; masks.push({ mask: erase(o.fillHoles ? fillHoles(m, w, h) : m), colour: -1 }); }
-    else palette.forEach((_, j) => { if (!keep[j]) return; const m = new Uint8Array(n); let any = false; for (let i = 0; i < n; i++) if (lab[i] === j) { m[i] = 1; any = true; } if (any) masks.push({ mask: erase(m), colour: j }); });
+    if (o.merge) { const m = new Uint8Array(n); for (let i = 0; i < n; i++) m[i] = keep[lab[i]] ? 1 : 0; masks.push({ mask: edit(m, o.fillHoles), colour: -1 }); }
+    else {
+      // one network of boundaries: each edge between two colours is traced once (no doubled lines)
+      const BG = 255, L = new Uint8Array(n);
+      for (let i = 0; i < n; i++) { const e = E ? E[i] : 0; L[i] = e === 1 ? BG : e >= 2 ? e - 2 : keep[lab[i]] ? lab[i] : BG; }
+      mergeSpecks(L, w, h, Math.max(1, o.speckPx));
+      for (let i = 0; i < n; i++) if (L[i] !== BG) { const m = new Uint8Array(1); m[0] = 1; masks.push({ mask: m, colour: L[i] }); break; }
+      const net = traceNetwork(L, w, h, BG); network = net.chains; netClosed = net.closed;
+      lastLabels = L;
+    }
   }
   const loops: Loop[] = []; let points = 0, found = 0, largest = 0, on = 0;
+  if (network) {
+    for (let i = 0; i < n; i++) if (lastLabels![i] !== 255) on++;
+    network.forEach((raw, ci) => {
+      found++; largest = Math.max(largest, raw.length * raw.length);
+      const closed = netClosed[ci];
+      let p = closed ? midpoints(raw) : openMidpoints(raw);
+      if (o.smooth > 0) p = closed ? chaikin(p, Math.round(o.smooth)) : chaikinOpen(p, Math.round(o.smooth));
+      p = closed ? simplifyClosed(p, Math.max(0.05, o.tolPx)) : dpOpen(p, Math.max(0.05, o.tolPx));
+      if (p.length < (closed ? 3 : 2)) return;
+      loops.push({ pts: p, area: closed ? loopArea(p) : 0, colour: -1, closed }); points += p.length;
+    });
+    const keptColours = palette.filter((_, j) => o.keep?.[j] ?? !backgrounds.includes(j)).length;
+    return { loops, palette, background, backgrounds, threshold, points, diag: { found, largestPx: Infinity, coverage: on / n, masks: 1, keptColours } };
+  }
   for (const { mask } of masks) for (let i = 0; i < n; i++) on += mask[i];
   for (const { mask, colour } of masks) for (const raw of traceMask(mask, w, h)) {
     const area = loopArea(raw); found++; largest = Math.max(largest, Math.abs(area));
@@ -270,10 +300,75 @@ export function whyEmpty(r: TraceResult, o: TraceOpts): string | null {
   if (r.loops.length) return null;
   const d = r.diag;
   if (o.mode === 'colours' && d.keptColours === 0) return 'All colours are dropped — click a colour swatch to keep it.';
-  if (o.erase && o.erase.every(v => v === 1)) return 'The whole picture has been erased — press Clear erasing.';
+  if (o.erase && o.erase.every(v => v === 1)) return 'The whole picture has been erased — press Clear brush.';
   if (d.coverage < 0.0005) return o.mode === 'silhouette' ? (o.invert ? 'Nothing is lighter than the threshold — move Threshold left, or untick "Light shape on dark".' : 'Nothing is darker than the threshold — move Threshold right, or tick "Light shape on dark".') : 'The colours you kept are not in the picture.';
   if (d.coverage > 0.9995) return 'The whole picture counts as the shape — move Threshold the other way, or change "Light shape on dark".';
   if (d.found && d.largestPx < o.speckPx) return `All ${d.found} pieces are smaller than "Ignore specks" — lower it.`;
   return 'Nothing found — press Reset to go back to the starting settings.';
 }
 
+
+let lastLabels: Uint8Array | null = null;
+/** Colour label per pixel from the last Colours trace (255 = background / dropped). */
+export const lastLabelMap = () => lastLabels;
+const openMidpoints = (p: { x: number; y: number }[]) => { if (p.length < 3) return p; const o = [p[0]]; for (let i = 0; i < p.length - 1; i++) o.push({ x: (p[i].x + p[i + 1].x) / 2, y: (p[i].y + p[i + 1].y) / 2 }); o.push(p[p.length - 1]); return o; };
+/** Chaikin smoothing for an open line, keeping both ends fixed (so junctions stay joined). */
+export function chaikinOpen(p: { x: number; y: number }[], passes: number) {
+  let cur = p;
+  for (let k = 0; k < passes && cur.length > 2; k++) {
+    const o = [cur[0]];
+    for (let i = 0; i < cur.length - 1; i++) { const q = cur[i], r = cur[i + 1]; if (i > 0) o.push({ x: .75 * q.x + .25 * r.x, y: .75 * q.y + .25 * r.y }); if (i < cur.length - 2) o.push({ x: .25 * q.x + .75 * r.x, y: .25 * q.y + .75 * r.y }); }
+    o.push(cur[cur.length - 1]); cur = o;
+  }
+  return cur;
+}
+
+/** Merge connected areas smaller than minArea into the neighbouring label they touch most (removes colour specks). */
+export function mergeSpecks(L: Uint8Array, w: number, h: number, minArea: number) {
+  const n = w * h, comp = new Int32Array(n).fill(-1), st: number[] = [];
+  let c = 0;
+  for (let s = 0; s < n; s++) {
+    if (comp[s] >= 0) continue;
+    const lab = L[s], px: number[] = []; comp[s] = c; st.push(s);
+    while (st.length) { const i = st.pop()!; px.push(i); const x = i % w, y = (i / w) | 0;
+      for (const j of [x > 0 ? i - 1 : -1, x < w - 1 ? i + 1 : -1, y > 0 ? i - w : -1, y < h - 1 ? i + w : -1]) if (j >= 0 && comp[j] < 0 && L[j] === lab) { comp[j] = c; st.push(j); } }
+    if (px.length < minArea) {
+      const count = new Map<number, number>();
+      for (const i of px) { const x = i % w, y = (i / w) | 0; for (const j of [x > 0 ? i - 1 : -1, x < w - 1 ? i + 1 : -1, y > 0 ? i - w : -1, y < h - 1 ? i + w : -1]) if (j >= 0 && comp[j] !== c) count.set(L[j], (count.get(L[j]) || 0) + 1); }
+      let best = -1, bc = -1; for (const [k, v] of count) if (v > bc) { bc = v; best = k; }
+      if (best >= 0) for (const i of px) L[i] = best;
+    }
+    c++;
+  }
+}
+
+/**
+ * Boundaries of a label image as a network: every edge between two different
+ * labels is traced exactly once. Lines run between junctions (where three or
+ * more areas meet) or form closed loops.
+ */
+export function traceNetwork(L: Uint8Array, w: number, h: number, BG = 255): { chains: { x: number; y: number }[][]; closed: boolean[] } {
+  const W = w + 1, lab = (x: number, y: number) => (x < 0 || y < 0 || x >= w || y >= h) ? BG : L[y * w + x];
+  // edge bitmaps: horizontal edge (x,y)→(x+1,y) separates (x,y-1) and (x,y); vertical edge (x,y)→(x,y+1) separates (x-1,y) and (x,y)
+  const hE = new Uint8Array(W * (h + 1)), vE = new Uint8Array(W * (h + 1)), deg = new Uint8Array(W * (h + 1));
+  for (let y = 0; y <= h; y++) for (let x = 0; x < w; x++) if (lab(x, y - 1) !== lab(x, y)) { hE[y * W + x] = 1; deg[y * W + x]++; deg[y * W + x + 1]++; }
+  for (let y = 0; y < h; y++) for (let x = 0; x <= w; x++) if (lab(x - 1, y) !== lab(x, y)) { vE[y * W + x] = 1; deg[y * W + x]++; deg[(y + 1) * W + x]++; }
+  const chains: { x: number; y: number }[][] = [], closed: boolean[] = [];
+  /** unused edge leaving v in direction d (0 right, 1 down, 2 left, 3 up)? */
+  const has = (v: number, d: number) => { const x = v % W, y = (v / W) | 0; return d === 0 ? x < w && hE[v] === 1 : d === 2 ? x > 0 && hE[v - 1] === 1 : d === 1 ? y < h && vE[v] === 1 : y > 0 && vE[v - W] === 1; };
+  const take = (v: number, d: number) => { if (d === 0) hE[v] = 2; else if (d === 2) hE[v - 1] = 2; else if (d === 1) vE[v] = 2; else vE[v - W] = 2; };
+  const step = [1, W, -1, -W];
+  const walk = (v0: number, d0: number) => {
+    const pts = [{ x: v0 % W, y: (v0 / W) | 0 }]; let v = v0, d = d0;
+    for (;;) {
+      take(v, d); v += step[d]; pts.push({ x: v % W, y: (v / W) | 0 });
+      if (v === v0 || deg[v] !== 2) break;
+      let nd = -1; for (let k = 0; k < 4; k++) if (has(v, k)) { nd = k; break; }
+      if (nd < 0) break; d = nd;
+    }
+    return { pts, loop: v === v0 && deg[v0] === 2 };
+  };
+  for (let v = 0; v < W * (h + 1); v++) if (deg[v] && deg[v] !== 2) for (let d = 0; d < 4; d++) while (has(v, d)) { const r = walk(v, d); chains.push(r.pts); closed.push(false); }
+  for (let v = 0; v < W * (h + 1); v++) for (let d = 0; d < 4; d++) while (has(v, d)) { const r = walk(v, d); if (r.loop) r.pts.pop(); chains.push(r.pts); closed.push(r.loop); }
+  return { chains, closed };
+}

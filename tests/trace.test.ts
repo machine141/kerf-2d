@@ -56,3 +56,25 @@ describe('explains an empty trace', () => {
   it('all colours dropped', () => { const o = { ...base, mode: 'colours' as const, keep: [false, false] }; expect(whyEmpty(trace(img, o), o)).toMatch(/All colours are dropped/); });
   it('nothing to explain when outlines exist', () => { expect(whyEmpty(trace(img, base), base)).toBeNull(); });
 });
+import { traceNetwork, mergeSpecks } from '../src/trace/trace';
+describe('colour outlines as one network', () => {
+  it('two touching colour squares: the shared edge is traced once', () => {
+    const w = 8, h = 6, L = new Uint8Array(w * h).fill(255);
+    for (let y = 1; y < 5; y++) for (let x = 1; x < 7; x++) L[y * w + x] = x < 4 ? 0 : 1;
+    const { chains, closed } = traceNetwork(L, w, h);
+    expect(chains.length).toBe(3); expect(closed.every(c => !c)).toBe(true);
+    const len = chains.reduce((a, c) => a + c.length - 1, 0);
+    expect(len).toBe(2 * (6 + 4) + 4);               // outer perimeter + shared edge once (not twice)
+  });
+  it('small colour specks are merged into their surroundings', () => {
+    const w = 10, h = 10, L = new Uint8Array(w * h).fill(0); L[55] = 1; L[22] = 2;
+    mergeSpecks(L, w, h, 4); expect([...L].every(v => v === 0)).toBe(true);
+  });
+  it('fill brush closes a gap; erase removes', () => {
+    const img = { w: 40, h: 20, data: new Uint8ClampedArray(40 * 20 * 4).fill(255) };
+    for (let y = 5; y < 15; y++) for (let x = 5; x < 35; x++) { if (x >= 18 && x < 22) continue; const i = (y * 40 + x) * 4; img.data[i] = img.data[i + 1] = img.data[i + 2] = 0; }
+    expect(trace(img, base).loops.length).toBe(2);           // two blocks with a gap
+    const ed = new Uint8Array(800); for (let y = 5; y < 15; y++) for (let x = 18; x < 22; x++) ed[y * 40 + x] = 2;
+    expect(trace(img, { ...base, erase: ed }).loops.length).toBe(1); // filled → one shape
+  });
+});
