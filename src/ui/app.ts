@@ -50,13 +50,14 @@ export function startUI(ed: Editor) {
     typing = { id, isNew, pushed: isNew };
     if (ui.tab !== 'props') { ui.tab = 'props'; document.querySelectorAll('.tabs button').forEach(x => x.setAttribute('aria-selected', String((x as HTMLElement).dataset.tab === 'props'))); }
     renderPane();
-    // focus once the click that made it has finished (the canvas would take focus back)
-    setTimeout(() => {
-      const ta = document.querySelector<HTMLTextAreaElement>('#pTxt'); if (!ta) return;
-      ta.focus(); if (isNew) ta.select(); else ta.setSelectionRange(ta.value.length, ta.value.length);
-      if (matchMedia('(max-width: 900px)').matches) ta.scrollIntoView({ block: 'center', behavior: 'smooth' });
-    }, 40);
+    // focus straight away, so typing can start at once; the click's own mousedown is told not to take focus back
+    const ta = document.querySelector<HTMLTextAreaElement>('#pTxt'); if (!ta) return;
+    ta.focus(); if (isNew) ta.select(); else ta.setSelectionRange(ta.value.length, ta.value.length);
+    keepFocus = true; setTimeout(() => { keepFocus = false; }, 300);
+    if (matchMedia('(max-width: 900px)').matches) ta.scrollIntoView({ block: 'center', behavior: 'smooth' });
   };
+  let keepFocus = false;
+  cv.addEventListener('mousedown', ev => { if (keepFocus) { ev.preventDefault(); keepFocus = false; } });
   (async () => { try { DL = (window as any).claude?.use ? await (window as any).claude.use('downloads') : null; } catch { DL = null; } })();
 
   // ---------- canvas ----------
@@ -427,7 +428,7 @@ export function startUI(ed: Editor) {
       ${pp ? '' : sz.html}`;
     bindFields(F.concat(pp ? [] : sz.fields)); if (!pp) bindSize();
     const ta = $<HTMLTextAreaElement>('#pTxt'); ta.style.fontFamily = cssFont(e.font);
-    ta.onfocus = () => { if (!typing || typing.id !== e.id) typing = { id: e.id, isNew: false, pushed: false }; ed.state.typing = finishTyping; };
+    ta.onfocus = () => { if (!typing || typing.id !== e.id) typing = { id: e.id, isNew: false, pushed: false }; ed.state.typing = finishTyping; ed.state.typingFocused = true; };
     ta.oninput = () => {
       const t = live(); if (!t) return;
       if (!typing || typing.id !== e.id) typing = { id: e.id, isNew: false, pushed: false };
@@ -435,7 +436,7 @@ export function startUI(ed: Editor) {
       t.text = t.path ? ta.value.replace(/\n/g, ' ') : ta.value; ed.changed('view');
     };
     ta.onkeydown = ev => { if (ev.key === 'Escape' || (ev.key === 'Enter' && (ev.ctrlKey || ev.metaKey || live()?.path))) { ev.preventDefault(); ta.blur(); } };
-    ta.onblur = () => setTimeout(() => { if (document.activeElement?.id !== 'pTxt') finishTyping(); }, 0);
+    ta.onblur = () => { ed.state.typingFocused = false; }; ta.addEventListener('blur', () => setTimeout(() => { if (document.activeElement?.id !== 'pTxt') finishTyping(); }, 0));
     pane.querySelectorAll<HTMLElement>('[data-font]').forEach(b => b.onclick = () => set(t => { t.font = b.dataset.font!; }));
     const segBind = (id: string, f: (t: TextEntT, v: string) => void) => document.querySelectorAll<HTMLElement>(`#${id} button`).forEach(b => b.onclick = () => set(t => f(t, b.dataset.v!)));
     segBind('pEff', (t, v) => { t.path!.effect = v as any; }); segBind('pSide', (t, v) => { t.path!.side = v as any; }); segBind('pAlign', (t, v) => { t.align = v as any; });

@@ -19,7 +19,7 @@ export type ChangeKind = 'doc' | 'sel' | 'tool' | 'prompt' | 'view' | 'aids' | '
 
 export const DEFAULT_OPTS: Record<string, any> = {
   rectFrom: 'corner', circFrom: 'centre', arcMode: '3pt', filletMode: 'fillet', filletR: 5, filletFollow: false, fixedR: '', dimMode: 'a', rotAngle: 60, rotCopies: 5, moveCopy: false, mirKeep: false, polySides: 6, polyMeasure: 'corner', polyStar: false, polyInner: 50, splineClosed: false, spFrom: 'centre', spKind: 'even', spTurns: 4, spInner: 0, spDir: 'ccw', mirStep: 15, arrType: 'grid', arrCols: 4, arrRows: 1, arrDx: 20, arrDy: 20, arrFollow: true, arrCount: 6, arrAngle: 360, arrRotate: true, gridScale: 0, gridSym: '1', gridClose: true, gridFill: true, circScale: 0, circSym: '1', circClose: true, circFill: true,
-  offMode: 'shape', offSide: 'auto', offD: 5, offRound: '1', offCount: 1, offFollow: false, trimMode: 'whole', joinTol: 0.05, pickPx: 14, eraseR: 15, eraseSmall: true, eraseMax: 5, ringD: 10, ringHole: 5, ringOverlap: 2, lockAspect: false,
+  offMode: 'shape', offSide: 'auto', offD: 5, offRound: '1', offCount: 1, offFollow: false, offJoin: true, trimMode: 'whole', joinTol: 0.05, pickPx: 14, eraseR: 15, eraseSmall: true, eraseMax: 5, ringD: 10, ringHole: 5, ringOverlap: 2, lockAspect: false,
   txtFont: 'arimo', txtSize: 10, txtSpacing: 0, txtAlign: 'left', txtEffect: 'rainbow', txtSide: 'above', txtFit: false,
 };
 

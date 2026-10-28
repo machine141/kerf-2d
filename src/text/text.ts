@@ -162,6 +162,34 @@ function onPath(t: TextEnt): Shape[] {
   });
   return out;
 }
+/**
+ * The line through the middle of the letters (half the capital height up), from
+ * the first letter to the last — used to join spaced-out letters into one contour.
+ * With `whole`, text on a closed shape gives the complete loop round it.
+ */
+export function textSpines(t: TextEnt, whole = false): { pts: Point[]; closed: boolean }[] {
+  if (!t.path) {
+    const c = Math.cos(t.angle || 0), s = Math.sin(t.angle || 0), m = t.mirror ? -1 : 1, out: { pts: Point[]; closed: boolean }[] = [];
+    t.text.split('\n').forEach((ln, i) => {
+      const L = layoutLine(t.font, ln, t.size, t.spacing); if (!L.items.length) return;
+      const dx = t.align === 'center' ? -L.width / 2 : t.align === 'right' ? -L.width : 0, y = -i * t.size * (t.lineSpacing || 1.6) + t.size / 2;
+      const a = L.items[0].x + L.items[0].adv * 0.25, b = L.items[L.items.length - 1].x + L.items[L.items.length - 1].adv * 0.75;
+      out.push({ closed: false, pts: [a, b].map(x0 => { const x = (x0 + dx) * m; return P(t.at.x + x * c - y * s, t.at.y + x * s + y * c); }) });
+    });
+    return out;
+  }
+  const pp = t.path, r = pathRun(pp.geom, pp.flip), str = t.text.replace(/\n/g, ' '), L = layoutLine(t.font, str, t.size, t.spacing), n = L.items.length;
+  if (!n || r.L < 1e-9) return [];
+  const sA = (pp.flip ? 1 - pp.pos : pp.pos) * r.L;
+  let s0 = pp.anchor === 'start' ? sA : pp.anchor === 'end' ? sA - L.width : sA - L.width / 2, extra = 0;
+  if (pp.anchor === 'fit') { const room = r.closed ? r.L * 0.985 : r.L; extra = n > 1 ? (room - L.width) / (n - 1) : 0; s0 = r.closed ? sA - room / 2 : 0; }
+  const up = (pp.side === 'on' ? -t.size / 2 : pp.side === 'below' ? -t.size : 0) + (pp.lift || 0) + t.size / 2;
+  const vertical = pp.effect === 'skew' || pp.effect === 'stair';
+  const at = (x: number) => { const { p, t: T } = runAt(r, x); return vertical ? add(p, add(mul(P(-T.y, T.x), up - t.size / 2), P(0, t.size / 2))) : add(p, mul(P(-T.y, T.x), up)); };
+  if (whole && r.closed) { const k = Math.max(24, Math.ceil(r.L / 1)); return [{ closed: true, pts: Array.from({ length: k }, (_, i) => at(i * r.L / k)) }]; }
+  const W = L.width + extra * (n - 1), a = s0 + L.items[0].adv * 0.25, b = s0 + W - L.items[n - 1].adv * 0.25, k = Math.max(2, Math.ceil((b - a) / 1));
+  return [{ closed: false, pts: Array.from({ length: k + 1 }, (_, i) => at(a + (b - a) * i / k)) }];
+}
 /** Where the text's anchor sits on its path (for the drag handle). */
 export function anchorPoint(t: TextEnt): Point | null {
   if (!t.path) return null;

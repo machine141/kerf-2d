@@ -10,24 +10,32 @@
 import { type Point, dist, clean, fmt } from '../geometry/vec';
 import { prims, distPrim, bbox, type Prim } from '../geometry/entity';
 import { offsetGeos, refit } from '../geometry/boolean';
-import { makeSource, contour, connectedGroup, withSpines, offsetPrim, pointInSolid, type OffsetSource, type Side } from '../geometry/offset';
+import { makeSource, contour, connectedGroup, withSpines, spinesOf, offsetPrim, pointInSolid, type OffsetSource, type Side } from '../geometry/offset';
 import { findRegion } from '../geometry/region';
 import type { Tool } from '../editor/tool';
 import type { Editor } from '../editor/editor';
 import type { Entity, Shape } from '../model/types';
 import { ICONS } from './icons';
 
-interface OffState { spine?: boolean; srcPrims?: Prim[]; ids: Set<string>; shapes: Shape[]; source?: OffsetSource; edge?: Prim; region?: Shape; cache?: { key: string; res: Shape[] } }
+interface OffState { spine?: boolean; spines?: Set<Shape>; joined?: boolean; srcPrims?: Prim[]; ids: Set<string>; shapes: Shape[]; source?: OffsetSource; edge?: Prim; region?: Shape; cache?: { key: string; res: Shape[] } }
 
 export function offsetBegin(ed: Editor, shapes: Shape[], ids: string[], extra: Partial<OffState> = {}) {
-  ed.state.off = { ids: new Set(ids), shapes, source: extra.edge ? undefined : makeSource(shapes), ...extra } as OffState;
+  ed.state.off = { ids: new Set(ids), shapes, ...extra } as OffState;
+  sourceFor(ed, ed.state.off);
   ed.changed('prompt');
+}
+/** Build (or rebuild, when "Join letters" changes) what is being contoured. */
+function sourceFor(ed: Editor, o: OffState): OffsetSource | undefined {
+  if (o.edge) return undefined;
+  const join = !!ed.opt.offJoin && o.shapes.some(s => s.type === 'text');
+  if (!o.source || o.joined !== join) { o.spines ??= spinesOf(o.shapes); o.source = makeSource(o.shapes, { spines: o.spines, join }); o.joined = join; o.cache = undefined; }
+  return o.source;
 }
 function side(ed: Editor, cur: Point): Side | 'auto' {
   const o: OffState = ed.state.off, s = ed.opt.offSide;
   if (s !== 'auto') return s;
   if (o.edge) return 'auto';
-  return o.source!.solid.length && pointInSolid(cur, o.source!.solid) ? 'in' : 'out';
+  const src = sourceFor(ed, o)!; return src.solid.length && pointInSolid(cur, src.solid) ? 'in' : 'out';
 }
 function distance(ed: Editor, cur: Point) {
   const o: OffState = ed.state.off;
@@ -53,9 +61,10 @@ export function offsetResult(ed: Editor, cur: Point): Shape[] {
   const o: OffState = ed.state.off; if (!o) return [];
   const d = distance(ed, cur), n = Math.max(1, Math.round(+ed.opt.offCount) || 1), round = String(ed.opt.offRound) === '1', sd = side(ed, cur);
   if (o.edge) { const out: Shape[] = []; for (let k = 1; k <= n; k++) { const s = offsetPrim(o.edge, d * k, cur, sd); if (s) out.push(s); } return out; }
+  const src = sourceFor(ed, o)!;
   const key = [d, n, round, sd].join('|'); if (o.cache?.key === key) return o.cache.res;
   const geos = offsetGeos(sourcePrims(ed, o), Array.from({ length: n }, (_, k) => d * (k + 1)));
-  const res = contour(o.source!, d, sd === 'auto' ? 'out' : sd, round, n).map(pts => refit(pts, geos));
+  const res = contour(src, d, sd === 'auto' ? 'out' : sd, round, n).map(pts => refit(pts, geos));
   o.cache = { key, res }; return res;
 }
 export function offsetCommit(ed: Editor, cur: Point): string[] {
@@ -88,6 +97,7 @@ export const offsetTool: Tool = {
     { key: 'offMode', label: 'Apply to', type: 'seg', choices: [['shape', 'Whole shape'], ['edge', 'One edge']] },
     { key: 'offSide', label: 'Side', type: 'seg', choices: [['auto', 'Cursor'], ['out', 'Outside'], ['in', 'Inside'], ['both', 'Both']] },
     { key: 'offD', label: 'Distance', type: 'number', min: 0.01, unit: 'mm' },
+    { key: 'offJoin', label: 'Join letters (one piece)', type: 'check' },
     { key: 'offRound', label: 'Corners', type: 'seg', choices: [['1', 'Round'], ['0', 'Sharp']] },
     { key: 'offCount', label: 'Contours', type: 'number', min: 1, max: 50, step: 1 },
     { key: 'offFollow', label: 'Follow cursor', type: 'check' },

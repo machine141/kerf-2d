@@ -136,7 +136,8 @@ export const textTool: Tool = {
     ed.state.tHover = onText ? null : pathUnder(ed, raw)?.id ?? null;
   },
   down(ed, raw) {
-    if (ed.state.typing) { ed.state.typing(); return; }   // a click away from the typing box just finishes it
+    // a click away while still typing just finishes the text (a new click then starts new text)
+    if (ed.state.typing) { const active = ed.state.typingFocused; ed.state.typing(); if (active) return; }
     const hit = ed.pick(raw, undefined, isText)?.e as TextEnt | undefined;
     if (hit) { ed.setSelection([hit.id]); optsFromText(ed, hit); ed.textEditor?.(hit.id, false); return; }
     const path = pathUnder(ed, raw);

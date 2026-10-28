@@ -152,9 +152,43 @@ describe('Text tool', () => {
     const res = offsetResult(ed, P(-50, -50));
     const outer = res.filter(s => { const f = flatten(s, 0.05).pts; const x0 = Math.min(...f.map(p => p.x)), x1 = Math.max(...f.map(p => p.x)); return x0 < tb.x0 && x1 > tb.x1; });
     expect(outer.length).toBe(1);           // one piece round all the letters
-    // and without the line the letters stay apart (no outline goes round them all)
-    ed.state.off = null; ed.setTool('select'); ed.store.remove([ln.id]); ed.store.emit(); ed.setSelection([t.id]); ed.setTool('offset');
+    // without the line and with "Join letters" off, the letters stay apart (no outline goes round them all)
+    ed.state.off = null; ed.setTool('select'); ed.store.remove([ln.id]); ed.store.emit(); ed.opt.offJoin = false; ed.setSelection([t.id]); ed.setTool('offset');
     const res2 = offsetResult(ed, P(-50, -50));
     expect(res2.filter(s => { const f = flatten(s, 0.05).pts; return Math.min(...f.map(p => p.x)) < tb.x0 && Math.max(...f.map(p => p.x)) > tb.x1; }).length).toBe(0);
+  });
+  it('Join letters: spaced-out text contours as one piece, without loops inside the letters', () => {
+    const { ed } = setup();
+    const t = ed.store.add({ type: 'text', text: 'Bob', font: 'arimo', size: 20, spacing: 10, lineSpacing: 1.6, align: 'left', at: P(0, 0), angle: 0 } as Shape) as TextEnt;
+    ed.store.emit(); const tb = boxOf(t);
+    ed.setSelection([t.id]); ed.opt.offD = 3; ed.opt.offSide = 'out'; ed.setTool('offset');
+    const res = offsetResult(ed, P(-50, -50));
+    expect(res.length).toBe(1);
+    const f = flatten(res[0], 0.05).pts; expect(Math.min(...f.map(p => p.x))).toBeLessThan(tb.x0); expect(Math.max(...f.map(p => p.x))).toBeGreaterThan(tb.x1);
+  });
+  it('badge: text along the top and bottom of a circle (circle deleted) contours as a ring — outside and inside', () => {
+    const { ed, click } = setup();
+    const c = ed.store.add({ type: 'circle', c: P(100, 100), r: 40 } as Shape); ed.store.emit();
+    ed.setTool('text'); ed.opt.txtSize = 10;
+    click(P(100, 140)); texts(ed)[0].text = 'HAPPY BIRTHDAY';
+    click(P(100, 60)); texts(ed)[1].text = 'SAM';
+    ed.setTool('select'); ed.store.remove([c.id]); ed.store.emit();
+    ed.setSelection(texts(ed).map(t => t.id)); ed.opt.offD = 3; ed.opt.offSide = 'out'; ed.setTool('offset');
+    const res = offsetResult(ed, P(0, 0)), rad = (s: Shape) => { const f = flatten(s, 0.05).pts; return f.reduce((a, p) => a + dist(p, P(100, 100)), 0) / f.length; };
+    expect(res.length).toBe(2);                                   // one outer outline + the hole in the middle
+    const r = res.map(rad).sort((a, b) => a - b);
+    expect(r[0]).toBeLessThan(40); expect(r[1]).toBeGreaterThan(50);
+  });
+  it('a circle drawn through the letters is used as a line: contours on both sides of it', () => {
+    const { ed, click } = setup();
+    ed.setTool('text'); ed.opt.txtSize = 10;
+    ed.store.add({ type: 'circle', c: P(100, 100), r: 40 } as Shape); ed.store.emit();
+    click(P(100, 140)); texts(ed)[0].text = 'TOP'; click(P(100, 60)); texts(ed)[1].text = 'BOTTOM';
+    const ring = ed.store.add({ type: 'circle', c: P(100, 100), r: 45 } as Shape); ed.store.emit();   // through the middle of the letters
+    ed.setTool('select'); ed.setSelection([texts(ed)[0].id]); ed.opt.offJoin = false; ed.opt.offD = 3; ed.opt.offSide = 'out'; ed.setTool('offset');
+    expect(ed.state.off.ids.has(ring.id)).toBe(true);
+    const res = offsetResult(ed, P(0, 0)), rr = res.map(s => { const f = flatten(s, 0.05).pts.map(p => dist(p, P(100, 100))); return [Math.min(...f), Math.max(...f)]; });
+    expect(rr.some(([a, b]) => b < 43)).toBe(true);                // the inside contour runs round inside the ring
+    expect(rr.some(([, b]) => b > 52)).toBe(true);                // and the outside one round the outside
   });
 });
