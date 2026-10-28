@@ -219,6 +219,13 @@ export function runSelfTest(): { results: TestResult[]; doc: string | null } {
     ed.tool.down!(ed, P(626, 250), pi0); ed.tool.down!(ed, P(640, 265), pi0); const rdm: any = last(); ed.opt.dimMode = 'a'; ed.setTool('select');
     const ddg = rdm.type === 'dim' ? ed.dimGeom(rdm) : null;
     ok('Diameter dimension of a hole', !!ddg && ddg.val === 12 && ddg.text.str === 'Ø12 mm' && rdm.color === d.dim.color, ddg ? `click the circle, place the label → "${ddg.text.str}" in ${rdm.color}` : 'no dimension made');
+    // 12a4 · eraser brush clears flakes but keeps the main outline
+    ed.store.change(() => { ed.store.add({ type: 'poly', closed: true, pts: [P(700, 300), P(760, 300), P(760, 340), P(700, 340)] } as Shape);
+      for (let i = 0; i < 6; i++) ed.store.add({ type: 'circle', c: P(705 + i * 3, 302), r: 0.6 } as Shape); });
+    const nE = ed.doc.ents.length; ed.opt.eraseSmall = true; ed.opt.eraseMax = 5; ed.opt.eraseR = 30; ed.setTool('eraser'); const k0 = ed.view.k; ed.view.k = 3;
+    const pi1 = { sp: P(0, 0), shift: false, alt: false, ctrl: false };
+    ed.tool.down!(ed, P(705, 302), pi1); ed.tool.move!(ed, P(715, 302), pi1); ed.tool.move!(ed, P(722, 302), pi1); ed.tool.up!(ed, P(722, 302), pi1); ed.view.k = k0; ed.setTool('select');
+    ok('Eraser brush removes flakes, keeps the outline', ed.doc.ents.length === nE - 6 && ed.doc.ents.some((e: any) => e.type === 'poly' && e.pts[0]?.x === 700 && e.pts[0]?.y === 300), '6 specks erased in one drag · the 60 × 40 outline under the brush kept ("only small pieces")');
     // 12b · fixes: trim keeps closed shapes, Make Path closes tiny gaps
     ed.setTool('rect'); typed(['abs', 620, 300], ['rel', 40, 30]); const gl: any = last(); ed.setTool('select');
     ed.opt.arcMode = '3pt'; ed.setTool('arc'); typed(['abs', 660, 320], ['abs', 680, 320], ['abs', 670, 325]); ed.opt.arcMode = 'centre'; ed.setTool('select');

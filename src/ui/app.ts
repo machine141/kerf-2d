@@ -4,6 +4,7 @@ import { prims, lengthOf, boxCentre } from '../geometry/entity';
 import { affMove, affScale, affRot } from '../geometry/affine';
 import { geomSettings } from '../geometry/entity';
 import type { BoolOp } from '../geometry/boolean';
+import { openTrace } from './trace';
 import type { Editor, CoordMode } from '../editor/editor';
 import type { OptionSpec, PointerInfo } from '../editor/tool';
 import { Renderer } from '../render/renderer';
@@ -220,8 +221,15 @@ export function startUI(ed: Editor) {
   const saveNative = () => saveFile(base() + '.json', JSON.stringify(ed.doc, null, 1));
   $('#bSave').onclick = saveNative; $('#bSvg').onclick = () => showExport('svg'); $('#bDxf').onclick = () => showExport('dxf');
   $('#bOpen').onclick = () => $('#fileIn').click();
+  const isImage = (f: File) => /^image\/(png|jpe?g|gif|webp|bmp)$/i.test(f.type) || /\.(png|jpe?g|gif|webp|bmp)$/i.test(f.name);
+  $('#bTrace').onclick = () => $('#imgIn').click();
+  $<HTMLInputElement>('#imgIn').onchange = ev => { const inp = ev.target as HTMLInputElement, f = inp.files?.[0]; inp.value = ''; if (f) openTrace(ed, f); };
+  $('#main').addEventListener('dragover', ev => { ev.preventDefault(); });
+  $('#main').addEventListener('drop', ev => { ev.preventDefault(); const f = ev.dataTransfer?.files?.[0]; if (!f) return; if (isImage(f)) openTrace(ed, f); else { const dt = new DataTransfer(); dt.items.add(f); const inp = $<HTMLInputElement>('#fileIn'); inp.files = dt.files; inp.dispatchEvent(new Event('change')); } });
   $<HTMLInputElement>('#fileIn').onchange = async ev => {
-    const inp = ev.target as HTMLInputElement, f = inp.files?.[0]; if (!f) return; const text = await f.text(); inp.value = '';
+    const inp = ev.target as HTMLInputElement, f = inp.files?.[0]; if (!f) return; inp.value = '';
+    if (isImage(f)) { openTrace(ed, f); return; }
+    const text = await f.text();
     try {
       if (/\.json$/i.test(f.name)) { const d = JSON.parse(text); if (!d.ents || !d.page) throw new Error('Not a Kerf 2D drawing'); ed.sel.clear(); ed.store.load(d); ($('#docName') as HTMLInputElement).value = ed.doc.name; ed.fit(); ed.toast('Opened ' + f.name); }
       else loadImported(/\.dxf$/i.test(f.name) ? importDXF(text) : importSVG(text), f.name);
