@@ -50,7 +50,7 @@ export function booleanShapes(op: BoolOp, shapes: Shape[], base?: number): { sha
   else { sol = [ints(subj)]; for (const o of others) sol = run(L.ClipType.ctIntersection, sol, [ints(o)]); }
   sol = sol.filter(p => p.length > 2 && Math.abs(L.Clipper.Area(p)) > 1e-6 * SCALE * SCALE);
   if (!sol.length) return { error: op === 'intersect' ? 'These shapes do not overlap' : 'Nothing is left' };
-  const src = closed.flatMap(s => prims(s));
+  const src = geosOf(closed.flatMap(s => prims(s)));
   return { shapes: sol.map(p => refit(fromInt(p), src)) };
 }
 
@@ -77,29 +77,73 @@ export function meet(A: Geo, B: Geo): Point[] {
   return [add(m, mul(P(-u.y, u.x), h)), add(m, mul(P(u.y, -u.x), h))];
 }
 
-/** Rebuild a closed polyline from Clipper as exact lines/arcs of the source primitives. */
-export function refit(pts: Point[], src: Prim[], eps = 0.002): Shape {
+/** Infinite lines / full circles carrying a set of primitives (duplicates removed). */
+export function geosOf(src: Prim[]): Geo[] { return uniqGeos(src.map(geo)); }
+/**
+ * Every curve a contour at the given distances can run along: lines parallel
+ * to each source line (both sides), circles concentric with each arc (both
+ * sides), round-corner circles about each end/vertex, and square end caps.
+ */
+export function offsetGeos(src: Prim[], ds: number[]): Geo[] {
+  const out: Geo[] = [];
+  for (const pr of src) for (const d0 of ds) {
+    const d = Math.abs(d0);
+    if (pr.t === 'seg') {
+      const u = sub(pr.b, pr.a), L = len(u); if (L < 1e-12) continue;
+      const t = mul(u, 1 / L), n = P(-t.y, t.x);
+      out.push({ kind: 'line', a: add(pr.a, mul(n, d)), d: u }, { kind: 'line', a: sub(pr.a, mul(n, d)), d: u });
+      out.push({ kind: 'circ', c: pr.a, r: d }, { kind: 'circ', c: pr.b, r: d });
+      out.push({ kind: 'line', a: sub(pr.a, mul(t, d)), d: n }, { kind: 'line', a: add(pr.b, mul(t, d)), d: n });
+    } else {
+      out.push({ kind: 'circ', c: pr.c, r: pr.r + d }); if (pr.r - d > 1e-9) out.push({ kind: 'circ', c: pr.c, r: pr.r - d });
+      if (!pr.full) for (const a of [pr.a0!, pr.a1!]) out.push({ kind: 'circ', c: P(pr.c.x + pr.r * Math.cos(a), pr.c.y + pr.r * Math.sin(a)), r: d });
+    }
+  }
+  return uniqGeos(out);
+}
+function uniqGeos(gs: Geo[]): Geo[] {
+  const seen = new Set<string>(), out: Geo[] = [], r = (v: number) => Math.round(v * 1e6);
+  for (const g of gs) {
+    let k: string;
+    if (g.kind === 'circ') k = `c${r(g.c.x)},${r(g.c.y)},${r(g.r)}`;
+    else { const L = len(g.d); let ux = g.d.x / L, uy = g.d.y / L; if (ux < -1e-12 || (Math.abs(ux) <= 1e-12 && uy < 0)) { ux = -ux; uy = -uy; } k = `l${r(ux)},${r(uy)},${r(cross(P(ux, uy), g.a))}`; }
+    if (!seen.has(k)) { seen.add(k); out.push(g); }
+  }
+  return out;
+}
+const geoDist = (p: Point, g: Geo) => g.kind === 'line' ? Math.abs(cross(sub(p, g.a), g.d)) / (len(g.d) || 1) : Math.abs(dist(p, g.c) - g.r);
+
+/**
+ * Rebuild a closed polyline (from Clipper) as exact lines and arcs: each edge
+ * is matched to a candidate line/circle it lies on, runs of edges on the same
+ * curve merge into one segment, and corners snap to exact intersections.
+ */
+export function refit(pts: Point[], geos: Geo[], eps = 0.002): Shape {
   const n = pts.length;
-  const on = (p: Point, pr: Prim) => dist(p, nearestOnPrim(p, pr)) <= eps;
-  // which source primitive each edge lies on (prefer continuing the previous one)
   const edge: number[] = new Array(n).fill(-1);
-  const boxes = src.map(pr => pr.t === 'seg' ? [Math.min(pr.a.x, pr.b.x), Math.min(pr.a.y, pr.b.y), Math.max(pr.a.x, pr.b.x), Math.max(pr.a.y, pr.b.y)] : [pr.c.x - pr.r, pr.c.y - pr.r, pr.c.x + pr.r, pr.c.y + pr.r]);
+  const boxes = geos.map(g => g.kind === 'circ' ? [g.c.x - g.r, g.c.y - g.r, g.c.x + g.r, g.c.y + g.r] : null);
   for (let i = 0; i < n; i++) {
     const a = pts[i], b = pts[(i + 1) % n], m = mul(add(a, b), 0.5);
-    const fits = (k: number) => on(a, src[k]) && on(b, src[k]) && on(m, src[k]);
+    const fits = (k: number) => geoDist(a, geos[k]) <= eps && geoDist(b, geos[k]) <= eps && geoDist(m, geos[k]) <= eps;
     const prev = i ? edge[i - 1] : -1;
     if (prev >= 0 && fits(prev)) { edge[i] = prev; continue; }
     const x0 = Math.min(a.x, b.x) - eps, x1 = Math.max(a.x, b.x) + eps, y0 = Math.min(a.y, b.y) - eps, y1 = Math.max(a.y, b.y) + eps;
-    for (let k = 0; k < src.length; k++) { const bx = boxes[k]; if (bx[0] > x1 || bx[2] < x0 || bx[1] > y1 || bx[3] < y0) continue; if (fits(k)) { edge[i] = k; break; } }
+    let bestK = -1, bestE = Infinity;
+    for (let k = 0; k < geos.length; k++) {
+      const bx = boxes[k]; if (bx && (bx[0] > x1 || bx[2] < x0 || bx[1] > y1 || bx[3] < y0)) continue;
+      if (!fits(k)) continue;
+      const e = geoDist(a, geos[k]) + geoDist(b, geos[k]) + geoDist(m, geos[k]); if (e < bestE) { bestE = e; bestK = k; }
+    }
+    edge[i] = bestK;
   }
   if (edge.every(k => k === edge[0]) && edge[0] >= 0) {
-    const pr = src[edge[0]];
-    if (pr.t === 'arc') return { type: 'circle', c: pr.c, r: pr.r } as Shape;
+    const g = geos[edge[0]];
+    if (g.kind === 'circ') return { type: 'circle', c: cp(g.c), r: clean(g.r) } as Shape;
   }
   // rotate so a run starts at index 0
   let start = 0; for (let i = 0; i < n; i++) if (edge[i] !== edge[(i - 1 + n) % n] || edge[i] < 0) { start = i; break; }
   const E = edge.slice(start).concat(edge.slice(0, start)), V = pts.slice(start).concat(pts.slice(0, start));
-  // runs of equal primitive (unmatched edges stay as their own straight runs)
+  // runs of edges on the same curve (unmatched edges stay as their own straight runs)
   const runs: { k: number; i0: number; i1: number }[] = [];
   for (let i = 0; i < n; i++) {
     const last = runs[runs.length - 1];
@@ -109,23 +153,21 @@ export function refit(pts: Point[], src: Prim[], eps = 0.002): Shape {
   const corner = (j: number): Point => {
     const r = runs[j], p = V[r.i0], A = runs[(j - 1 + runs.length) % runs.length].k, B = r.k;
     if (A < 0 || B < 0 || A === B) return p;
-    let best: Point | null = null, bd = 0.02;
-    for (const q of meet(geo(src[A]), geo(src[B]))) { const d = dist(q, p); if (d < bd) { bd = d; best = q; } }
+    const lenA = Math.max(0.02, dist(V[runs[(j - 1 + runs.length) % runs.length].i0], p)), lenB = Math.max(0.02, dist(V[r.i1 % n], p));
+    let best: Point | null = null, bd = Math.min(0.5, 2 * Math.max(lenA, lenB));
+    for (const q of meet(geos[A], geos[B])) { const d = dist(q, p); if (d < bd) { bd = d; best = q; } }
     return best ? cp(P(clean(best.x), clean(best.y))) : p;
   };
   const J = runs.map((_, j) => corner(j));
   const outPts: Point[] = [], bulge: number[] = [];
   runs.forEach((r, j) => {
-    const a = J[j], b = J[(j + 1) % runs.length], pr = r.k >= 0 ? src[r.k] : null;
+    const a = J[j], b = J[(j + 1) % runs.length], g = r.k >= 0 ? geos[r.k] : null;
     outPts.push(a);
-    if (!pr || pr.t === 'seg') {
-      if (!pr) for (let i = r.i0 + 1; i < r.i1; i++) { bulge.push(0); outPts.push(V[i]); }
-      bulge.push(0); return;
-    }
-    const a0 = angOf(pr.c, a), a1 = angOf(pr.c, b), ccw = normA(a1 - a0);
+    if (!g || g.kind === 'line') { bulge.push(0); return; }
+    const a0 = angOf(g.c, a), a1 = angOf(g.c, b), ccw = normA(a1 - a0);
     let sweep: number;
-    if (r.i1 - r.i0 >= 2) { const mid = V[Math.floor((r.i0 + r.i1) / 2)]; sweep = angIn(angOf(pr.c, mid), normA(a0), normA(a1)) ? ccw : ccw - 2 * Math.PI; }
-    else sweep = ccw <= Math.PI ? ccw : ccw - 2 * Math.PI;
+    if (r.i1 - r.i0 >= 2) { const mid = V[Math.floor((r.i0 + r.i1) / 2)]; sweep = angIn(angOf(g.c, mid), normA(a0), normA(a1)) ? ccw : ccw - 2 * Math.PI; }
+    else { const mid = mul(add(V[r.i0], V[r.i1 % n]), 0.5), turn = cross(sub(V[r.i1 % n], V[r.i0]), sub(g.c, mid)); sweep = turn >= 0 ? ccw : ccw - 2 * Math.PI; if (Math.abs(sweep) > Math.PI) sweep = ccw <= Math.PI ? ccw : ccw - 2 * Math.PI; }
     bulge.push(Math.abs(sweep) < 1e-12 ? 0 : Math.tan(sweep / 4));
   });
   // drop zero-length segments

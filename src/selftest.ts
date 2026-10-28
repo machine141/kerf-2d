@@ -4,7 +4,7 @@
  * Used by the in-app Accuracy tab and by the automated test suite.
  */
 import { type Point, P, sub, dist, normA, rotP, polar, fmt, DEG, parseLength } from './geometry/vec';
-import { prims, distPrim, bbox } from './geometry/entity';
+import { prims, distPrim, bbox, flatten } from './geometry/entity';
 import { affEnt } from './geometry/affine';
 import { Editor } from './editor/editor';
 import { ALL_TOOLS } from './tools';
@@ -36,7 +36,7 @@ function maxDev(A: any[], B: any[]) {
 }
 function contourError(res: Shape[], src: Shape[], d: number) {
   const pr = src.flatMap(e => prims(e)); let worst = 0;
-  for (const e of res) for (const p of (e as any).pts) { let m = Infinity; for (const q of pr) m = Math.min(m, distPrim(p, q)); worst = Math.max(worst, Math.abs(m - d)); }
+  for (const e of res) for (const p of flatten(e, 0.001).pts) { let m = Infinity; for (const q of pr) m = Math.min(m, distPrim(p, q)); worst = Math.max(worst, Math.abs(m - d)); }
   return worst;
 }
 
@@ -129,12 +129,12 @@ export function runSelfTest(): { results: TestResult[]; doc: string | null } {
     ed.setTool('rect'); typed(['abs', 300, 140], ['rel', 50, 30]); const body = last();
     ed.setTool('circle'); typed(['abs', 300, 170], ['rel', 10, 0]); const loop = last(); ed.setTool('select');
     const kr = contourOf([body, loop] as Shape[], 3, 'out'), krerr = contourError(kr, [body, loop] as Shape[], 3);
-    ok('Key ring: contour joins body and loop into one outline', kr.length === 1 && krerr < 0.002, `${kr.length} outline, error ${krerr.toExponential(1)} mm`);
+    ok('Key ring: contour joins body and loop into one outline', kr.length === 1 && krerr < 0.002, `${kr.length} outline of ${segsOf(kr[0] as any).length} exact lines/arcs, error ${krerr.toExponential(1)} mm`);
     ed.store.change(() => ed.store.add(structuredClone(kr[0])));
     ed.setTool('circle'); typed(['abs', 300, 170], ['rel', 4, 0]);
     ed.setTool('line'); typed(['abs', 320, 160], ['abs', 320, 210]); ed.finish(); typed(['abs', 335, 160], ['abs', 335, 210]); ed.finish(); ed.setTool('select');
     trimAt(ed, P(327, 173), 3);
-    const kept: any = ed.doc.ents.find((e: any) => e.type === 'poly' && !e.closed && e.pts.length > 10);
+    const kept: any = ed.doc.ents.find((e: any) => e.type === 'poly' && !e.closed && [e.pts[0], e.pts[e.pts.length - 1]].every((p: Point) => Math.abs(p.x - 320) < 1e-6 || Math.abs(p.x - 335) < 1e-6));
     const endsOK = kept && [kept.pts[0], kept.pts[kept.pts.length - 1]].every((p: Point) => Math.abs(p.x - 320) < 1e-6 || Math.abs(p.x - 335) < 1e-6) && Math.abs(kept.pts[0].y - 173) < 1e-6;
     ok('Trim removes a section of the contour between two lines', endsOK && !kept.pts.some((p: Point) => p.x > 320 + 1e-6 && p.x < 335 - 1e-6 && p.y > 172), kept ? `open path now ends at (${fmt(kept.pts[0].x, 6)}, ${fmt(kept.pts[0].y, 6)}) and (${fmt(kept.pts[kept.pts.length - 1].x, 6)}, ${fmt(kept.pts[kept.pts.length - 1].y, 6)})` : 'no path kept');
     // 9 · single edge offset

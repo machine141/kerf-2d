@@ -7,7 +7,8 @@
  * Then move inside/outside to choose the side; the mouse wheel changes the distance.
  */
 import { type Point, dist, clean, fmt } from '../geometry/vec';
-import { prims, distPrim, type Prim } from '../geometry/entity';
+import { prims, distPrim, bbox, type Prim } from '../geometry/entity';
+import { offsetGeos, refit } from '../geometry/boolean';
 import { makeSource, contour, connectedGroup, offsetPrim, pointInSolid, type OffsetSource, type Side } from '../geometry/offset';
 import { findRegion } from '../geometry/region';
 import type { Tool } from '../editor/tool';
@@ -15,7 +16,7 @@ import type { Editor } from '../editor/editor';
 import type { Entity, Shape } from '../model/types';
 import { ICONS } from './icons';
 
-interface OffState { ids: Set<string>; shapes: Shape[]; source?: OffsetSource; edge?: Prim; region?: Shape; cache?: { key: string; res: Shape[] } }
+interface OffState { srcPrims?: Prim[]; ids: Set<string>; shapes: Shape[]; source?: OffsetSource; edge?: Prim; region?: Shape; cache?: { key: string; res: Shape[] } }
 
 export function offsetBegin(ed: Editor, shapes: Shape[], ids: string[], extra: Partial<OffState> = {}) {
   ed.state.off = { ids: new Set(ids), shapes, source: extra.edge ? undefined : makeSource(shapes), ...extra } as OffState;
@@ -34,13 +35,26 @@ function distance(ed: Editor, cur: Point) {
   const A = ed.doc.aids, st = (A.stepLock || A.gridLock) ? A.step : 0.01;
   ed.opt.offD = clean(Math.max(st, Math.round(d / st) * st)); return ed.opt.offD;
 }
+/** The exact lines/arcs the contour is taken from (for a traced area: the real shapes along its boundary). */
+function sourcePrims(ed: Editor, o: OffState): Prim[] {
+  if (o.srcPrims) return o.srcPrims;
+  if (!o.region) return (o.srcPrims = o.shapes.flatMap(s => prims(s)));
+  const b = bbox(o.region), pad = 1e-3, near: Prim[] = [];
+  for (const e of ed.doc.ents) {
+    if (!ed.store.visible(e) || e.type === 'dim') continue;
+    const eb = bbox(e as Shape); if (eb.x1 < b.x0 - pad || eb.x0 > b.x1 + pad || eb.y1 < b.y0 - pad || eb.y0 > b.y1 + pad) continue;
+    near.push(...prims(e as Shape));
+  }
+  return (o.srcPrims = near);
+}
 /** Shapes the tool would place for the cursor position (without ids). */
 export function offsetResult(ed: Editor, cur: Point): Shape[] {
   const o: OffState = ed.state.off; if (!o) return [];
   const d = distance(ed, cur), n = Math.max(1, Math.round(+ed.opt.offCount) || 1), round = String(ed.opt.offRound) === '1', sd = side(ed, cur);
   if (o.edge) { const out: Shape[] = []; for (let k = 1; k <= n; k++) { const s = offsetPrim(o.edge, d * k, cur, sd); if (s) out.push(s); } return out; }
   const key = [d, n, round, sd].join('|'); if (o.cache?.key === key) return o.cache.res;
-  const res = contour(o.source!, d, sd === 'auto' ? 'out' : sd, round, n).map(pts => ({ type: 'poly', closed: true, pts }) as Shape);
+  const geos = offsetGeos(sourcePrims(ed, o), Array.from({ length: n }, (_, k) => d * (k + 1)));
+  const res = contour(o.source!, d, sd === 'auto' ? 'out' : sd, round, n).map(pts => refit(pts, geos));
   o.cache = { key, res }; return res;
 }
 export function offsetCommit(ed: Editor, cur: Point): string[] {
