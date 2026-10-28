@@ -151,6 +151,13 @@ export const GUIDES: HelpGuide[] = [
     { t: 'Choose how it joins: <b>Shelf</b> (a bigger base with your shape glued on top — the strip sits round it; easiest), <b>Tabs on the shape</b> (your shape gets tabs that poke out through slots in the strip) or <b>Tabs on the strip</b> (tabs drop into slots in a bigger base).', svg: pic(solid('M30 70h140v10h-140z', true) + solid('M45 60h110v10h-110z', true) + `<path d="M40 70V25M160 70V25" stroke="${A}" stroke-width="3"/>` + txt(100, 92, 'base · shelf · strip round it', MUTED)) },
     { t: '<b>Cut test strips first</b> (the Test strips tab) from the same wood: bend each one, and use the widest spacing that doesn’t crack.' },
   ], tip: 'Shapes with straight sides and sharp corners (like a hexagon) can’t fold to a point — round the corners first. Straight sides need no slits, so “Only where it bends” saves laser time. Hundreds of slits take a while: the window shows the cutting time.' },
+  { id: 'bend', title: 'Bend to a profile (leaf, face, wing)', intro: 'Make a flat part bend along a curve you choose — a leaf curling, a face sloping back, a wing folding forward. Find it under <b>Make ▾ → Bend to a profile</b>.', steps: [
+    { t: '<b>Select your shape</b> (and, if you like, a curve you drew beside it as the side view), then open <b>Make ▾ → Bend to a profile</b>.', svg: pic(`<ellipse cx="60" cy="50" rx="24" ry="38" fill="none" stroke="${INK}" stroke-width="1.6"/>` + solid('M120 12C140 30 140 40 125 50S110 75 128 88')) },
+    { t: 'In the <b>side view</b>, drag the points forwards and backwards. Click the line to add a point, double-click a point to remove it — or pick a ready-made curve (Arc, S-curve, Slope back…).', svg: pic(`<path d="M40 10V90" stroke="${MUTED}" stroke-dasharray="3 3"/>` + solid('M40 10C40 30 75 40 70 55S40 80 40 90') + `<circle cx="40" cy="10" r="3.5" fill="${A}"/><circle cx="70" cy="55" r="3.5" fill="#fff" stroke="${A}" stroke-width="1.5"/><circle cx="40" cy="90" r="3.5" fill="${A}"/>` + arrow(78, 55, 100, 55, A) + mouse(140, 50, 'L')) },
+    { t: 'A point <b>stops moving</b> when the bend gets tighter than the wood can take. Colours show green (fine), orange (tight), red (too tight).' },
+    { t: '<b>Keep how it looks</b>: your drawing is what you’ll see, so the flat piece comes out <b>longer</b> (the wood follows the curve). <b>Keep its length</b>: your drawing is the flat piece; it can curl and fold over.', svg: pic(`<ellipse cx="45" cy="50" rx="18" ry="30" fill="none" stroke="${MUTED}" stroke-dasharray="3 2"/>` + arrow(70, 50, 95, 50, A) + `<ellipse cx="135" cy="50" rx="18" ry="42" fill="none" stroke="${INK}" stroke-width="1.6"/>` + [26, 34, 42, 50, 58, 66, 74].map(y => `<path d="M${122} ${y}h26" stroke="#2b8a3e"/>`).join('') + txt(45, 96, 'what you see', MUTED) + txt(135, 99, 'flat piece', MUTED)) },
+    { t: 'Add a <b>former</b> (a stand cut to the side view) to glue it to, or leave it free to flop. Press <b>Place the new copy</b>: your original stays, the new flat copy goes beside it.' },
+  ], tip: 'Narrow tips have short slits, so they bend less — give them a gentler curve. A part can bend one way at a time (along its length): it can’t make a dome.' },
   { id: 'laser', title: 'Getting ready to cut', intro: 'A few checks before you send your design to the laser.', steps: [
     { t: 'Put lines to <b>cut</b> on the Cut layer and lines to <b>mark</b> (draw on the surface) on the Engrave layer, using the bar at the top.', svg: barPic('Layer [Cut ▾]   Colour [Black ▾]') },
     { t: 'Check your design fits on the <b>Bed</b> (the sheet size) and that small parts aren’t thinner than about 2 mm.' },
@@ -158,7 +165,7 @@ export const GUIDES: HelpGuide[] = [
   ] },
 ];
 
-const TOPICS = ['start', 'lock', 'view', 'make', 'hinge', 'laser'];
+const TOPICS = ['start', 'lock', 'view', 'make', 'hinge', 'bend', 'laser'];
 
 /** HTML for the Help tab. `toolId` = the tool in use; `showId` = the guide to show (defaults to the tool's). */
 export function helpHtml(toolId: string, showId: string | null, icons: Record<string, { icon: string; label: string; key: string }>): string {
