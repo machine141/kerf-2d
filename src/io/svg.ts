@@ -1,6 +1,7 @@
 /** SVG export (mm-sized, true arcs/ellipses, Inkscape layers) and basic SVG import. */
 import { type Point, P, add, sub, mul, dist, normA, angOf, polar, clean, cp, fmt, DEG } from '../geometry/vec';
 import { dimGeom } from '../geometry/dims';
+import { hasBulge, segsOf } from '../geometry/path';
 import { COLORS, type Doc, type Shape, type ColorKey } from '../model/types';
 
 const nf = (v: number) => fmt(clean(v), 6);
@@ -21,6 +22,11 @@ export function exportSVG(doc: Doc, opt: SvgOptions = {}): string {
     for (const e of ents) {
       const st = `stroke="${COLORS[e.color]?.hex || '#000000'}" stroke-width="${nf(e.w)}"`;
       if (e.type === 'line') out.push(`<line x1="${nf(e.a.x)}" y1="${Y(e.a.y)}" x2="${nf(e.b.x)}" y2="${Y(e.b.y)}" ${st}/>`);
+      else if (e.type === 'poly' && hasBulge(e)) {
+        let d = `M ${nf(e.pts[0].x)} ${Y(e.pts[0].y)}`;
+        for (const s of segsOf(e)) d += s.kind === 'seg' ? ` L ${nf(s.b.x)} ${Y(s.b.y)}` : ` A ${nf(s.r)} ${nf(s.r)} 0 ${Math.abs(s.sweep) > Math.PI ? 1 : 0} ${s.sweep > 0 ? 0 : 1} ${nf(s.b.x)} ${Y(s.b.y)}`;
+        out.push(`<path d="${d}${e.closed ? ' Z' : ''}" ${st}/>`);
+      }
       else if (e.type === 'poly') out.push(`<${e.closed ? 'polygon' : 'polyline'} points="${e.pts.map(p => nf(p.x) + ',' + Y(p.y)).join(' ')}" ${st}/>`);
       else if (e.type === 'circle') out.push(`<circle cx="${nf(e.c.x)}" cy="${Y(e.c.y)}" r="${nf(e.r)}" ${st}/>`);
       else if (e.type === 'ellipse') out.push(`<ellipse cx="${nf(e.c.x)}" cy="${Y(e.c.y)}" rx="${nf(e.rx)}" ry="${nf(e.ry)}"${Math.abs(e.rot) > 1e-12 ? ` transform="rotate(${nf(-e.rot / DEG)} ${nf(e.c.x)} ${Y(e.c.y)})"` : ''} ${st}/>`);
@@ -67,16 +73,32 @@ export function importSVG(text: string): (Shape & { layer: string })[] {
     else if (tag === 'rect') { const x = n('x') || 0, y = n('y') || 0, w = n('width'), h = n('height'); ents.push({ ...base, type: 'poly', closed: true, pts: [Wp(x, y + h), Wp(x + w, y + h), Wp(x + w, y), Wp(x, y)] }); }
     else if (tag === 'polyline' || tag === 'polygon') { const v = (el.getAttribute('points') || '').trim().split(/[\s,]+/).map(Number), pts: Point[] = []; for (let i = 0; i + 1 < v.length; i += 2) pts.push(Wp(v[i], v[i + 1])); ents.push({ ...base, type: 'poly', closed: tag === 'polygon', pts }); }
     else if (tag === 'path') {
-      const tk = (el.getAttribute('d') || '').match(/[MLAZmlaz]|-?[\d.]+(?:e-?\d+)?/g) || []; let i = 0, cur: Point | null = null, start: Point | null = null, cmd = '';
+      // each subpath becomes one path (keeping true arcs as bulges); a lone segment becomes a line or arc
+      const tk = (el.getAttribute('d') || '').match(/[MLAZmlaz]|-?[\d.]+(?:e-?\d+)?/g) || []; let i = 0, cmd = '';
+      let pts: Point[] = [], bul: number[] = [], arcs: any[] = [], closed = false;
       const num = () => parseFloat(tk[i++]);
+      const flush = () => {
+        if (pts.length >= 2) {
+          if (closed && dist(pts[0], pts[pts.length - 1]) < 1e-9) { pts.pop(); }
+          if (!closed && pts.length === 2) ents.push(Math.abs(bul[0]) < 1e-12 ? { ...base, type: 'line', a: pts[0], b: pts[1] } : { ...base, ...arcs[0] });
+          else { const s: any = { ...base, type: 'poly', closed, pts }; if (bul.some(b => Math.abs(b) > 1e-12)) s.bulge = closed ? bul.slice(0, pts.length) : bul; ents.push(s); }
+        }
+        pts = []; bul = []; arcs = []; closed = false;
+      };
       while (i < tk.length) {
         if (/[A-Za-z]/.test(tk[i])) cmd = tk[i++];
-        if (cmd === 'M') { cur = Wp(num(), num()); start = cur; cmd = 'L'; }
-        else if (cmd === 'L') { const p = Wp(num(), num()); ents.push({ ...base, type: 'line', a: cur, b: p }); cur = p; }
-        else if (cmd === 'A') { const rx = num(); num(); num(); const lg = num(), sw = num(), p = Wp(num(), num()); const ar = svgArcCenter(cur!, p, rx * unit, lg, sw); ents.push({ ...base, type: 'arc', c: ar.c, r: clean(rx * unit), a0: ar.a0, a1: ar.a1 }); cur = p; }
-        else if (cmd === 'Z' || cmd === 'z') { if (start && cur && dist(cur, start) > 1e-9) ents.push({ ...base, type: 'line', a: cur, b: start }); cur = start; }
+        if (cmd === 'M') { flush(); pts.push(Wp(num(), num())); cmd = 'L'; }
+        else if (cmd === 'L') { pts.push(Wp(num(), num())); bul.push(0); arcs.push(null); }
+        else if (cmd === 'A') {
+          const rx = num(); num(); num(); const lg = num(), sw = num(), p = Wp(num(), num()), cur = pts[pts.length - 1];
+          const ar = svgArcCenter(cur, p, rx * unit, lg, sw);
+          const sweep = sw ? -normA(angOf(ar.c, cur) - angOf(ar.c, p)) : normA(angOf(ar.c, p) - angOf(ar.c, cur));
+          pts.push(p); bul.push(Math.tan(sweep / 4)); arcs.push({ type: 'arc', c: ar.c, r: clean(rx * unit), a0: ar.a0, a1: ar.a1 });
+        }
+        else if (cmd === 'Z' || cmd === 'z') { if (pts.length && dist(pts[pts.length - 1], pts[0]) > 1e-9) { bul.push(0); } closed = true; flush(); }
         else i++;
       }
+      flush();
     }
   }
   return ents;

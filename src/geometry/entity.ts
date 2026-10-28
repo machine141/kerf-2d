@@ -5,6 +5,7 @@
  */
 import { type Point, P, add, sub, mul, dot, dist, normA, angOf, polar, angIn, TAU, EPS } from './vec';
 import type { Entity, Shape, EllipseEnt } from '../model/types';
+import { flattenPath, hasBulge, segsOf, segPrim, segPoint } from './path';
 
 /** Chord tolerance used when curves must become polylines (mm). */
 export const geomSettings = { flatTol: 0.0005 };
@@ -28,7 +29,11 @@ const flatCache = new WeakMap<object, { key: string; v: { pts: Point[]; closed: 
 /** Flatten any shape to a point list (curves → chords within tolerance). */
 export function flatten(e: Shape, tol = geomSettings.flatTol): { pts: Point[]; closed: boolean } {
   if (e.type === 'line') return { pts: [e.a, e.b], closed: false };
-  if (e.type === 'poly') return { pts: e.pts, closed: !!e.closed };
+  if (e.type === 'poly') {
+    if (!hasBulge(e)) return { pts: e.pts, closed: !!e.closed };
+    const k2 = JSON.stringify([e.pts, e.bulge, e.closed, tol]), h2 = flatCache.get(e); if (h2 && h2.key === k2) return h2.v;
+    const v2 = { pts: flattenPath(e, tol), closed: !!e.closed }; flatCache.set(e, { key: k2, v: v2 }); return v2;
+  }
   const key = JSON.stringify([e.type, (e as any).c, (e as any).r, (e as any).rx, (e as any).ry, (e as any).rot, (e as any).a0, (e as any).a1, tol]);
   const hit = flatCache.get(e); if (hit && hit.key === key) return hit.v;
   let v: { pts: Point[]; closed: boolean };
@@ -43,7 +48,9 @@ export function flatten(e: Shape, tol = geomSettings.flatTol): { pts: Point[]; c
 export function prims(e: Shape): Prim[] {
   switch (e.type) {
     case 'line': return [{ t: 'seg', a: e.a, b: e.b }];
-    case 'poly': case 'ellipse': {
+    case 'poly': if (hasBulge(e)) return segsOf(e).map(segPrim) as Prim[];
+    // falls through
+    case 'ellipse': {
       const f = flatten(e), r: Prim[] = [], n = f.pts.length;
       for (let i = 0; i < n - 1; i++) r.push({ t: 'seg', a: f.pts[i], b: f.pts[i + 1] });
       if (f.closed && n > 2) r.push({ t: 'seg', a: f.pts[n - 1], b: f.pts[0] });
@@ -96,7 +103,7 @@ export function keypoints(e: Shape): { p: Point; k: SnapKind }[] {
   const k: { p: Point; k: SnapKind }[] = [];
   if (e.type === 'line') k.push({ p: e.a, k: 'end' }, { p: e.b, k: 'end' }, { p: mul(add(e.a, e.b), .5), k: 'mid' });
   else if (e.type === 'poly') {
-    if (e.pts.length <= 64) { e.pts.forEach(p => k.push({ p, k: 'end' })); prims(e).forEach(s => s.t === 'seg' && k.push({ p: mul(add(s.a, s.b), .5), k: 'mid' })); }
+    if (e.pts.length <= 64) { e.pts.forEach(p => k.push({ p, k: 'end' })); for (const s of segsOf(e)) { k.push({ p: segPoint(s, .5), k: 'mid' }); if (s.kind === 'arc') k.push({ p: s.c, k: 'centre' }); } }
     else if (!e.closed) k.push({ p: e.pts[0], k: 'end' }, { p: e.pts[e.pts.length - 1], k: 'end' });
   }
   else if (e.type === 'circle') { k.push({ p: e.c, k: 'centre' }); for (let i = 0; i < 4; i++) k.push({ p: polar(e.c, e.r, i * Math.PI / 2), k: 'quad' }); }
@@ -114,7 +121,7 @@ export function bbox(e: Shape, dimLines?: (e: Shape) => { lines: [Point, Point][
   if (e.type === 'ellipse') { const c = Math.cos(e.rot), s = Math.sin(e.rot), hx = Math.hypot(e.rx * c, e.ry * s), hy = Math.hypot(e.rx * s, e.ry * c); return { x0: e.c.x - hx, y0: e.c.y - hy, x1: e.c.x + hx, y1: e.c.y + hy }; }
   let pts: Point[] = [];
   if (e.type === 'line') pts = [e.a, e.b];
-  else if (e.type === 'poly') pts = e.pts;
+  else if (e.type === 'poly') pts = hasBulge(e) ? flatten(e, 0.001).pts : e.pts;
   else if (e.type === 'arc') { pts = [polar(e.c, e.r, e.a0), polar(e.c, e.r, e.a1)]; for (let i = 0; i < 4; i++) { const a = i * Math.PI / 2; if (angIn(a, e.a0, e.a1)) pts.push(polar(e.c, e.r, a)); } }
   else if (e.type === 'dim') { if (dimLines) { const g = dimLines(e); g.lines.forEach(l => pts.push(l[0], l[1])); pts.push(g.text.p); } else pts = [e.p1, e.p2, e.off]; }
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
@@ -141,6 +148,7 @@ export function lengthOf(e: Shape): number {
   if (e.type === 'circle') return TAU * e.r;
   if (e.type === 'arc') return e.r * (normA(e.a1 - e.a0) || TAU);
   if (e.type === 'dim') return 0;
+  if (e.type === 'poly') return segsOf(e).reduce((s, g) => s + g.len, 0);
   return prims(e).reduce((s, p) => s + (p.t === 'seg' ? dist(p.a, p.b) : 0), 0);
 }
 

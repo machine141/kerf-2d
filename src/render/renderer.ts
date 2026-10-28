@@ -3,6 +3,7 @@ import { type Point, P, TAU } from '../geometry/vec';
 import type { Editor } from '../editor/editor';
 import type { Overlay, GhostStyle } from '../editor/tool';
 import { COLORS, type Entity, type Shape } from '../model/types';
+import { hasBulge, segsOf } from '../geometry/path';
 
 const TOKENS = ['--desk', '--sheet', '--grid', '--grid-major', '--ink', '--sel', '--snap', '--muted', '--accent', '--shadow', '--node-start', '--node-end', '--node', '--source', ...Object.values(COLORS).map(c => c.tok)];
 const SNAP_NAMES: Record<string, string> = { end: 'Endpoint', mid: 'Midpoint', centre: 'Centre', quad: 'Quadrant', inter: 'Intersection', nearest: 'Nearest', perp: 'Perpendicular', tangent: 'Tangent' };
@@ -32,6 +33,14 @@ export class Renderer {
   private path(e: Shape) {
     const ctx = this.ctx, ed = this.ed, k = ed.view.k; ctx.beginPath();
     if (e.type === 'line') { const A = ed.w2s(e.a), B = ed.w2s(e.b); ctx.moveTo(A.x, A.y); ctx.lineTo(B.x, B.y); }
+    else if (e.type === 'poly' && hasBulge(e)) {
+      const s0 = ed.w2s(e.pts[0]); ctx.moveTo(s0.x, s0.y);
+      for (const s of segsOf(e)) {
+        if (s.kind === 'seg') { const b = ed.w2s(s.b); ctx.lineTo(b.x, b.y); }
+        else { const c = ed.w2s(s.c); ctx.arc(c.x, c.y, s.r * k, -s.start, -(s.start + s.sweep), s.sweep > 0); }
+      }
+      if (e.closed) ctx.closePath();
+    }
     else if (e.type === 'poly') { e.pts.forEach((p, i) => { const s = ed.w2s(p); i ? ctx.lineTo(s.x, s.y) : ctx.moveTo(s.x, s.y); }); if (e.closed) ctx.closePath(); }
     else if (e.type === 'circle') { const c = ed.w2s(e.c); ctx.arc(c.x, c.y, e.r * k, 0, TAU); }
     else if (e.type === 'ellipse') { const c = ed.w2s(e.c); ctx.ellipse(c.x, c.y, e.rx * k, e.ry * k, -e.rot, 0, TAU); }

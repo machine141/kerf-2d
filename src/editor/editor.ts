@@ -6,6 +6,8 @@ import { type Point, P, add, sub, angOf, len, DEG, cp, normA } from '../geometry
 import { prims, bbox as shapeBox, unionBox, boxCentre, type Box, type Prim } from '../geometry/entity';
 import { affEnt, affMove, affScale, type Affine } from '../geometry/affine';
 import { dimGeom } from '../geometry/dims';
+import { joinPieces, arcBulge, type Piece } from '../geometry/path';
+import { explodePath, pieceToShape } from '../geometry/trim';
 import { snapPoint, type SnapResult } from '../snap/snap';
 import { DocStore } from '../model/document';
 import type { Entity, Shape } from '../model/types';
@@ -141,10 +143,14 @@ export class Editor {
   // ---- operations on the selection ----
   /** copies=0 transforms in place; 1 adds a transformed copy. Returns ids made. */
   transformSel(A: Affine, copies = 0, keepSel = false): string[] {
-    const made: string[] = [];
+    const made: string[] = [], groupMap = new Map<string, string>();
     for (const e of this.selected()) {
       const n = affEnt(e as Shape, A);
-      if (copies) { const { id, ...rest } = n as any; made.push(this.store.add(rest as Shape, { layer: e.layer, color: e.color, w: e.w }).id); }
+      if (copies) {
+        const { id, ...rest } = n as any;
+        if (rest.group) rest.group = rest.group.map((g: string) => groupMap.get(g) || (groupMap.set(g, 'g' + (this.doc.seq++)), groupMap.get(g)));
+        made.push(this.store.add(rest as Shape, { layer: e.layer, color: e.color, w: e.w }).id);
+      }
       else this.store.replace(e.id, n);
     }
     if (copies && !keepSel) this.sel = new Set(made);
@@ -153,10 +159,55 @@ export class Editor {
   deleteSel() { if (!this.sel.size) return; this.store.change(() => this.store.remove(this.sel)); this.sel.clear(); this.changed('sel'); }
   flipSel(axis: 'h' | 'v') { const b = this.selBox(); if (!b) return; const c = boxCentre(b); this.store.change(() => this.transformSel(axis === 'h' ? affScale(c, -1, 1) : affScale(c, 1, -1))); }
   moveSel(d: Point, copy = false) { this.store.change(() => this.transformSel(affMove(d), copy ? 1 : 0)); }
+  /** Explode: ungroups one level if the selection is grouped, otherwise breaks paths into lines and arcs. */
   explodeSel() {
+    const sel = this.selected(); if (!sel.length) return;
+    if (sel.some(e => e.group?.length)) { this.ungroupSel(); return; }
     const out: string[] = [];
-    this.store.change(() => { for (const e of this.selected()) if (e.type === 'poly') out.push(...this.store.splice(e.id, prims(e).map(s => ({ type: 'line', a: (s as any).a, b: (s as any).b }) as Shape)).map(x => x.id)); else out.push(e.id); });
-    this.setSelection(out);
+    this.store.change(() => { for (const e of sel) if (e.type === 'poly') out.push(...this.store.splice(e.id, explodePath(e)).map(x => x.id)); else out.push(e.id); });
+    this.sel = new Set(out); this.changed('sel');
+  }
+  /** Outermost group id of an entity. */
+  groupRoot(e: Entity) { return e.group?.length ? e.group[e.group.length - 1] : null; }
+  /** Expand ids so that whole outer groups are included. */
+  withGroups(ids: Iterable<string>): Set<string> {
+    const out = new Set(ids), roots = new Set<string>();
+    for (const id of out) { const e = this.store.byId(id); const r = e && this.groupRoot(e); if (r) roots.add(r); }
+    if (roots.size) for (const e of this.doc.ents) { const r = this.groupRoot(e); if (r && roots.has(r)) out.add(e.id); }
+    return out;
+  }
+  groupSel() {
+    const sel = this.selected(); if (sel.length < 2) { this.toast('Select two or more objects to group'); return; }
+    const g = 'g' + (this.doc.seq++);
+    this.store.change(() => { for (const e of sel) e.group = [...(e.group || []), g]; });
+    this.toast(`Grouped ${sel.length} objects`);
+  }
+  ungroupSel() {
+    const sel = this.selected().filter(e => e.group?.length); if (!sel.length) { this.toast('Nothing grouped in the selection'); return; }
+    this.store.change(() => { for (const e of sel) { e.group = e.group!.slice(0, -1); if (!e.group.length) delete e.group; } });
+    this.toast('Ungrouped one level');
+  }
+  /** Make Path: join selected lines, arcs and open paths that touch end-to-end into single paths (true arcs kept). */
+  makePathSel() {
+    const sel = this.selected().filter(e => e.type === 'line' || e.type === 'arc' || (e.type === 'poly' && !e.closed));
+    if (sel.length < 2) { this.toast('Select two or more lines, arcs or open paths that touch end to end'); return; }
+    const pieces: Piece[] = sel.map(e => e.type === 'line' ? { pts: [e.a, e.b], bulge: [0] }
+      : e.type === 'arc' ? { pts: [P(e.c.x + e.r * Math.cos(e.a0), e.c.y + e.r * Math.sin(e.a0)), P(e.c.x + e.r * Math.cos(e.a1), e.c.y + e.r * Math.sin(e.a1))], bulge: [arcBulge(e.a0, e.a1)] }
+      : { pts: (e as any).pts.slice(), bulge: (e as any).bulge?.slice(0, (e as any).pts.length - 1) || (e as any).pts.slice(1).map(() => 0) });
+    const joined = joinPieces(pieces), first = sel[0], made: string[] = [];
+    this.store.change(() => {
+      const idx = this.doc.ents.indexOf(first);
+      this.store.remove(sel.map(e => e.id));
+      for (const j of joined) {
+        const s = pieceToShape(j.pts.map(p => ({ x: p.x, y: p.y })), j.closed ? j.bulge : j.bulge.slice(0, j.pts.length - 1), j.closed);
+        const ent = this.store.add(s, { layer: first.layer, color: first.color, w: first.w });
+        this.doc.ents.splice(this.doc.ents.indexOf(ent), 1); this.doc.ents.splice(Math.min(idx + made.length, this.doc.ents.length), 0, ent);
+        made.push(ent.id);
+      }
+    });
+    this.sel = new Set(made); this.changed('sel');
+    const closed = joined.filter(j => j.closed).length;
+    this.toast(`Made ${joined.length} path${joined.length > 1 ? 's' : ''}${closed ? ` (${closed} closed)` : ''} from ${sel.length} pieces`);
   }
   selectAll() { this.setSelection(this.doc.ents.filter(this.store.usable).map(e => e.id)); }
 

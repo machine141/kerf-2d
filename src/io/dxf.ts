@@ -7,6 +7,7 @@
 import { type Point, P, add, sub, mul, len, dist, normA, angOf, clean, cp, fmt, DEG } from '../geometry/vec';
 import { flatten } from '../geometry/entity';
 import { dimGeom } from '../geometry/dims';
+import { hasBulge, flattenPath } from '../geometry/path';
 import { COLORS, type Doc, type Shape } from '../model/types';
 
 const nf = (v: number) => fmt(clean(v), 6);
@@ -31,13 +32,13 @@ export function exportDXF(doc: Doc, opt: DxfOptions = {}): string {
     if (!include.has(e.layer)) continue;
     const head = (t: string) => { g(0, t); g(8, layerName(e.layer)); g(62, COLORS[e.color]?.aci ?? 7); };
     const line = (a: Point, b: Point) => { head('LINE'); g(10, nf(a.x)); g(20, nf(a.y)); g(30, 0); g(11, nf(b.x)); g(21, nf(b.y)); g(31, 0); };
-    const poly = (pts: Point[], closed: boolean) => {
+    const poly = (pts: Point[], closed: boolean, bulge?: number[]) => {
       head('POLYLINE'); g(66, 1); g(10, 0); g(20, 0); g(30, 0); g(70, closed ? 1 : 0);
-      for (const p of pts) { g(0, 'VERTEX'); g(8, layerName(e.layer)); g(10, nf(p.x)); g(20, nf(p.y)); g(30, 0); }
+      pts.forEach((p, i) => { g(0, 'VERTEX'); g(8, layerName(e.layer)); g(10, nf(p.x)); g(20, nf(p.y)); g(30, 0); const b = bulge?.[i] ?? 0; if (Math.abs(b) > 1e-12) g(42, fmt(b, 12)); });
       g(0, 'SEQEND'); g(8, layerName(e.layer));
     };
     if (e.type === 'line') line(e.a, e.b);
-    else if (e.type === 'poly') poly(e.pts, e.closed);
+    else if (e.type === 'poly') { if (hasBulge(e) && opt.splitArcs) poly(flattenPath(e, tol), e.closed); else poly(e.pts, e.closed, e.bulge); }
     else if (e.type === 'ellipse') poly(flatten(e, tol).pts, true);
     else if (e.type === 'circle') { if (opt.splitArcs) poly(flatten(e, tol).pts, true); else { head('CIRCLE'); g(10, nf(e.c.x)); g(20, nf(e.c.y)); g(30, 0); g(40, nf(e.r)); } }
     else if (e.type === 'arc') { if (opt.splitArcs) poly(flatten(e, tol).pts, false); else { head('ARC'); g(10, nf(e.c.x)); g(20, nf(e.c.y)); g(30, 0); g(40, nf(e.r)); g(50, nf(normA(e.a0) / DEG)); g(51, nf(normA(e.a1) / DEG)); } }
@@ -83,14 +84,12 @@ export function importDXF(text: string): (Shape & { layer: string; aci?: number 
       const vs: { x: number; y: number; bulge: number }[] = []; let cur: any = null;
       for (const [c, v] of d.g) { if (c === 10) { cur = { x: sc(v), y: 0, bulge: 0 }; vs.push(cur); } else if (c === 20 && cur) cur.y = sc(v); else if (c === 42 && cur) cur.bulge = +v; }
       const closed = (+(get(d, 70) ?? 0) & 1) === 1;
-      if (vs.some(v => Math.abs(v.bulge) > 1e-12)) bulgeSegs(vs, closed, layer).forEach(x => ents.push({ ...x, aci }));
-      else ents.push({ type: 'poly', closed, pts: vs.map(v => P(v.x, v.y)), layer, aci });
+      const pl: any = { type: 'poly', closed, pts: vs.map(v => P(v.x, v.y)), layer, aci }; if (vs.some(v => Math.abs(v.bulge) > 1e-12)) pl.bulge = vs.map(v => v.bulge).slice(0, closed ? vs.length : vs.length - 1); ents.push(pl);
     } else if (t === 'POLYLINE') {
       const closed = (+(get(d, 70) ?? 0) & 1) === 1, vs: { x: number; y: number; bulge: number }[] = [];
       while (i < pairs.length && pairs[i][1] === 'VERTEX') { const v = read(); vs.push({ x: sc(get(v, 10)), y: sc(get(v, 20)), bulge: +(get(v, 42) || 0) }); }
       if (pairs[i]?.[1] === 'SEQEND') read();
-      if (vs.some(v => Math.abs(v.bulge) > 1e-12)) bulgeSegs(vs, closed, layer).forEach(x => ents.push({ ...x, aci }));
-      else ents.push({ type: 'poly', closed, pts: vs.map(v => P(v.x, v.y)), layer, aci });
+      const pl: any = { type: 'poly', closed, pts: vs.map(v => P(v.x, v.y)), layer, aci }; if (vs.some(v => Math.abs(v.bulge) > 1e-12)) pl.bulge = vs.map(v => v.bulge).slice(0, closed ? vs.length : vs.length - 1); ents.push(pl);
     }
   }
   return ents;

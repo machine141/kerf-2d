@@ -3,9 +3,11 @@ import type { Point } from '../geometry/vec';
 /** Colour keys double as laser conventions (red = cut, blue = engrave). */
 export type ColorKey = 'ink' | 'red' | 'blue' | 'green' | 'magenta' | 'orange';
 
-export interface EntBase { id: string; layer: string; color: ColorKey; w: number }
+/** group: stack of group ids, outermost last (selecting one member selects the whole outer group). */
+export interface EntBase { id: string; layer: string; color: ColorKey; w: number; group?: string[] }
 export interface LineEnt extends EntBase { type: 'line'; a: Point; b: Point }
-export interface PolyEnt extends EntBase { type: 'poly'; pts: Point[]; closed: boolean }
+/** bulge[i] (optional) makes segment i a true arc: tan(sweep/4), + anticlockwise, − clockwise. */
+export interface PolyEnt extends EntBase { type: 'poly'; pts: Point[]; closed: boolean; bulge?: number[] }
 export interface CircleEnt extends EntBase { type: 'circle'; c: Point; r: number }
 export interface EllipseEnt extends EntBase { type: 'ellipse'; c: Point; rx: number; ry: number; rot: number }
 /** Arc runs anticlockwise from a0 to a1 (radians). */
@@ -21,6 +23,8 @@ export interface Layer { id: string; name: string; visible: boolean; active: boo
 
 export interface Aids {
   grid: { show: boolean; spacing: number };
+  /** alignment guides from recently touched snap points */
+  track: boolean;
   gridLock: boolean;
   stepLock: boolean;
   step: number;
@@ -55,14 +59,14 @@ export const COLORS: Record<ColorKey, { label: string; hex: string; aci: number;
 export const WIDTHS = [0.01, 0.1, 0.25, 0.35, 0.5, 0.75, 1];
 export const PAGES: Record<string, [number, number, string]> = {
   A4L: [297, 210, 'A4 landscape'], A4P: [210, 297, 'A4 portrait'], A3L: [420, 297, 'A3 landscape'], A3P: [297, 420, 'A3 portrait'],
-  BED: [600, 400, 'Laser bed 600 × 400'], CUSTOM: [0, 0, 'Custom'],
+  L300: [300, 200, 'Laser 300 × 200'], L400: [400, 300, 'Laser 400 × 300'], BED: [600, 400, 'Laser 600 × 400'], L700: [700, 500, 'Laser 700 × 500'], L900: [900, 600, 'Laser 900 × 600'], L1000: [1000, 600, 'Laser 1000 × 600'], CUSTOM: [0, 0, 'Custom'],
 };
 
 export function newDoc(): Doc {
   return {
     v: 3, name: 'Untitled', units: 'mm', page: { w: 297, h: 210, preset: 'A4L' },
     aids: {
-      grid: { show: true, spacing: 10 }, gridLock: false, stepLock: false, step: 1, radial: { on: false, start: 0, step: 45 },
+      grid: { show: true, spacing: 10 }, track: true, gridLock: false, stepLock: false, step: 1, radial: { on: false, start: 0, step: 45 },
       attach: { on: true, box: 12, end: true, mid: true, centre: true, quad: false, inter: true, nearest: false, perp: false, tangent: false },
     },
     dim: { dec: 2, textH: 3.5, arrow: 2.5 },

@@ -4,6 +4,7 @@
  */
 import { type Point, P, add, sub, mul, dot, dist, angOf, normA, polar, clean, cp, fmt, DEG, TAU } from '../geometry/vec';
 import { ellPt, prims, boxCentre, type Box } from '../geometry/entity';
+import { segsOf, segPoint } from '../geometry/path';
 import { affEnt, affMove, affRot, affScale, type Affine } from '../geometry/affine';
 import type { Tool, PointerInfo } from '../editor/tool';
 import type { Editor } from '../editor/editor';
@@ -49,7 +50,7 @@ export function nodeHandles(ed: Editor, e: Entity | Shape): NodeHandle[] {
   if (e.type === 'line') H.push({ k: 'v', i: 0, p: e.a, role: 'start' }, { k: 'v', i: 1, p: e.b, role: 'end' });
   else if (e.type === 'poly') {
     e.pts.forEach((p, i) => H.push({ k: 'v', i, p, role: i === 0 ? 'start' : (i === e.pts.length - 1 && !e.closed) ? 'end' : 'mid' }));
-    if (e.pts.length <= 400) prims(e).forEach((s, i) => s.t === 'seg' && H.push({ k: 'add', i, p: mul(add(s.a, s.b), .5) }));
+    if (e.pts.length <= 400) segsOf(e).forEach((s, i) => s.kind === 'seg' && H.push({ k: 'add', i, p: segPoint(s, .5) }));
   }
   else if (e.type === 'circle') H.push({ k: 'c', p: e.c }, { k: 'r', p: polar(e.c, e.r, 0) });
   else if (e.type === 'ellipse') H.push({ k: 'c', p: e.c }, { k: 'rx', p: ellPt(e, 0) }, { k: 'ry', p: ellPt(e, Math.PI / 2) });
@@ -85,7 +86,7 @@ export const selectTool: Tool = {
     if (S.node) {
       const e = ed.store.byId(S.node.id) as Entity | undefined, h = hitNode(ed, info.sp);
       if (h && e) {
-        if (h.k === 'add' && e.type === 'poly') { ed.store.checkpoint(); e.pts.splice(h.i! + 1, 0, cp(h.p)); S.ndrag = { h: { k: 'v', i: h.i! + 1, p: h.p }, id: e.id, preview: null, pushed: true }; S.node.sel = h.i! + 1; }
+        if (h.k === 'add' && e.type === 'poly') { ed.store.checkpoint(); e.pts.splice(h.i! + 1, 0, cp(h.p)); if (e.bulge) e.bulge.splice(h.i! + 1, 0, 0); S.ndrag = { h: { k: 'v', i: h.i! + 1, p: h.p }, id: e.id, preview: null, pushed: true }; S.node.sel = h.i! + 1; }
         else { S.ndrag = { h, id: e.id, preview: null }; if (h.k === 'v') S.node.sel = h.i; }
         return;
       }
@@ -104,8 +105,9 @@ export const selectTool: Tool = {
     const hit = ed.pick(raw)?.e;
     if (hit && ed.sel.has(hit.id) && !info.shift) { const s = ed.snapAt(raw, { exclude: ed.sel, drawing: true }); S.drag = { from: s.p, to: s.p, moved: false }; return; }
     if (hit) {
-      if (info.shift) { ed.sel.has(hit.id) ? ed.sel.delete(hit.id) : ed.sel.add(hit.id); ed.changed('sel'); }
-      else ed.setSelection([hit.id]);
+      const members = ed.withGroups([hit.id]);
+      if (info.shift) { const on = ed.sel.has(hit.id); for (const id of members) on ? ed.sel.delete(id) : ed.sel.add(id); ed.changed('sel'); }
+      else ed.setSelection(members);
       const s = ed.snapAt(raw, { exclude: ed.sel, drawing: true }); S.drag = { from: s.p, to: s.p, moved: false }; return;
     }
     if (!info.shift && ed.sel.size) ed.setSelection([]);
@@ -129,7 +131,7 @@ export const selectTool: Tool = {
         const inside = q.x0 >= x0 && q.x1 <= x1 && q.y0 >= y0 && q.y1 <= y1, over = q.x1 >= x0 && q.x0 <= x1 && q.y1 >= y0 && q.y0 <= y1;
         if (inside || (crossing && over)) ed.sel.add(e.id);
       }
-      S.box = null; ed.changed('sel'); return;
+      ed.sel = ed.withGroups(ed.sel); S.box = null; ed.changed('sel'); return;
     }
     if (S.drag) {
       const d = S.drag; S.drag = null;
@@ -144,7 +146,7 @@ export const selectTool: Tool = {
     if (key === 'Enter' && ed.sel.size === 1 && !S.node) { enterNodeEdit(ed, ed.selected()[0]); return true; }
     if ((key === 'Delete' || key === 'Backspace') && S.node && S.node.sel != null) {
       const e = ed.store.byId(S.node.id);
-      if (e && e.type === 'poly') { const min = e.closed ? 3 : 2; if (e.pts.length <= min) { ed.toast(`A path needs at least ${min} points`); return true; } ed.store.change(() => e.pts.splice(S.node.sel, 1)); S.node.sel = null; return true; }
+      if (e && e.type === 'poly') { const min = e.closed ? 3 : 2; if (e.pts.length <= min) { ed.toast(`A path needs at least ${min} points`); return true; } const i = S.node.sel; ed.store.change(() => { e.pts.splice(i, 1); if (e.bulge) { e.bulge.splice(i, 1); if (i > 0) e.bulge[i - 1] = 0; else if (e.closed) e.bulge[e.bulge.length - 1] = 0; } }); S.node.sel = null; return true; }
     }
     return false;
   },
