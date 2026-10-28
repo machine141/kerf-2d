@@ -159,6 +159,11 @@ table.res td:last-child{text-align:right;white-space:nowrap}
 #elements .head strong{margin-right:auto}
 #elements .sz input{width:60px}
 #elements .x{border:0;background:none;color:var(--fg);font-size:16px;cursor:pointer}
+#elements .etabs{display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:8px 14px 0}
+#elements .etabs button{border:1px solid var(--line);background:var(--sheet);color:var(--fg);border-radius:14px;padding:4px 11px;font:inherit;font-size:12px;cursor:pointer}
+#elements .etabs button[aria-selected=true]{background:var(--accent);border-color:var(--accent);color:#fff}
+#elements .etabs input{margin-left:auto;width:130px;padding:4px 8px;border:1px solid var(--line);border-radius:6px;background:var(--sheet);color:var(--fg);font:inherit;font-size:12px}
+#elements .card[hidden]{display:none}
 #elements .grid{overflow:auto;padding:12px;display:grid;grid-template-columns:repeat(auto-fill,minmax(104px,1fr));gap:8px}
 #elements .card{display:flex;flex-direction:column;align-items:center;gap:4px;padding:8px 6px;border:1px solid var(--line);border-radius:8px;background:var(--sheet);color:var(--fg);cursor:pointer;font-size:12px}
 #elements .card:hover{border-color:var(--accent);box-shadow:0 0 0 2px color-mix(in srgb,var(--accent) 25%,transparent)}
@@ -208,7 +213,7 @@ body.dropping #main{outline:3px dashed var(--accent);outline-offset:-6px}
 </head>
 <body>
 <header>
-  <div class="brand"><b>Kerf 2D</b><span>precision drafting · v0.8.1</span></div>
+  <div class="brand"><b>Kerf 2D</b><span>precision drafting · v0.8.2</span></div>
   <input id="docName" aria-label="Drawing name" value="Glasses front">
   <div class="actions">
     <button class="btn" id="bNew">New</button>

@@ -88,21 +88,33 @@ export function pointTool(def: PointToolDef): Tool {
     needsSelection: def.needsSelection, options: def.options,
     prompt: ed => {
       const pr = typeof def.prompts === 'function' ? def.prompts(ed) : def.prompts, base = pr[Math.min(ed.pts.length, pr.length - 1)];
-      if (ed.state.frozen) return 'Frozen — change the options above, then click or press Enter to place · right-click to unfreeze';
+      if (ed.state.frozen) return 'Frozen 🔒 — drag it to move it, change the options above, then click (or Enter) to place · right-click to unfreeze';
       return base + (typeof def.need === 'number' && ed.pts.length ? ' · right-click freezes the preview so you can change options' : '');
     },
     /** Right-click while placing a shape freezes the preview where it is (options can then be changed); again unfreezes. */
     rightClick(ed) {
       if (typeof def.need !== 'number' || !ed.pts.length) return false;
-      ed.state.frozen = ed.state.frozen ? null : ed.cursorPoint(); ed.changed('prompt'); return true;
+      ed.state.fmove = null; ed.state.frozen = ed.state.frozen ? null : ed.cursorPoint(); ed.changed('prompt'); return true;
     },
     down(ed, raw, info) {
-      if (ed.state.frozen) { const f = ed.state.frozen; ed.state.frozen = null; ed.locate(f); return; }
+      // frozen: press-and-drag moves the whole preview; a plain click places it
+      if (ed.state.frozen) { ed.state.fmove = { grab: raw, sp: info.sp, pts0: ed.pts.slice(), f0: ed.state.frozen, moved: false }; return; }
       const s = ed.snapAt(raw); ed.snapRes = s; const before = ed.pts.length;
       ed.locate(s.p);
       if (def.drag && before === 0 && ed.pts.length === 1) ed.state.dragStart = info.sp;
     },
+    move(ed, raw, info) {
+      const m = ed.state.fmove; if (!m) return;
+      if (!m.moved && Math.hypot(info.sp.x - m.sp.x, info.sp.y - m.sp.y) <= 4) return;
+      m.moved = true;
+      // the shape's first point follows the pointer and snaps (grid, ends, centres…) so it can be dropped exactly
+      const a0 = m.pts0[0], s = ed.snapAt({ x: a0.x + raw.x - m.grab.x, y: a0.y + raw.y - m.grab.y }, { drawing: false });
+      const dx = s.p.x - a0.x, dy = s.p.y - a0.y, sh = (q: Point) => ({ x: q.x + dx, y: q.y + dy });
+      ed.pts = m.pts0.map(sh); ed.rel = ed.pts[ed.pts.length - 1]; ed.state.frozen = sh(m.f0); ed.snapRes = { ...s, p: s.p };
+    },
     up(ed, raw, info) {
+      const m = ed.state.fmove;
+      if (m) { ed.state.fmove = null; if (!m.moved) { const f = ed.state.frozen; ed.state.frozen = null; ed.locate(f); } else ed.changed('prompt'); return; }
       const ds = ed.state.dragStart; ed.state.dragStart = null;
       if (ds && ed.pts.length === 1 && Math.hypot(info.sp.x - ds.x, info.sp.y - ds.y) > 6) { const s = ed.snapAt(raw); ed.locate(s.p); }
     },
@@ -123,6 +135,7 @@ export function pointTool(def: PointToolDef): Tool {
       else if (ed.pts.length) { ed.pts = []; ed.changed('prompt'); }
     },
     cancel(ed) {
+      if (ed.state.fmove) { const m = ed.state.fmove; ed.pts = m.pts0; ed.state.frozen = m.f0; ed.state.fmove = null; ed.changed('prompt'); return true; }
       if (ed.state.frozen) { ed.state.frozen = null; ed.changed('prompt'); return true; }
       if (!ed.pts.length) return false;
       if (def.need === 'open' && ed.pts.length >= (def.minPoints ?? 2)) { t.finish!(ed); return true; }
