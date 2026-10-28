@@ -10,6 +10,8 @@ import { flattenSpline } from './spline';
 
 /** Chord tolerance used when curves must become polylines (mm). */
 export const geomSettings = { flatTol: 0.0005 };
+/** Hooks filled in by other modules (keeps this file free of their imports): text → its letter outlines. */
+export const ext: { textShapes: (e: any) => Shape[] } = { textShapes: () => [] };
 
 export type Prim =
   | { t: 'seg'; a: Point; b: Point }
@@ -29,6 +31,7 @@ export function nSeg(r: number, span: number, tol = geomSettings.flatTol) {
 const flatCache = new WeakMap<object, { key: string; v: { pts: Point[]; closed: boolean } }>();
 /** Flatten any shape to a point list (curves → chords within tolerance). */
 export function flatten(e: Shape, tol = geomSettings.flatTol): { pts: Point[]; closed: boolean } {
+  if (e.type === 'text') return { pts: [], closed: false };
   if (e.type === 'line') return { pts: [e.a, e.b], closed: false };
   if (e.type === 'poly') {
     if (!hasBulge(e)) return { pts: e.pts, closed: !!e.closed };
@@ -64,6 +67,7 @@ export function prims(e: Shape): Prim[] {
     }
     case 'circle': return [{ t: 'arc', c: e.c, r: e.r, full: true }];
     case 'arc': return [{ t: 'arc', c: e.c, r: e.r, a0: e.a0, a1: e.a1 }];
+    case 'text': return ext.textShapes(e).flatMap(prims);
     default: return [];
   }
 }
@@ -124,6 +128,7 @@ export function keypoints(e: Shape): { p: Point; k: SnapKind }[] {
 
 export interface Box { x0: number; y0: number; x1: number; y1: number }
 export function bbox(e: Shape, dimLines?: (e: Shape) => { lines: [Point, Point][]; text: { p: Point } }): Box {
+  if (e.type === 'text') { const b = unionBox(ext.textShapes(e).map(s => bbox(s))); return b || { x0: e.at.x, y0: e.at.y, x1: e.at.x, y1: e.at.y }; }
   if (e.type === 'circle') return { x0: e.c.x - e.r, y0: e.c.y - e.r, x1: e.c.x + e.r, y1: e.c.y + e.r };
   if (e.type === 'ellipse') { const c = Math.cos(e.rot), s = Math.sin(e.rot), hx = Math.hypot(e.rx * c, e.ry * s), hy = Math.hypot(e.rx * s, e.ry * c); return { x0: e.c.x - hx, y0: e.c.y - hy, x1: e.c.x + hx, y1: e.c.y + hy }; }
   let pts: Point[] = [];
@@ -162,6 +167,7 @@ export function lengthOf(e: Shape): number {
   if (e.type === 'circle') return TAU * e.r;
   if (e.type === 'arc') return e.r * (normA(e.a1 - e.a0) || TAU);
   if (e.type === 'dim') return 0;
+  if (e.type === 'text') return ext.textShapes(e).reduce((a, s) => a + lengthOf(s), 0);
   if (e.type === 'poly') return segsOf(e).reduce((s, g) => s + g.len, 0);
   return prims(e).reduce((s, p) => s + (p.t === 'seg' ? dist(p.a, p.b) : 0), 0);
 }

@@ -1,3 +1,4 @@
+import { expandText } from '../text/text';
 /**
  * DXF export (AutoCAD R12 ASCII, millimetres) and import.
  * Options follow 2D Design's DXF Export dialog: split arcs into lines (avoids
@@ -28,7 +29,7 @@ export function exportDXF(doc: Doc, opt: DxfOptions = {}): string {
   for (const L of layers) { g(0, 'LAYER'); g(2, layerName(L.id)); g(70, 0); g(62, L.visible ? 7 : -7); g(6, 'CONTINUOUS'); }
   g(0, 'ENDTAB'); g(0, 'ENDSEC');
   g(0, 'SECTION'); g(2, 'ENTITIES');
-  for (const e of doc.ents) {
+  for (const e of expandText(doc.ents)) {
     if (!include.has(e.layer) || (opt.skipDims && e.type === 'dim')) continue;
     const head = (t: string) => { g(0, t); g(8, layerName(e.layer)); g(62, COLORS[e.color]?.aci ?? 7); };
     const line = (a: Point, b: Point) => { head('LINE'); g(10, nf(a.x)); g(20, nf(a.y)); g(30, 0); g(11, nf(b.x)); g(21, nf(b.y)); g(31, 0); };

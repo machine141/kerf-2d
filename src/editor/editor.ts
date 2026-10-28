@@ -20,6 +20,7 @@ export type ChangeKind = 'doc' | 'sel' | 'tool' | 'prompt' | 'view' | 'aids' | '
 export const DEFAULT_OPTS: Record<string, any> = {
   rectFrom: 'corner', circFrom: 'centre', arcMode: '3pt', filletMode: 'fillet', filletR: 5, filletFollow: false, fixedR: '', dimMode: 'a', rotAngle: 60, rotCopies: 5, moveCopy: false, mirKeep: false, polySides: 6, polyMeasure: 'corner', polyStar: false, polyInner: 50, splineClosed: false, spFrom: 'centre', spKind: 'even', spTurns: 4, spInner: 0, spDir: 'ccw', mirStep: 15, arrType: 'grid', arrCols: 4, arrRows: 1, arrDx: 20, arrDy: 20, arrFollow: true, arrCount: 6, arrAngle: 360, arrRotate: true, gridScale: 0, gridSym: '1', gridClose: true, gridFill: true, circScale: 0, circSym: '1', circClose: true, circFill: true,
   offMode: 'shape', offSide: 'auto', offD: 5, offRound: '1', offCount: 1, offFollow: false, trimMode: 'whole', joinTol: 0.05, pickPx: 14, eraseR: 15, eraseSmall: true, eraseMax: 5, ringD: 10, ringHole: 5, ringOverlap: 2, lockAspect: false,
+  txtFont: 'fredoka', txtSize: 10, txtSpacing: 0, txtAlign: 'left', txtEffect: 'rainbow', txtSide: 'above', txtFit: false,
 };
 
 export class Editor {
@@ -40,13 +41,15 @@ export class Editor {
   opt: Record<string, any> = { ...DEFAULT_OPTS };
   /** scratch space for the active tool */
   state: Record<string, any> = {};
+  /** Opens the on-canvas text box for a text object (set by the UI; absent in tests). */
+  textEditor: ((id: string, isNew: boolean) => void) | null = null;
   private listeners = new Map<string, Set<(k: ChangeKind) => void>>();
   private pan: { sp: Point; ox: number; oy: number } | null = null;
 
   constructor(tools: Tool[]) {
     for (const t of tools) this.tools[t.id] = t;
     this.tool = tools[0];
-    this.store.on(() => { for (const id of [...this.sel]) if (!this.store.byId(id)) this.sel.delete(id); this.changed('doc'); });
+    this.store.on(() => { for (const id of [...this.sel]) if (!this.store.byId(id)) this.sel.delete(id); this.syncTextPaths(); this.changed('doc'); });
   }
 
   // ---- events ----
@@ -59,6 +62,16 @@ export class Editor {
   get doc() { return this.store.doc; }
   dimGeom(e: Extract<Entity, { type: 'dim' }>) { return dimGeom(e, this.doc.dim); }
   /** Primitives including dimension lines (used for picking and trimming against). */
+  /** Text on a path follows that path: copy its current shape in (or let go if the path was deleted). */
+  syncTextPaths() {
+    for (const t of this.doc.ents) {
+      if (t.type !== 'text' || !t.path?.ref) continue;
+      const p = this.store.byId(t.path.ref);
+      if (!p || p.type === 'text' || p.type === 'dim') { delete t.path.ref; continue; }
+      const { id, layer, color, w, group, ...g } = p as any; void id; void layer; void color; void w; void group;
+      if (JSON.stringify(g) !== JSON.stringify(t.path.geom)) t.path.geom = structuredClone(g);
+    }
+  }
   geomPrims(e: Entity | Shape): Prim[] { return e.type === 'dim' ? dimGeom(e as any, this.doc.dim).lines.map(([a, b]) => ({ t: 'seg', a, b }) as Prim) : prims(e as Shape); }
   bbox(e: Entity | Shape): Box { return shapeBox(e as Shape, (x: any) => dimGeom(x, this.doc.dim)); }
   selected(): Entity[] { return [...this.sel].map(id => this.store.byId(id)).filter(Boolean) as Entity[]; }
@@ -72,6 +85,8 @@ export class Editor {
     for (let i = ents.length - 1; i >= 0; i--) {
       const e = ents[i]; if (!this.store.usable(e) || (filter && !filter(e))) continue;
       const b = this.bbox(e); if (raw.x < b.x0 - tol || raw.x > b.x1 + tol || raw.y < b.y0 - tol || raw.y > b.y1 + tol) continue;
+      // text: a click anywhere over the word picks it (not just on a letter's edge)
+      if (e.type === 'text' && raw.x >= b.x0 && raw.x <= b.x1 && raw.y >= b.y0 && raw.y <= b.y1 && (!best || best.d > tol * 0.5)) best = { e, d: tol * 0.5, pr: { t: 'seg', a: raw, b: raw } };
       for (const pr of this.geomPrims(e)) {
         const q = pr.t === 'seg' ? segDist(raw, pr.a, pr.b) : arcDist(raw, pr);
         if (q <= tol && (!best || q < best.d - 1e-9)) best = { e, d: q, pr };

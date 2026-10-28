@@ -17,7 +17,11 @@ export interface DimEnt extends EntBase { type: 'dim'; mode: 'a' | 'h' | 'v' | '
 
 /** Smooth curve: anchors with in/out handles (cubic Bézier segments). */
 export interface SplineEnt extends EntBase { type: 'spline'; pts: Point[]; h: [Point, Point][]; closed: boolean }
-export type Entity = LineEnt | PolyEnt | CircleEnt | EllipseEnt | ArcEnt | SplineEnt | DimEnt;
+/** Where text sits on a line or curve (see text/text.ts). */
+export interface TextPath { ref?: string; geom: Shape; pos: number; anchor: 'start' | 'center' | 'end' | 'fit'; side: 'above' | 'on' | 'below'; flip: boolean; effect: 'rainbow' | 'stretch' | 'skew' | 'stair'; lift: number }
+/** Editable text: size = capital height (mm); at = alignment point on the first baseline; optionally on a path. */
+export interface TextEnt extends EntBase { type: 'text'; text: string; font: string; size: number; spacing: number; lineSpacing: number; align: 'left' | 'center' | 'right'; at: Point; angle: number; mirror?: boolean; path?: TextPath }
+export type Entity = LineEnt | PolyEnt | CircleEnt | EllipseEnt | ArcEnt | SplineEnt | DimEnt | TextEnt;
 /** An entity before it has been given an id/layer/colour. */
 export type Shape = DistributiveOmit<Entity, keyof EntBase> & Partial<EntBase>;
 type DistributiveOmit<T, K extends keyof any> = T extends any ? Omit<T, K> : never;

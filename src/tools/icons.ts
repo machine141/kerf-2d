@@ -5,6 +5,7 @@ export const ICONS: Record<string, string> = {
   rect: '<rect x="4" y="6" width="16" height="12"/>',
   circle: '<ellipse cx="12" cy="12" rx="9" ry="7"/><circle cx="12" cy="12" r="1"/>',
   arc: '<path d="M4 18a10 10 0 0 1 16-8"/><circle cx="12" cy="18" r="1"/>',
+  text: '<path d="M5 6V4h14v2M12 4v15M9 19h6"/><path d="M3 21c5-3 13-3 18 0" stroke-dasharray="2 2"/>',
   dim: '<path d="M4 7v10M20 7v10M4 12h16M4 12l3-2M4 12l3 2M20 12l-3-2M20 12l-3 2"/>',
   offset: '<rect x="8" y="8" width="8" height="8" rx="1"/><rect x="3" y="3" width="18" height="18" rx="5" stroke-dasharray="3 2"/>',
   trim: '<path d="M3 12h7M14 12h7"/><path d="M12 4v16" stroke-dasharray="2 2"/><path d="M9 9l6 6M15 9l-6 6"/>',

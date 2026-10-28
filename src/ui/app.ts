@@ -13,11 +13,16 @@ import { openBend } from './profile';
 import { DEFAULT_OPTS, type Editor, type CoordMode } from '../editor/editor';
 import type { OptionSpec, PointerInfo } from '../editor/tool';
 import { Renderer } from '../render/renderer';
-import { COLORS, WIDTHS, PAGES, newDoc, type Entity, type Shape, type ColorKey } from '../model/types';
+import { COLORS, WIDTHS, PAGES, newDoc, type Entity, type Shape, type ColorKey, type TextEnt as TextEntT } from '../model/types';
 import { exportSVG, importSVG } from '../io/svg';
 import { exportDXF, importDXF, type DxfOptions } from '../io/dxf';
 import { zipOne } from '../io/zip';
 import { enterNodeEdit } from '../tools/select';
+import { isText, editTexts, flipText, optsFromText } from '../tools/text';
+import { attachTextEditor, cssFont } from './textedit';
+import { textShapes } from '../text/text';
+import { weldShapes } from '../text/place';
+import { FONTS } from '../text/fonts';
 import { runSelfTest, type TestResult } from '../selftest';
 
 const $ = <T extends HTMLElement = HTMLElement>(s: string) => document.querySelector(s) as T;
@@ -28,6 +33,7 @@ export function startUI(ed: Editor) {
   const prefs = loadPrefs(); if (prefs.joinTol != null) ed.opt.joinTol = prefs.joinTol; if (prefs.pickPx != null) ed.opt.pickPx = prefs.pickPx;
   const ui = { helpShow: null as string | null, alignTo: 'sel' as 'sel' | 'page', ptsOpen: false, tab: 'props', spaceDown: false, lastTest: null as null | { results: TestResult[]; doc: string | null }, exportOpts: { splitArcs: false, includeHidden: false, curveTol: 0.01, skipDims: true } as DxfOptions };
   let DL: any = null;
+  attachTextEditor(ed, $('#main'), cv);
   (async () => { try { DL = (window as any).claude?.use ? await (window as any).claude.use('downloads') : null; } catch { DL = null; } })();
 
   // ---------- canvas ----------
@@ -111,14 +117,17 @@ export function startUI(ed: Editor) {
   }
   function bindOpt(o: OptionSpec) {
     const el = document.querySelector<HTMLElement>(`#toolOpts [data-opt="${o.key}"]`); if (!el) return;
-    if (o.type === 'seg') el.querySelectorAll<HTMLElement>('button').forEach(b => b.onclick = () => { ed.opt[o.key] = b.dataset.v; renderOptions(); ed.changed('opts'); R.request(); });
-    else if (o.type === 'number') { const inp = el as HTMLInputElement; inp.oninput = () => { const v = o.unit === 'mm' ? parseLength(inp.value) : parseFloat(inp.value); if (inp.value.trim() === '') { ed.opt[o.key] = ''; } else if (isFinite(v)) { ed.opt[o.key] = v; if (o.key === 'offD') ed.opt.offFollow = false; } R.request(); }; inp.onkeydown = e => { if (e.key === 'Enter' || e.key === 'Escape') { inp.blur(); syncOptions(); } }; inp.onchange = () => refreshOptions(); }
-    else if (o.type === 'check') (el as HTMLInputElement).onchange = () => { ed.opt[o.key] = (el as HTMLInputElement).checked; refreshOptions(); R.request(); };
-    else if (o.type === 'select') (el as HTMLSelectElement).onchange = () => { ed.opt[o.key] = (el as HTMLSelectElement).value; R.request(); };
+    const told = () => ed.tool.onOpt?.(ed, o.key);
+    if (o.type === 'seg') el.querySelectorAll<HTMLElement>('button').forEach(b => b.onclick = () => { ed.opt[o.key] = b.dataset.v; told(); renderOptions(); ed.changed('opts'); R.request(); });
+    else if (o.type === 'number') { const inp = el as HTMLInputElement; inp.oninput = () => { const v = o.unit === 'mm' ? parseLength(inp.value) : parseFloat(inp.value); if (inp.value.trim() === '') { ed.opt[o.key] = ''; } else if (isFinite(v)) { ed.opt[o.key] = v; if (o.key === 'offD') ed.opt.offFollow = false; told(); } R.request(); }; inp.onkeydown = e => { if (e.key === 'Enter' || e.key === 'Escape') { inp.blur(); syncOptions(); } }; inp.onchange = () => refreshOptions(); }
+    else if (o.type === 'check') (el as HTMLInputElement).onchange = () => { ed.opt[o.key] = (el as HTMLInputElement).checked; told(); refreshOptions(); R.request(); };
+    else if (o.type === 'select') (el as HTMLSelectElement).onchange = () => { ed.opt[o.key] = (el as HTMLSelectElement).value; told(); R.request(); };
     else if (o.type === 'button') el.onclick = () => { o.run(ed); R.request(); };
   }
   function syncOptions() {
     document.querySelectorAll<HTMLInputElement>('#toolOpts input[data-opt]').forEach(i => { const v = ed.opt[i.dataset.opt!]; if (i.type === 'checkbox') i.checked = !!v; else if (document.activeElement !== i) i.value = String(v ?? ''); });
+    document.querySelectorAll<HTMLSelectElement>('#toolOpts select[data-opt]').forEach(i => { i.value = String(ed.opt[i.dataset.opt!] ?? ''); });
+    document.querySelectorAll<HTMLElement>('#toolOpts .segc[data-opt]').forEach(g => g.querySelectorAll<HTMLElement>('button').forEach(b => b.setAttribute('aria-pressed', String(String(ed.opt[g.dataset.opt!]) === b.dataset.v))));
   }
 
   // ---------- attribute bar ----------
@@ -345,6 +354,44 @@ export function startUI(ed: Editor) {
     const fh = document.querySelector<HTMLElement>('#pFlipH'); if (fh) fh.onclick = () => ed.flipSel('h');
     const fv = document.querySelector<HTMLElement>('#pFlipV'); if (fv) fv.onclick = () => ed.flipSel('v');
   }
+  /** Properties for a piece of text: what it says, font, size, spacing, and its line if it follows one. */
+  function textPane(e: TextEntT, sz: { html: string; fields: Field[] }) {
+    const pane = $('#pane'), pp = e.path, live = () => ed.store.byId(e.id) as TextEntT, F: Field[] = [];
+    const set = (f: (t: TextEntT) => void, key = '') => { editTexts(ed, f, key, [e.id]); const t = live(); if (t) optsFromText(ed, t); };
+    F.push(numField('Size (capitals) mm', e.size, v => { if (v > 0) live().size = v; }));
+    F.push(numField('Letter spacing', e.spacing, v => { live().spacing = v; }));
+    if (pp) F.push(numField('Lift off the line', pp.lift || 0, v => { live().path!.lift = v; }));
+    else { F.push(numField('Line spacing ×', e.lineSpacing || 1.6, v => { if (v > 0) live().lineSpacing = v; }, false)); F.push(numField('Angle °', normA(e.angle || 0) / DEG, v => { live().angle = normA(v * DEG); }, false)); }
+    const seg = (id: string, cur: string, ch: [string, string, string?][]) => `<span class="segc" role="group" id="${id}">${ch.map(([v, l, t]) => `<button type="button" data-v="${v}" aria-pressed="${cur === v}"${t ? ` title="${esc(t)}"` : ''}>${esc(l)}</button>`).join('')}</span>`;
+    const fonts = FONTS.map(f => `<button type="button" data-font="${f.id}" aria-pressed="${f.id === e.font}" title="${esc(f.name + ' — ' + f.note)}" style="font-family:${esc(cssFont(f.id))}">${f.id === 'kerf-line' ? 'ABC' : 'Abc'}<small>${esc(f.name)}</small></button>`).join('');
+    pane.innerHTML = `<h3>${pp ? 'Text on a line' : 'Text'}</h3>
+      <textarea id="pTxt" aria-label="Text" spellcheck="false">${esc(e.text)}</textarea>
+      <div class="fontgrid" role="group" aria-label="Font">${fonts}</div>
+      <div class="grid2">${F.map(f => f.html).join('')}</div>
+      ${pp ? `<div class="row"><span class="hint">Letters</span>${seg('pEff', pp.effect, [['rainbow', 'A Rainbow', 'Letters turn to follow the line'], ['stretch', 'B Stretch', 'Letters bend with the line'], ['skew', 'C Skew', 'Letters stay upright and slant with the line'], ['stair', 'D Stair', 'Letters stay upright, stepping along the line']])}</div>
+        <div class="row"><span class="hint">Sit</span>${seg('pSide', pp.side, [['above', 'Above'], ['on', 'On'], ['below', 'Below']])}<label class="chk"><input type="checkbox" id="pFit" ${pp.anchor === 'fit' ? 'checked' : ''}>Fit to the whole line</label></div>
+        <div class="row"><button class="btn" id="pTFlip" title="Put the text on the other side of the line (on a circle: along the bottom, reading upright)">Other side ↕</button><button class="btn" id="pTMir" title="Back to front">Back to front ↔</button><button class="btn" id="pDetach" title="Let go of the line: straight text again">Make straight</button></div>
+        <p class="hint">Drag the text along its line — it snaps to the start, middle and end (top, bottom and sides of a circle). Its line can still be edited; the text follows.</p>`
+      : `<div class="row"><span class="hint">Align</span>${seg('pAlign', e.align, [['left', '⇤ Left'], ['center', 'Centre'], ['right', 'Right ⇥']])}<button class="btn" id="pTFlip" title="Upside down">Upside down</button><button class="btn" id="pTMir" title="Back to front">Back to front ↔</button></div>
+        <p class="hint">Drag the text onto a line, arc or circle and let go: it follows it.</p>`}
+      <h3>Make it cuttable</h3>
+      <div class="row"><label class="chk"><input type="checkbox" id="pEng" ${e.color === 'blue' ? 'checked' : ''}>Engrave (blue)</label><button class="btn" id="pOutl" title="Turn the letters into ordinary shapes you can edit point by point (the text can't be retyped after)">Convert to outlines</button><button class="btn" id="pWeld" title="Letters that touch join into one outline — good for names cut out in a script font">Weld letters</button><button class="btn" id="pDel">Delete</button></div>
+      <p class="hint">Mouse wheel over selected text: letter spacing · Shift+wheel: size · Alt+wheel: ${pp ? 'lift off the line' : 'line spacing'} · double-click to retype. For a key ring: Contour the text, then add a ring to the contour.</p>
+      ${pp ? '' : sz.html}`;
+    bindFields(F.concat(pp ? [] : sz.fields)); if (!pp) bindSize();
+    const ta = $<HTMLTextAreaElement>('#pTxt'); ta.style.fontFamily = cssFont(e.font);
+    ta.onchange = () => set(t => { t.text = t.path ? ta.value.replace(/\n/g, ' ') : ta.value; });
+    pane.querySelectorAll<HTMLElement>('[data-font]').forEach(b => b.onclick = () => set(t => { t.font = b.dataset.font!; }));
+    const segBind = (id: string, f: (t: TextEntT, v: string) => void) => document.querySelectorAll<HTMLElement>(`#${id} button`).forEach(b => b.onclick = () => set(t => f(t, b.dataset.v!)));
+    segBind('pEff', (t, v) => { t.path!.effect = v as any; }); segBind('pSide', (t, v) => { t.path!.side = v as any; }); segBind('pAlign', (t, v) => { t.align = v as any; });
+    document.querySelector<HTMLInputElement>('#pFit')?.addEventListener('change', ev => set(t => { t.path!.anchor = (ev.target as HTMLInputElement).checked ? 'fit' : 'center'; }));
+    $('#pTFlip').onclick = () => flipText(ed, live(), 'v'); $('#pTMir').onclick = () => flipText(ed, live(), 'h');
+    document.querySelector<HTMLElement>('#pDetach')?.addEventListener('click', () => { const b = ed.bbox(live()); set(t => { delete t.path; t.at = P(b.x0, b.y0); t.angle = 0; t.align = 'left'; t.mirror = false; }); });
+    $<HTMLInputElement>('#pEng').onchange = ev => set(t => { t.color = (ev.target as HTMLInputElement).checked ? 'blue' : (ed.doc.attrs.color === 'blue' ? 'red' : ed.doc.attrs.color); });
+    $('#pOutl').onclick = () => { const t = live(), n = ed.replaceWith([t], textShapes(t), t).length; ed.toast(`Text turned into ${n} outline${n === 1 ? '' : 's'} (grouped)`); };
+    $('#pWeld').onclick = () => { const t = live(), w = weldShapes(textShapes(t)), n = ed.replaceWith([t], w, t).length; ed.toast(`Letters welded into ${n} outline${n === 1 ? '' : 's'}`); };
+    $('#pDel').onclick = () => ed.deleteSel();
+  }
   /** Open the Help tab, optionally at a guide. */
   function openHelp(id: string | null = null) {
     ui.tab = 'help'; ui.helpShow = id && id !== ed.tool.id ? id : null;
@@ -400,6 +447,7 @@ export function startUI(ed: Editor) {
         bindFields(sz.fields); bindSize(); $('#pExplode').onclick = () => ed.explodeSel(); $('#pDel').onclick = () => ed.deleteSel(); $('#pGroup').onclick = () => ed.groupSel(); $('#pUngroup').onclick = () => ed.ungroupSel(); $('#pPath').onclick = () => ed.makePathSel();
         $('#bUnion').onclick = () => ed.booleanSel('union'); $('#bSub').onclick = () => ed.booleanSel('subtract'); $('#bInt').onclick = () => ed.booleanSel('intersect'); $('#bTidy').onclick = () => ed.tidySel(); return;
       }
+      if (isText(sel[0])) { textPane(sel[0], sz); return; }
       const e: any = sel[0], F: Field[] = [];
       const pt = (lbl: string, k: string) => { F.push(numField(lbl + ' X', e[k].x, v => { (ed.store.byId(e.id) as any)[k] = P(v, e[k].y); })); F.push(numField(lbl + ' Y', e[k].y, v => { (ed.store.byId(e.id) as any)[k] = P(e[k].x, v); })); };
       let title: string = e.type, extra = '', ptsHtml = '';

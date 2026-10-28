@@ -1,3 +1,4 @@
+import { expandText } from '../text/text';
 /** SVG export (mm-sized, true arcs/ellipses, Inkscape layers) and basic SVG import. */
 import { splineSegs } from '../geometry/spline';
 import { type Point, P, add, sub, mul, dist, normA, angOf, polar, clean, cp, fmt, DEG } from '../geometry/vec';
@@ -18,7 +19,7 @@ export function exportSVG(doc: Doc, opt: SvgOptions = {}): string {
     `<!-- ${esc(doc.name)} · 1 user unit = 1 mm -->`);
   for (const L of doc.layers) {
     if (!L.visible && !opt.includeHidden) continue;
-    const ents = doc.ents.filter(e => e.layer === L.id && !(opt.skipDims && e.type === 'dim')); if (!ents.length) continue;
+    const ents = expandText(doc.ents).filter(e => e.layer === L.id && !(opt.skipDims && e.type === 'dim')); if (!ents.length) continue;
     out.push(`<g id="${esc(slug(L.name))}" inkscape:groupmode="layer" inkscape:label="${esc(L.name)}" fill="none" stroke-linecap="round" stroke-linejoin="round"${L.visible ? '' : ' style="display:none"'}>`);
     for (const e of ents) {
       const st = `stroke="${COLORS[e.color]?.hex || '#000000'}" stroke-width="${nf(e.w)}"`;

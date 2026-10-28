@@ -44,6 +44,13 @@ export function affEnt<T extends Shape>(e: T, A: Affine): Shape {
       n.pts = e.pts.map(f); if (e.bulge && det < 0) n.bulge = e.bulge.map((b: number) => -b); return n;
     case 'dim': n.p1 = f(e.p1); n.p2 = f(e.p2); n.off = f(e.off); return n;
     case 'spline': n.pts = e.pts.map(f); n.h = e.h.map(([a, b]) => [f(a), f(b)]); return n;
+    case 'text': {
+      // position, size and turn follow the transform; a mirror flips the text; text on a path moves with its path
+      n.at = f(e.at); n.size = clean(e.size * s); n.spacing = clean(e.spacing * s);
+      if (det >= 0) n.angle = normA((e.angle || 0) + Math.atan2(A.c, A.a)); else { n.mirror = !e.mirror; n.angle = normA(Math.atan2(-A.c, -A.a) - (e.angle || 0)); }
+      if (e.path) { n.path = { ...structuredClone(e.path), geom: affEnt(e.path.geom as Shape, A) }; if (det < 0) n.path.mirror = undefined; }
+      return n;
+    }
     case 'circle':
       if (conformal) { n.c = f(e.c); n.r = clean(e.r * s); return n; }
       return toEllipse(e.c, [A.a * e.r, A.b * e.r, A.c * e.r, A.d * e.r]);

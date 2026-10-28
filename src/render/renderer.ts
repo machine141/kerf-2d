@@ -5,7 +5,7 @@ import type { Editor } from '../editor/editor';
 import type { Overlay, GhostStyle } from '../editor/tool';
 import { COLORS, type Entity, type Shape } from '../model/types';
 import { hasBulge, segsOf } from '../geometry/path';
-import { keypoints } from '../geometry/entity';
+import { keypoints , ext } from '../geometry/entity';
 
 const TOKENS = ['--desk', '--sheet', '--grid', '--grid-major', '--ink', '--sel', '--snap', '--muted', '--accent', '--shadow', '--node-start', '--node-end', '--node', '--source', ...Object.values(COLORS).map(c => c.tok)];
 const SNAP_NAMES: Record<string, string> = { end: 'Endpoint', mid: 'Midpoint', centre: 'Centre', quad: 'Quadrant', inter: 'Intersection', nearest: 'Nearest', perp: 'Perpendicular', tangent: 'Tangent', close: 'Close shape' };
@@ -32,8 +32,11 @@ export class Renderer {
   }
   request() { if (this.queued) return; this.queued = true; requestAnimationFrame(() => { this.queued = false; this.draw(); }); }
 
-  private path(e: Shape) {
-    const ctx = this.ctx, ed = this.ed, k = ed.view.k; ctx.beginPath();
+  private path(e: Shape) { this.ctx.beginPath(); this.trace(e); }
+  /** Add a shape's outline to the current canvas path (text adds every letter). */
+  private trace(e: Shape) {
+    const ctx = this.ctx, ed = this.ed, k = ed.view.k;
+    if (e.type === 'text') { for (const s of ext.textShapes(e)) this.trace(s); return; }
     if (e.type === 'line') { const A = ed.w2s(e.a), B = ed.w2s(e.b); ctx.moveTo(A.x, A.y); ctx.lineTo(B.x, B.y); }
     else if (e.type === 'poly' && hasBulge(e)) {
       const s0 = ed.w2s(e.pts[0]); ctx.moveTo(s0.x, s0.y);

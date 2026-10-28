@@ -11,6 +11,9 @@ import type { Tool, PointerInfo } from '../editor/tool';
 import type { Editor } from '../editor/editor';
 import type { Entity, Shape } from '../model/types';
 import { ICONS } from './icons';
+import { isText, flipText, slideText, textWheel, pathUnder, attachToPath } from './text';
+import { anchorPoint, textShapes } from '../text/text';
+import type { TextEnt } from '../model/types';
 
 export interface Handle { k: 'scale' | 'rot' | 'flipV' | 'flipH' | 'copy' | 'move'; fx?: number; fy?: number; x: number; y: number; b: Box }
 export interface NodeHandle { k: 'v' | 'add' | 'c' | 'r' | 'rx' | 'ry' | 'a0' | 'a1' | 'p1' | 'p2' | 'off' | 'hin' | 'hout'; i?: number; p: Point; role?: 'start' | 'end' | 'mid' }
@@ -19,6 +22,9 @@ export function handles(ed: Editor): Handle[] {
   if (ed.tool.id !== 'select' || !ed.sel.size || ed.state.node) return [];
   const b = ed.selBox(); if (!b) return [];
   const A = ed.w2s(P(b.x0, b.y1)), B = ed.w2s(P(b.x1, b.y0)), mx = (A.x + B.x) / 2, my = (A.y + B.y) / 2, H: Handle[] = [];
+  // text on a path: it is sized from the options and moved by sliding it along its line, so only the flip handles
+  const one = ed.sel.size === 1 ? ed.selected()[0] : null;
+  if (isText(one) && one.path) { H.push({ k: 'flipV', x: mx, y: A.y - 26, b }, { k: 'flipH', x: A.x - 26, y: my, b }); return H; }
   const wOK = b.x1 - b.x0 > 1e-9, hOK = b.y1 - b.y0 > 1e-9;
   const sx = (fx: number) => fx < 0 ? A.x : fx > 0 ? B.x : mx, sy = (fy: number) => fy > 0 ? A.y : fy < 0 ? B.y : my;
   for (const [fx, fy] of [[-1, 1], [1, 1], [1, -1], [-1, -1], [0, 1], [1, 0], [0, -1], [-1, 0]]) {
@@ -137,7 +143,11 @@ export const selectTool: Tool = {
     }
     const hd = hitHandle(ed, info.sp);
     if (hd) {
-      if (hd.k === 'flipH' || hd.k === 'flipV') { ed.flipSel(hd.k === 'flipH' ? 'h' : 'v'); return; }
+      if (hd.k === 'flipH' || hd.k === 'flipV') {
+        const one = ed.sel.size === 1 ? ed.selected()[0] : null;
+        if (isText(one)) { flipText(ed, one, hd.k === 'flipH' ? 'h' : 'v'); return; }
+        ed.flipSel(hd.k === 'flipH' ? 'h' : 'v'); return;
+      }
       if (hd.k === 'move' || hd.k === 'copy') {
         if (hd.k === 'copy') { S.copySrc = [...ed.sel]; ed.store.checkpoint(); ed.transformSel(affMove(P(0, 0)), 1); ed.store.emit(); }
         const s = ed.snapAt(raw, { exclude: ed.sel, drawing: true }); S.drag = startDrag(ed, s.p, { copy: hd.k === 'copy' }); return;
@@ -145,6 +155,10 @@ export const selectTool: Tool = {
       S.hdrag = { h: hd, start: raw, tx: null }; return;
     }
     const hit = ed.pick(raw)?.e;
+    // text on a path: press and drag slides it along the line
+    if (isText(hit) && hit.path && !info.shift && !(ed.sel.has(hit.id) && ed.sel.size > 1)) {
+      ed.setSelection(ed.withGroups([hit.id])); if (ed.sel.size === 1) { S.slide = { id: hit.id, sp: info.sp, moved: false, snap: null }; return; }
+    }
     if (hit && ed.sel.has(hit.id) && !info.shift) { const s = ed.snapAt(raw, { exclude: ed.sel, drawing: true }); S.drag = startDrag(ed, s.p); return; }
     if (hit) {
       const members = ed.withGroups([hit.id]);
@@ -157,6 +171,11 @@ export const selectTool: Tool = {
   },
   move(ed, raw, info) {
     const S = ed.state;
+    if (S.slide) {
+      const t = ed.store.byId(S.slide.id) as TextEnt | undefined; if (!t?.path) return;
+      if (!S.slide.moved) { if (Math.hypot(info.sp.x - S.slide.sp.x, info.sp.y - S.slide.sp.y) <= 3) return; ed.store.checkpoint(); S.slide.moved = true; }
+      S.slide.snap = slideText(ed, t, raw); ed.snapRes = null; return;
+    }
     if (S.box) { S.box.b = raw; ed.snapRes = null; }
     else if (S.ndrag) { const e = ed.store.byId(S.ndrag.id)!; ed.snapRes = ed.snapAt(raw, { exclude: new Set([e.id]), drawing: true }); S.ndrag.preview = nodeApply(e, S.ndrag.h, ed.snapRes.p, ed.mods); }
     else if (S.hdrag) { ed.snapRes = S.hdrag.h.k === 'rot' ? null : ed.snapAt(raw, { exclude: ed.sel, drawing: true }); S.hdrag.tx = handleTransform(ed, S.hdrag.h, S.hdrag.start, raw, info); }
@@ -164,6 +183,10 @@ export const selectTool: Tool = {
       ed.snapRes = ed.snapAt(raw, { exclude: ed.sel, drawing: true }); let d = sub(ed.snapRes.p, S.drag.from); S.drag.guides = [];
       if (S.drag.box && WEAK_SNAPS.has(ed.snapRes.k as any) && !info.alt) { const g = smartAlign(ed, S.drag.box, S.drag.others, d); d = g.d; S.drag.guides = g.guides; if (g.hit) ed.snapRes = { ...ed.snapRes, k: null }; }
       S.drag.to = add(S.drag.from, d); if (dist(S.drag.to, S.drag.from) > 1e-9) S.drag.moved = true;
+      // a single piece of straight text dragged over a line, arc or circle: let go to put it on it
+      const one = ed.sel.size === 1 ? ed.selected()[0] : null;
+      S.drag.dropOn = isText(one) && !one.path && S.drag.moved ? pathUnder(ed, raw, ed.sel)?.id ?? null : null;
+      if (S.drag.dropOn) S.drag.dropAt = raw;
     }
   },
   up(ed) {
@@ -179,17 +202,21 @@ export const selectTool: Tool = {
       }
       ed.sel = ed.withGroups(ed.sel); S.box = null; ed.changed('sel'); return;
     }
+    if (S.slide) { const sl = S.slide; S.slide = null; if (sl.moved) ed.store.emit(); return; }
     if (S.drag) {
       const d = S.drag; S.drag = null;
+      const tgt = d.dropOn && ed.store.byId(d.dropOn), one = ed.selected()[0];
+      if (tgt && isText(one)) { ed.store.checkpoint(); attachToPath(one, tgt, d.dropAt, { side: ed.opt.txtSide, effect: ed.opt.txtEffect }); ed.store.emit(); ed.toast('Text is on the line — drag it along; the ↕ handle puts it on the other side'); return; }
       if (d.moved) { if (!d.copy) ed.store.checkpoint(); ed.transformSel(affMove(sub(d.to, d.from))); ed.rel = d.to; ed.store.emit(); }
       else if (d.copy) { ed.store.remove(ed.sel); ed.store.discardCheckpoint(); ed.store.emit(); ed.setSelection(S.copySrc || []); ed.toast('Drag the copy handle to place a copy'); }
       S.copySrc = null;
     }
   },
-  dblclick(ed, raw) { const hit = ed.pick(raw)?.e; if (hit) enterNodeEdit(ed, hit); },
+  dblclick(ed, raw) { const hit = ed.pick(raw)?.e; if (isText(hit)) { ed.setSelection([hit.id]); ed.textEditor?.(hit.id, false); return; } if (hit) enterNodeEdit(ed, hit); },
+  wheel: (ed, dir, info) => !ed.state.node && textWheel(ed, dir, info),
   onKey(ed, key) {
     const S = ed.state;
-    if (key === 'Enter' && ed.sel.size === 1 && !S.node) { enterNodeEdit(ed, ed.selected()[0]); return true; }
+    if (key === 'Enter' && ed.sel.size === 1 && !S.node) { const e = ed.selected()[0]; if (isText(e)) ed.textEditor?.(e.id, false); else enterNodeEdit(ed, e); return true; }
     if ((key === 'Delete' || key === 'Backspace') && S.node && S.node.sel != null) {
       const e = ed.store.byId(S.node.id);
       if (e && e.type === 'spline') { const min = e.closed ? 3 : 2; if (e.pts.length <= min) { ed.toast(`A curve needs at least ${min} points`); return true; } const i = S.node.sel; ed.store.change(() => { e.pts.splice(i, 1); e.h.splice(i, 1); }); S.node.sel = null; return true; }
@@ -199,15 +226,22 @@ export const selectTool: Tool = {
   },
   cancel(ed) { if (ed.state.node) { ed.state.node = null; ed.state.ndrag = null; ed.changed('prompt'); return true; } return false; },
   cursor(ed, sp) {
-    const S = ed.state; if (S.drag || S.hdrag || S.ndrag || S.box) return 'default';
+    const S = ed.state; if (S.slide) return 'grabbing'; if (S.drag || S.hdrag || S.ndrag || S.box) return 'default';
     const h: any = S.node ? hitNode(ed, sp) : hitHandle(ed, sp);
-    if (!h) return 'default';
+    if (!h) { const t = !S.node && ed.pick(ed.s2w(sp))?.e; return isText(t) && t.path ? 'grab' : 'default'; }
     if (h.k === 'rot') return 'grab';
     if (h.k === 'scale') return h.fx * h.fy > 0 ? 'nesw-resize' : h.fx * h.fy < 0 ? 'nwse-resize' : h.fx ? 'ew-resize' : 'ns-resize';
     return 'pointer';
   },
   overlay(ed, o) {
     const S = ed.state;
+    if (S.drag?.dropOn) {
+      const one = ed.selected()[0] as TextEnt, tgt = ed.store.byId(S.drag.dropOn)!, t: TextEnt = structuredClone(one);
+      attachToPath(t, tgt, S.drag.dropAt, { side: ed.opt.txtSide, effect: ed.opt.txtEffect });
+      o.hide(ed.sel); o.highlight([tgt.id], 'source'); for (const s of textShapes(t)) o.ghost(s, 'selected'); o.label('Let go to put the text on this line', ed.cur); return;
+    }
+    if (S.slide?.moved) o.label(S.slide.snap ? 'Snapped to the ' + S.slide.snap : 'Drag along the line', ed.cur);
+    else if (ed.state.textMsg && Date.now() < ed.state.textMsg.until) o.label(ed.state.textMsg.msg, ed.cur);
     if (S.drag?.moved) {
       o.hide(ed.sel); const A = affMove(sub(S.drag.to, S.drag.from)); for (const e of ed.selected()) o.ghost(affEnt(e as Shape, A), 'selected');
       const G: [Point, Point][] = S.drag.guides || [];
@@ -239,6 +273,8 @@ export const selectTool: Tool = {
       return;
     }
     const H = handles(ed); if (!H.length) return;
+    const one = ed.sel.size === 1 ? ed.selected()[0] : null, ap = isText(one) && one.path ? anchorPoint(one) : null;
+    if (ap) o.custom((ctx, ed2, C) => { const s = ed2.w2s(ap); ctx.fillStyle = C['--accent']; ctx.beginPath(); ctx.arc(s.x, s.y, 4, 0, TAU); ctx.fill(); });
     o.custom((ctx, ed2, C) => {
       const b = H[0].b, A = ed2.w2s(P(b.x0, b.y1)), B = ed2.w2s(P(b.x1, b.y0));
       ctx.setLineDash([4, 3]); ctx.strokeStyle = C['--accent']; ctx.lineWidth = 1; ctx.strokeRect(A.x - .5, A.y - .5, B.x - A.x + 1, B.y - A.y + 1); ctx.setLineDash([]);

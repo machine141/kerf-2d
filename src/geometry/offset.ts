@@ -6,7 +6,7 @@
  */
 import ClipperLib from 'clipper-lib';
 import { type Point, P, add, sub, mul, dist, len, cross, polar, clean, cp } from './vec';
-import { flatten, endsOf, type Prim } from './entity';
+import { flatten, endsOf, ext, type Prim } from './entity';
 import type { Shape } from '../model/types';
 
 export const offsetSettings = { arcTol: 0.0005, scale: 1e5 };
@@ -55,7 +55,7 @@ export function connectedGroup<T extends Shape>(start: T, all: T[]): T[] {
 export interface OffsetSource { closed: Point[][]; open: Point[][]; solid: IntPath[] }
 export function makeSource(shapes: Shape[]): OffsetSource {
   const closed: Point[][] = [], pieces: Point[][] = [];
-  for (const e of shapes) { if (e.type === 'dim') continue; const f = flatten(e); if (f.pts.length < 2) continue; (f.closed ? closed : pieces).push(f.pts); }
+  for (const e of shapes.flatMap(x => x.type === 'text' ? ext.textShapes(x) : [x])) { if (e.type === 'dim') continue; const f = flatten(e); if (f.pts.length < 2) continue; (f.closed ? closed : pieces).push(f.pts); }
   const open: Point[][] = [];
   for (const c of chainPieces(pieces)) (c.closed ? closed : open).push(c.pts);
   return { closed, open, solid: closed.length ? solidOf(closed) : [] };

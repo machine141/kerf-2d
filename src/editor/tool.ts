@@ -63,6 +63,8 @@ export interface Tool {
   cancel?(ed: Editor): boolean;
   overlay?(ed: Editor, o: Overlay): void;
   cursor?(ed: Editor, sp: Point): string;
+  /** an option in the strip was changed (e.g. apply it to the selected text) */
+  onOpt?(ed: Editor, key: string): void;
 }
 
 /** Definition for the common "locate N points, then make something" tool. */
