@@ -18,6 +18,7 @@ const esc = (s: string) => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<
 
 export function startUI(ed: Editor) {
   const cv = $<HTMLCanvasElement>('#cv'), R = new Renderer(cv, ed);
+  const prefs = loadPrefs(); if (prefs.joinTol != null) ed.opt.joinTol = prefs.joinTol;
   const ui = { tab: 'props', spaceDown: false, lastTest: null as null | { results: TestResult[]; doc: string | null }, exportOpts: { splitArcs: false, includeHidden: false, curveTol: 0.01 } as DxfOptions };
   let DL: any = null;
   (async () => { try { DL = (window as any).claude?.use ? await (window as any).claude.use('downloads') : null; } catch { DL = null; } })();
@@ -37,9 +38,12 @@ export function startUI(ed: Editor) {
   cv.addEventListener('wheel', ev => {
     ev.preventDefault(); const sp = evP(ev);
     if (!ev.ctrlKey && ed.wheelTool(((ev.deltaY || ev.deltaX) < 0 ? 1 : -1), info(ev, sp))) { syncOptions(); R.request(); return; }
-    const mouseWheel = ev.deltaMode !== 0 || (ev.deltaX === 0 && Math.abs(ev.deltaY) >= 40 && Number.isInteger(ev.deltaY));
-    if (ev.ctrlKey || (mouseWheel && !ev.shiftKey)) ed.zoomAt(sp, Math.exp(-ev.deltaY * (ev.ctrlKey ? 0.01 : 0.0015) * (ev.deltaMode === 1 ? 30 : 1)));
-    else { const dx = ev.shiftKey && ev.deltaX === 0 ? ev.deltaY : ev.deltaX, dy = ev.shiftKey && ev.deltaX === 0 ? 0 : ev.deltaY; ed.panBy(dx, dy); }
+    // Wheel zooms at the pointer (pinch = ctrlKey also zooms). Shift+wheel pans; the "Two-finger pan" setting makes scrolling pan.
+    const unit = ev.deltaMode === 1 ? 30 : ev.deltaMode === 2 ? 300 : 1;
+    if (ev.ctrlKey || (!ev.shiftKey && !prefs.wheelPans)) {
+      const dy = Math.max(-200, Math.min(200, (ev.deltaY || ev.deltaX) * unit));
+      ed.zoomAt(sp, Math.exp(-dy * (ev.ctrlKey ? 0.01 : 0.002)));
+    } else { const dx = ev.shiftKey && ev.deltaX === 0 ? ev.deltaY : ev.deltaX, dy = ev.shiftKey && ev.deltaX === 0 ? 0 : ev.deltaY; ed.panBy(dx * unit, dy * unit); }
   }, { passive: false });
 
   // ---------- change routing ----------
@@ -321,8 +325,9 @@ export function startUI(ed: Editor) {
         <h3>Attach (snap to)</h3><div class="row">${[['end', 'Endpoints'], ['mid', 'Midpoints'], ['centre', 'Centres'], ['quad', 'Quadrants'], ['inter', 'Intersections'], ['nearest', 'Nearest'], ['perp', 'Perpendicular'], ['tangent', 'Tangent']].map(([k, l]) => `<label class="chk"><input type="checkbox" data-a="${k}" ${(at as any)[k] ? 'checked' : ''}>${l}</label>`).join('')}</div>
         <div class="grid2"><label for="sBox">Target box px</label><input type="text" id="sBox" value="${at.box}"></div>
         <h3>Dimensions</h3><div class="grid2"><label for="sDd">Decimals</label><input type="text" id="sDd" value="${ed.doc.dim.dec}"><label for="sDh">Text height mm</label><input type="text" id="sDh" value="${ed.doc.dim.textH}"></div>
-        <h3>Accuracy</h3><div class="grid2"><label for="sTol">Curve tolerance</label><input type="text" id="sTol" value="${geomSettings.flatTol}"></div>
-        <p class="hint">Curve tolerance is how closely contours follow curves (mm). Smaller is more accurate but makes bigger files. These settings, except tolerance, are saved with the drawing.</p>`;
+        <h3>Accuracy</h3><div class="grid2"><label for="sTol">Curve tolerance</label><input type="text" id="sTol" value="${geomSettings.flatTol}"><label for="sJt">Close gaps up to mm</label><input type="text" id="sJt" value="${ed.opt.joinTol}"></div>
+        <h3>Mouse &amp; trackpad</h3><div class="row"><label class="chk"><input type="radio" name="wh" value="zoom" ${prefs.wheelPans ? '' : 'checked'}>Wheel zooms at pointer</label><label class="chk"><input type="radio" name="wh" value="pan" ${prefs.wheelPans ? 'checked' : ''}>Two-finger scroll pans (pinch zooms)</label></div>
+        <p class="hint">Close gaps: Make Path and Trim treat ends this close as touching. Curve tolerance is how closely contours follow curves (mm). Smaller is more accurate but makes bigger files. These settings, except tolerance, are saved with the drawing.</p>`;
       ($('#sPre') as HTMLSelectElement).value = pg.preset || 'CUSTOM';
       const num = (id: string, f: (v: number) => void, unit = true) => { $(`#${id}`).onchange = (ev: Event) => { const t2 = (ev.target as HTMLInputElement).value, v = unit ? parseLength(t2) : parseFloat(t2); if (isFinite(v)) { f(v); ed.changed('view'); } }; };
       ($('#sPre') as HTMLSelectElement).onchange = ev => { const k = (ev.target as HTMLSelectElement).value, v = PAGES[k]; pg.preset = k; if (v[0]) { pg.w = v[0]; pg.h = v[1]; } renderPane(); ed.fit(); };
@@ -331,6 +336,8 @@ export function startUI(ed: Editor) {
       num('sRs', v => A.radial.start = v, false); num('sRp', v => A.radial.step = Math.max(0.1, v), false);
       num('sBox', v => at.box = Math.max(4, v), false); num('sDd', v => ed.doc.dim.dec = Math.min(6, Math.max(0, Math.round(v))), false); num('sDh', v => ed.doc.dim.textH = Math.max(0.5, v));
       num('sTol', v => { geomSettings.flatTol = Math.min(0.1, Math.max(0.0001, v)); });
+      num('sJt', v => { ed.opt.joinTol = Math.min(2, Math.max(0, v)); prefs.joinTol = ed.opt.joinTol; savePrefs(prefs); });
+      pane.querySelectorAll<HTMLInputElement>('[name=wh]').forEach(r => r.onchange = () => { prefs.wheelPans = r.value === 'pan'; savePrefs(prefs); });
       pane.querySelectorAll<HTMLInputElement>('[data-a]').forEach(c => c.onchange = () => { (at as any)[c.dataset.a!] = c.checked; });
     } else if (t === 'test') {
       pane.innerHTML = `<h3>Accuracy self-test</h3><p class="hint">Runs real tool workflows in a separate, hidden drawing and measures the results: typed coordinates, rectangle and circle modes, trimming, rotate with repeats, snapping (incl. tangent and perpendicular), contours (incl. an area bounded by crossing lines), the glasses and key-ring examples, handles, point editing, dimensions, undo, and SVG/DXF round trips.</p>
@@ -351,3 +358,8 @@ export function startUI(ed: Editor) {
   return { R, ui };
 }
 export { clean, prims };
+
+/** Per-browser conveniences (never essential; storage may be unavailable). */
+interface Prefs { wheelPans?: boolean; joinTol?: number }
+function loadPrefs(): Prefs { try { return JSON.parse(localStorage.getItem('kerf2d.prefs') || '{}') || {}; } catch { return {}; } }
+function savePrefs(p: Prefs) { try { localStorage.setItem('kerf2d.prefs', JSON.stringify(p)); } catch { /* ignore */ } }

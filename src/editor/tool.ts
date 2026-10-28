@@ -17,7 +17,7 @@ export type OptionSpec =
 
 export interface PointerInfo { sp: Point; shift: boolean; alt: boolean; ctrl: boolean }
 
-export type GhostStyle = 'preview' | 'selected' | 'source';
+export type GhostStyle = 'preview' | 'selected' | 'source' | 'remove';
 /** What a tool may draw on top of the drawing each frame. */
 export interface Overlay {
   ghost(s: Shape, style?: GhostStyle): void;

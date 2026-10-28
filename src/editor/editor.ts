@@ -2,7 +2,7 @@
  * Editor: owns the document store, selection, view, the active tool and all
  * input routing. It has no DOM dependencies, so it runs headless in tests.
  */
-import { type Point, P, add, sub, angOf, len, DEG, cp, normA } from '../geometry/vec';
+import { type Point, P, add, sub, angOf, len, DEG, cp, normA, dist, fmt } from '../geometry/vec';
 import { prims, bbox as shapeBox, unionBox, boxCentre, type Box, type Prim } from '../geometry/entity';
 import { affEnt, affMove, affScale, type Affine } from '../geometry/affine';
 import { dimGeom } from '../geometry/dims';
@@ -18,7 +18,7 @@ export type ChangeKind = 'doc' | 'sel' | 'tool' | 'prompt' | 'view' | 'aids' | '
 
 export const DEFAULT_OPTS: Record<string, any> = {
   rectFrom: 'corner', circFrom: 'centre', arcMode: '3pt', filletMode: 'fillet', filletR: 5, filletFollow: false, fixedR: '', dimMode: 'a', rotAngle: 60, rotCopies: 5, moveCopy: false, mirKeep: true,
-  offMode: 'shape', offSide: 'auto', offD: 5, offRound: '1', offCount: 1, offFollow: false, trimMode: 'whole', lockAspect: false,
+  offMode: 'shape', offSide: 'auto', offD: 5, offRound: '1', offCount: 1, offFollow: false, trimMode: 'whole', joinTol: 0.05, lockAspect: false,
 };
 
 export class Editor {
@@ -209,13 +209,31 @@ export class Editor {
     this.toast('Ungrouped one level');
   }
   /** Make Path: join selected lines, arcs and open paths that touch end-to-end into single paths (true arcs kept). */
-  makePathSel() {
-    const sel = this.selected().filter(e => e.type === 'line' || e.type === 'arc' || (e.type === 'poly' && !e.closed));
-    if (sel.length < 2) { this.toast('Select two or more lines, arcs or open paths that touch end to end'); return; }
-    const pieces: Piece[] = sel.map(e => e.type === 'line' ? { pts: [e.a, e.b], bulge: [0] }
+  /** After Make Path: keep showing open ends while that result stays selected. */
+  endsFlag = '';
+  /** Lines, arcs and open paths in the selection as path pieces. */
+  private piecesOf(sel: Entity[]): Piece[] {
+    return sel.map(e => e.type === 'line' ? { pts: [e.a, e.b], bulge: [0] }
       : e.type === 'arc' ? { pts: [P(e.c.x + e.r * Math.cos(e.a0), e.c.y + e.r * Math.sin(e.a0)), P(e.c.x + e.r * Math.cos(e.a1), e.c.y + e.r * Math.sin(e.a1))], bulge: [arcBulge(e.a0, e.a1)] }
       : { pts: (e as any).pts.slice(), bulge: (e as any).bulge?.slice(0, (e as any).pts.length - 1) || (e as any).pts.slice(1).map(() => 0) });
-    const joined = joinPieces(pieces), first = sel[0], made: string[] = [];
+  }
+  /** Ends of selected open shapes that don't meet another selected end (within the join tolerance) — i.e. gaps. */
+  openEndsOfSel(): Point[] {
+    const sel = this.selected().filter(e => e.type === 'line' || e.type === 'arc' || (e.type === 'poly' && !e.closed));
+    if (!sel.length || sel.length > 400 || (sel.length < 2 && this.endsFlag !== [...this.sel].join())) return [];
+    const ends: { p: Point; i: number }[] = [];
+    this.piecesOf(sel).forEach((pc, i) => { ends.push({ p: pc.pts[0], i }, { p: pc.pts[pc.pts.length - 1], i }); });
+    const tol = Math.max(1e-6, +this.opt.joinTol || 0);
+    return ends.filter((a, ai) => !ends.some((b, bi) => bi !== ai && dist(a.p, b.p) < tol)).map(x => x.p);
+  }
+  makePathSel() {
+    const sel = this.selected().filter(e => e.type === 'line' || e.type === 'arc' || (e.type === 'poly' && !e.closed));
+    if (sel.length < 1) { this.toast('Select lines, arcs or open paths that meet end to end'); return; }
+    const tol = Math.max(1e-6, +this.opt.joinTol || 0), rep = { gapsClosed: 0, maxGap: 0 };
+    const joined = joinPieces(this.piecesOf(sel), tol, rep), first = sel[0], made: string[] = [];
+    if (joined.length === sel.length && !rep.gapsClosed && !joined.some(j => j.closed)) {
+      this.toast(this.gapReport(joined, tol) || 'Nothing to join — these pieces do not meet end to end'); return;
+    }
     this.store.change(() => {
       const idx = this.doc.ents.indexOf(first);
       this.store.remove(sel.map(e => e.id));
@@ -226,9 +244,20 @@ export class Editor {
         made.push(ent.id);
       }
     });
-    this.sel = new Set(made); this.changed('sel');
-    const closed = joined.filter(j => j.closed).length;
-    this.toast(`Made ${joined.length} path${joined.length > 1 ? 's' : ''}${closed ? ` (${closed} closed)` : ''} from ${sel.length} pieces`);
+    this.sel = new Set(made); this.endsFlag = made.join(); this.changed('sel');
+    const closed = joined.filter(j => j.closed).length, open = joined.length - closed;
+    let msg = `Made ${joined.length} path${joined.length > 1 ? 's' : ''}${closed ? ` (${closed} closed)` : ''} from ${sel.length} pieces`;
+    if (rep.gapsClosed) msg += ` · closed ${rep.gapsClosed} tiny gap${rep.gapsClosed > 1 ? 's' : ''} (largest ${fmt(rep.maxGap, 3)} mm)`;
+    if (open) msg += ' · ' + (this.gapReport(joined, tol) || `${open} still open — open ends are marked red`);
+    this.toast(msg);
+  }
+  /** Describe the smallest remaining gap between open ends (bigger than the tolerance). */
+  private gapReport(paths: { pts: Point[]; closed: boolean }[], tol: number): string {
+    const ends = paths.filter(p => !p.closed).flatMap((p, i) => [{ p: p.pts[0], i }, { p: p.pts[p.pts.length - 1], i }]);
+    let best = Infinity;
+    for (let a = 0; a < ends.length; a++) for (let b = a + 1; b < ends.length; b++) { const d = dist(ends[a].p, ends[b].p); if (d >= tol && d < best) best = d; }
+    if (!isFinite(best)) return '';
+    return `smallest gap ${fmt(best, 3)} mm is bigger than the ${fmt(tol, 3)} mm "close gaps" setting — open ends are marked red`;
   }
   selectAll() { this.setSelection(this.doc.ents.filter(this.store.usable).map(e => e.id)); }
 

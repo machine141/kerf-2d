@@ -90,7 +90,9 @@ export class Renderer {
       const st = hi.get(e.id), col = st === 'selected' ? C['--sel'] : st === 'source' ? C['--source'] : (C[COLORS[e.color]?.tok] || C['--ink']);
       this.stroke(e as Shape, col, Math.max(1.1, e.w * k) + (st ? 1 : 0), st ? [6, 3] : undefined);
     }
-    for (const g of ghosts) this.stroke(g.s, g.style === 'selected' ? C['--sel'] : g.style === 'source' ? C['--source'] : C['--accent'], g.style === 'selected' ? 1.5 : 1.3, g.style === 'selected' ? undefined : [5, 4]);
+    for (const g of ghosts) g.style === 'remove' ? (ctx.globalAlpha = .28, this.stroke(g.s, C['--bad'], 10), ctx.globalAlpha = 1, this.stroke(g.s, C['--sheet'], 2, [4, 4])) : this.stroke(g.s, g.style === 'selected' ? C['--sel'] : g.style === 'source' ? C['--source'] : C['--accent'], g.style === 'selected' ? 1.5 : 1.3, g.style === 'selected' ? undefined : [5, 4]);
+    // open ends (gaps) of selected lines/arcs/open paths
+    if (ed.sel.size) { ctx.setLineDash([]); ctx.strokeStyle = C['--bad']; ctx.lineWidth = 2; for (const p of ed.openEndsOfSel()) { const s = ed.w2s(p); ctx.beginPath(); ctx.arc(s.x, s.y, 6, 0, TAU); ctx.stroke(); } }
     for (const fn of customs) { ctx.save(); fn(ctx, ed, C); ctx.restore(); }
     for (const l of labels) this.label(l.t, l.at);
 

@@ -111,26 +111,38 @@ export const arcBulge = (a0: number, a1: number) => Math.tan(normA(a1 - a0) / 4)
 export { clean, polar, dist };
 
 export interface Piece { pts: Point[]; bulge: number[] }
-/** Join open pieces that touch end-to-end into continuous paths (bulges follow direction). */
-export function joinPieces(pieces: Piece[], tol = 1e-6): (Piece & { closed: boolean })[] {
+/** Result of joining: paths, how many small gaps were closed, and the largest one. */
+export interface JoinReport { gapsClosed: number; maxGap: number }
+/**
+ * Join open pieces that meet end-to-end into continuous paths (bulges follow direction).
+ * Ends closer than `tol` count as touching — the gap is closed by moving the
+ * joining end onto its neighbour. At each step the nearest available end is used.
+ */
+export function joinPieces(pieces: Piece[], tol = 1e-6, report?: JoinReport): (Piece & { closed: boolean })[] {
   const rem = pieces.map(p => ({ pts: p.pts.slice(), bulge: p.bulge.slice() })), out: (Piece & { closed: boolean })[] = [];
   const rev = (p: Piece) => reversePath(p.pts, p.bulge);
+  const note = (d: number) => { if (report && d > 1e-6) { report.gapsClosed++; report.maxGap = Math.max(report.maxGap, d); } };
   while (rem.length) {
     let ch = rem.shift()!, grown = true;
     while (grown) {
       grown = false;
-      for (let i = 0; i < rem.length; i++) {
-        const q = rem[i], s = ch.pts[0], e = ch.pts[ch.pts.length - 1], qs = q.pts[0], qe = q.pts[q.pts.length - 1];
-        let next: Piece | null = null, prepend = false;
-        if (dist(e, qs) < tol) next = q; else if (dist(e, qe) < tol) next = rev(q);
-        else if (dist(s, qe) < tol) { next = q; prepend = true; } else if (dist(s, qs) < tol) { next = rev(q); prepend = true; }
-        if (!next) continue;
-        ch = prepend ? { pts: next.pts.concat(ch.pts.slice(1)), bulge: next.bulge.concat(ch.bulge) } : { pts: ch.pts.concat(next.pts.slice(1)), bulge: ch.bulge.concat(next.bulge) };
-        rem.splice(i, 1); grown = true; break;
-      }
+      const s = ch.pts[0], e = ch.pts[ch.pts.length - 1];
+      let best: { i: number; d: number; next: Piece; prepend: boolean } | null = null;
+      const consider = (i: number, d: number, next: () => Piece, prepend: boolean) => { if (d < tol && (!best || d < best.d)) best = { i, d, next: next(), prepend }; };
+      rem.forEach((q, i) => {
+        const qs = q.pts[0], qe = q.pts[q.pts.length - 1];
+        consider(i, dist(e, qs), () => q, false); consider(i, dist(e, qe), () => rev(q), false);
+        consider(i, dist(s, qe), () => q, true); consider(i, dist(s, qs), () => rev(q), true);
+      });
+      if (!best) break;
+      const b = best as { i: number; d: number; next: Piece; prepend: boolean };
+      note(b.d);
+      ch = b.prepend ? { pts: b.next.pts.slice(0, -1).concat(ch.pts), bulge: b.next.bulge.concat(ch.bulge) } : { pts: ch.pts.concat(b.next.pts.slice(1)), bulge: ch.bulge.concat(b.next.bulge) };
+      rem.splice(b.i, 1); grown = true;
     }
-    const closed = ch.pts.length > 2 && dist(ch.pts[0], ch.pts[ch.pts.length - 1]) < tol;
-    if (closed) ch.pts.pop();
+    const gap = dist(ch.pts[0], ch.pts[ch.pts.length - 1]);
+    const closed = ch.pts.length > 2 && gap < tol;
+    if (closed) { note(gap); ch.pts.pop(); }
     out.push({ ...ch, closed });
   }
   return out;

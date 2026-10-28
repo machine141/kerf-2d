@@ -28,48 +28,71 @@ export function pieceToShape(pts: Point[], bulge: number[], closed = false): Sha
   return out as Shape;
 }
 
-/** Returns the replacement shapes (empty = shape fully removed), or null if the shape type cannot be trimmed. */
-export function trimShape(e: Shape, click: Point, cutters: Prim[], mode: TrimMode = 'whole'): Shape[] | null {
+/** Extra "touch" cuts: ends of open shapes that land on (or within tol of) the trimmed shape. */
+export interface Touch { pts: Point[]; tol: number }
+export type TrimResult = { keep: Shape[]; removed: Shape[] } | { error: string };
+
+/** Returns the replacement shapes (empty = shape fully removed), or null if the shape type cannot be trimmed.
+ *  A closed shape with fewer than two crossings is left unchanged (returns [e]). */
+export function trimShape(e: Shape, click: Point, cutters: Prim[], mode: TrimMode = 'whole', touch?: Touch): Shape[] | null {
   if (e.type === 'dim') return null;
+  const r = trimInfo(e, click, cutters, mode, touch);
+  return 'error' in r ? [e] : r.keep;
+}
+
+/** Merge near-identical sorted values. */
+const uniq = (v: number[], tol = 1e-6) => { const s = v.slice().sort((a, b) => a - b), o: number[] = []; for (const x of s) if (!o.length || x - o[o.length - 1] > tol) o.push(x); return o; };
+const touchesOn = (my: Prim[], touch?: Touch) => { const out: Point[] = []; if (!touch) return out; for (const p of touch.pts) for (const m of my) { const q = nearestOnPrim(p, m); if (dist(p, q) <= touch.tol) out.push(cp(q)); } return out; };
+
+/** Trim with full detail: the pieces kept, the pieces removed (for preview), or why it can't be done. */
+export function trimInfo(e: Shape, click: Point, cutters: Prim[], mode: TrimMode = 'whole', touch?: Touch): TrimResult {
+  if (e.type === 'dim') return { error: 'Dimensions cannot be trimmed' };
   if (e.type === 'ellipse') e = { ...(e as any), type: 'poly', closed: true, pts: flatten(e).pts.map(cp) } as Shape;
   if (e.type === 'poly' && mode === 'segments') {
     const parts = explodePath(e);
     let bi = 0, bd = Infinity;
     parts.forEach((l, i) => { const d = Math.min(...prims(l).map(pr => dist(click, nearestOnPrim(click, pr)))); if (d < bd) { bd = d; bi = i; } });
     const others = cutters.concat(parts.filter((_, i) => i !== bi).flatMap(l => prims(l)));
-    const r = trimShape(parts[bi], click, others) || [];
-    return parts.slice(0, bi).concat(r, parts.slice(bi + 1));
+    const r = trimInfo(parts[bi], click, others, 'whole', touch);
+    if ('error' in r) return r;
+    return { keep: parts.slice(0, bi).concat(r.keep, parts.slice(bi + 1)), removed: r.removed };
   }
-  const cutsOf = (my: Prim[]) => { const out: Point[] = []; for (const m of my) for (const c of cutters) out.push(...intersect(m, c)); return out; };
+  const cutsOf = (my: Prim[]) => { const out: Point[] = []; for (const m of my) for (const c of cutters) out.push(...intersect(m, c)); return out.concat(touchesOn(my, touch)); };
   if (e.type === 'line') {
     const cuts = cutsOf(prims(e)), d = sub(e.b, e.a), L = dot(d, d), tAt = (p: Point) => dot(sub(p, e.a), d) / L, tc = tAt(click);
-    const ts = cuts.map(tAt).filter(t => t > 1e-9 && t < 1 - 1e-9);
+    const ts = uniq(cuts.map(tAt).filter(t => t > 1e-9 && t < 1 - 1e-9), 1e-9);
     const lo = Math.max(0, ...ts.filter(t => t < tc)), hi = Math.min(1, ...ts.filter(t => t > tc));
-    const at = (t: number) => cp(add(e.a, mul(d, t))), out: Shape[] = [];
-    if (lo > 0) out.push({ type: 'line', a: e.a, b: at(lo) } as Shape);
-    if (hi < 1) out.push({ type: 'line', a: at(hi), b: e.b } as Shape);
-    return out;
+    const at = (t: number) => cp(add(e.a, mul(d, t))), keep: Shape[] = [];
+    if (lo > 0) keep.push({ type: 'line', a: e.a, b: at(lo) } as Shape);
+    if (hi < 1) keep.push({ type: 'line', a: at(hi), b: e.b } as Shape);
+    return { keep, removed: [{ type: 'line', a: lo > 0 ? at(lo) : e.a, b: hi < 1 ? at(hi) : e.b } as Shape] };
   }
   if (e.type === 'circle') {
-    const cuts = cutsOf(prims(e)), ac = angOf(e.c, click), as = [...new Set(cuts.map(p => normA(angOf(e.c, p)).toFixed(12)))].map(Number);
-    if (as.length < 2) return [];
+    const cuts = cutsOf(prims(e)), ac = angOf(e.c, click);
+    let as = uniq(cuts.map(p => normA(angOf(e.c, p))), 1e-9);
+    if (as.length > 1 && as[as.length - 1] - as[0] > 2 * Math.PI - 1e-9) as = as.slice(1);
+    if (as.length < 2) return { error: closedMsg(as.length) };
     const ds = as.map(a => ({ a, d: normA(a - ac) })).sort((x, y) => x.d - y.d);
-    return [{ type: 'arc', c: e.c, r: e.r, a0: ds[0].a, a1: ds[ds.length - 1].a } as Shape];
+    const first = ds[0].a, last = ds[ds.length - 1].a;
+    return { keep: [{ type: 'arc', c: e.c, r: e.r, a0: first, a1: last } as Shape], removed: [{ type: 'arc', c: e.c, r: e.r, a0: last, a1: first } as Shape] };
   }
   if (e.type === 'arc') {
     const cuts = cutsOf(prims(e)), span = normA(e.a1 - e.a0), sAt = (p: Point) => normA(angOf(e.c, p) - e.a0), sc = sAt(click);
-    const ss = cuts.map(sAt).filter(s => s > 1e-9 && s < span - 1e-9);
-    const lo = Math.max(0, ...ss.filter(s => s < sc)), hi = Math.min(span, ...ss.filter(s => s > sc)), out: Shape[] = [];
-    if (lo > 1e-9) out.push({ type: 'arc', c: e.c, r: e.r, a0: e.a0, a1: normA(e.a0 + lo) } as Shape);
-    if (hi < span - 1e-9) out.push({ type: 'arc', c: e.c, r: e.r, a0: normA(e.a0 + hi), a1: e.a1 } as Shape);
-    return out;
+    const ss = uniq(cuts.map(sAt).filter(s => s > 1e-9 && s < span - 1e-9), 1e-9);
+    const lo = Math.max(0, ...ss.filter(s => s < sc)), hi = Math.min(span, ...ss.filter(s => s > sc)), keep: Shape[] = [];
+    if (lo > 1e-9) keep.push({ type: 'arc', c: e.c, r: e.r, a0: e.a0, a1: normA(e.a0 + lo) } as Shape);
+    if (hi < span - 1e-9) keep.push({ type: 'arc', c: e.c, r: e.r, a0: normA(e.a0 + hi), a1: e.a1 } as Shape);
+    return { keep, removed: [{ type: 'arc', c: e.c, r: e.r, a0: normA(e.a0 + lo), a1: normA(e.a0 + hi) } as Shape] };
   }
-  if (e.type === 'poly') return trimPath(e, click, cutters);
-  return null;
+  if (e.type === 'poly') return trimPath(e, click, cutters, touch);
+  return { error: 'This object cannot be trimmed' };
 }
+const closedMsg = (n: number) => n === 0
+  ? 'Nothing crosses this closed shape, so there is nothing to trim back to. To remove it, select it and press Delete.'
+  : 'Only one crossing on this closed shape — trimming needs two. Zoom in and check the shapes really cross.';
 
 /** Trim a path as a whole between the two nearest cuts around the click. */
-function trimPath(e: PathLike, click: Point, cutters: Prim[]): Shape[] {
+function trimPath(e: PathLike, click: Point, cutters: Prim[], touch?: Touch): TrimResult {
   const segs = segsOf(e), cum = [0];
   for (const s of segs) cum.push(cum[cum.length - 1] + s.len);
   const total = cum[segs.length];
@@ -85,21 +108,26 @@ function trimPath(e: PathLike, click: Point, cutters: Prim[]): Shape[] {
       if (c.t === 'seg' && (Math.max(c.a.x, c.b.x) < box.x0 || Math.min(c.a.x, c.b.x) > box.x1 || Math.max(c.a.y, c.b.y) < box.y0 || Math.min(c.a.y, c.b.y) > box.y1)) continue;
       for (const p of intersect(pr, c)) cuts.push({ s: cum[i] + clamp01(segParam(s, p)) * s.len, p: cp(p) });
     }
+    for (const p of touchesOn([pr], touch)) cuts.push({ s: cum[i] + clamp01(segParam(s, p)) * s.len, p });
   });
-  const exact = (s: number) => cuts.find(c => Math.abs(c.s - s) < 1e-7)?.p;
+  const exact = (s: number) => cuts.find(c => Math.abs(c.s - s) < 1e-6)?.p;
   if (!e.closed) {
-    const ss = cuts.map(c => c.s).filter(s => s > 1e-7 && s < total - 1e-7);
-    const lo = Math.max(0, ...ss.filter(s => s < sc)), hi = Math.min(total, ...ss.filter(s => s > sc)), out: Shape[] = [];
-    if (lo > 1e-7) { const p = subPath(e, 0, lo, exact); out.push(pieceToShape(p.pts, p.bulge)); }
-    if (hi < total - 1e-7) { const p = subPath(e, hi, total, exact); out.push(pieceToShape(p.pts, p.bulge)); }
-    return out;
+    const ss = uniq(cuts.map(c => c.s).filter(s => s > 1e-7 && s < total - 1e-7));
+    const lo = Math.max(0, ...ss.filter(s => s < sc)), hi = Math.min(total, ...ss.filter(s => s > sc)), keep: Shape[] = [];
+    if (lo > 1e-7) { const p = subPath(e, 0, lo, exact); keep.push(pieceToShape(p.pts, p.bulge)); }
+    if (hi < total - 1e-7) { const p = subPath(e, hi, total, exact); keep.push(pieceToShape(p.pts, p.bulge)); }
+    const r = subPath(e, lo, hi, exact);
+    return { keep, removed: r.pts.length > 1 ? [pieceToShape(r.pts, r.bulge)] : [] };
   }
-  const ss = [...new Set(cuts.map(c => +(((c.s % total) + total) % total).toFixed(9)))];
-  if (ss.length < 2) return [];
+  let ss = uniq(cuts.map(c => ((c.s % total) + total) % total));
+  if (ss.length > 1 && ss[ss.length - 1] - ss[0] > total - 1e-6) ss = ss.slice(1);
+  if (ss.length < 2) return { error: closedMsg(ss.length) };
   const below = ss.filter(s => s < sc), above = ss.filter(s => s > sc);
   const lo = below.length ? Math.max(...below) : Math.max(...ss), hi = above.length ? Math.min(...above) : Math.min(...ss);
-  const p = subPath(e, hi, lo > hi ? lo : lo + total, s => exact(s) ?? exact(s + total));
-  return [pieceToShape(p.pts, p.bulge)];
+  const ex = (s: number) => exact(s) ?? exact(s - total) ?? exact(s + total);
+  const p = subPath(e, hi, lo > hi ? lo : lo + total, ex);
+  const r = subPath(e, lo, lo < hi ? hi : hi + total, ex);
+  return { keep: [pieceToShape(p.pts, p.bulge)], removed: [pieceToShape(r.pts, r.bulge)] };
 }
 const clamp01 = (t: number) => Math.max(0, Math.min(1, t));
 function segBox(s: PSeg) {

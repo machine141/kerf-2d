@@ -48,5 +48,6 @@ export const myTool = pointTool({
 Register it in `src/tools/index.ts`. The toolbox button, keyboard shortcut and option strip appear automatically, and snapping, typed coordinates, drag-to-draw, Backspace (remove last point), undo and export all work without extra code.
 
 ## Changelog
+- **v0.4.1**: mouse wheel always zooms at the pointer (Shift+wheel pans; optional "two-finger scroll pans" setting); Trim previews what will be removed and never deletes a closed shape whole (needs two crossings); ends of lines/arcs within the close-gaps tolerance count as crossings; Make Path closes gaps up to 0.05 mm (setting), reports larger gaps and marks open ends red.
 - **v0.4**: paths with true arcs (bulges) everywhere (draw, trim, transform, SVG/DXF); Fillet / chamfer tool (click a corner or two lines; wheel, cursor or typed size; all corners); Arc tool with 3-point, tangent and centre modes; hover snap points (ends, midpoints, centres, N/E/S/W) and alignment guides; Group / Ungroup (Explode ungroups one level) and Make Path; Bed size selector; F-key labels on toggles.
 - **v0.3**: TypeScript framework; boundary finder (Closed contour); tangent/perpendicular/nearest snaps; trim modes; DXF export options; unit entry; 2D Design F-keys.

@@ -196,6 +196,15 @@ export function runSelfTest(): { results: TestResult[]; doc: string | null } {
     const tk1 = ed.snapAt(P(565.4, 350)); ed.track = [P(565, 310), P(590, 380)]; const tk2 = ed.snapAt(P(565.3, 379.6));
     ed.setTool('select'); d.aids.attach.on = false;
     ok('Alignment guides lock to touched points', tk1.k === 'track' && tk1.p.x === 565 && tk1.p.y === 350 && tk2.k === 'track' && tk2.p.x === 565 && tk2.p.y === 380, `vertical guide → (${tk1.p.x}, ${tk1.p.y}) · crossing of two guides → (${tk2.p.x}, ${tk2.p.y})`);
+    // 12b · fixes: trim keeps closed shapes, Make Path closes tiny gaps
+    ed.setTool('rect'); typed(['abs', 620, 300], ['rel', 40, 30]); const gl: any = last(); ed.setTool('select');
+    ed.opt.arcMode = '3pt'; ed.setTool('arc'); typed(['abs', 660, 320], ['abs', 680, 320], ['abs', 670, 325]); ed.opt.arcMode = 'centre'; ed.setTool('select');
+    const nBefore = ed.doc.ents.length; trimAt(ed, P(660, 310), 2); const glKept: any = byId(gl.id);
+    ok('Trim never deletes a closed shape whole', ed.doc.ents.length === nBefore && !!glKept && glKept.closed, 'lens edge with only one crossing (bridge arc end) → refused, rectangle kept');
+    ed.setTool('line'); typed(['abs', 620, 350], ['abs', 650, 350]); ed.finish(); const g1: any = last(); typed(['abs', 650, 350], ['abs', 650, 370]); ed.finish(); const g2: any = last();
+    typed(['abs', 650, 370], ['abs', 620, 370]); ed.finish(); const g3: any = last(); typed(['abs', 620, 370], ['abs', 620, 350.02]); ed.finish(); const g4: any = last(); ed.setTool('select');
+    ed.setSelection([g1.id, g2.id, g3.id, g4.id]); ed.makePathSel(); const gp: any = ed.selected()[0];
+    ok('Make Path closes a 0.02 mm gap', ed.sel.size === 1 && gp.type === 'poly' && gp.closed && gp.pts.length === 4, '4 lines with a 0.02 mm gap → 1 closed path (close-gaps setting 0.05 mm)');
     // 12 · file round trips
     d.layers[1].visible = false;
     const geo = ed.doc.ents.filter(e => e.type !== 'dim'), geoNoEll = geo.filter(e => e.type !== 'ellipse');
