@@ -69,3 +69,22 @@ describe('bend to a profile', () => {
     expect(tightestOf(presetNodes('straight', 100), 'look', 100)).toBe(Infinity);
   });
 });
+describe('slits run edge to edge (v0.10.1)', () => {
+  it('every column reaches to G from both edges, even on a tapered shape', () => {
+    const hex = { type: 'poly', closed: true, pts: [P(15, 0), P(35, 0), P(50, 55), P(35, 110), P(15, 110), P(0, 55)] } as Shape;
+    const p = go([hex], presetNodes('scurve', 110), { where: 'all', G: 3, L: 20 });
+    // group slits by column (same y), check min/max x against the hexagon's width at that height (inset by G)
+    const cols = new Map<number, any[]>(); for (const s of p.slits as any[]) { const k = Math.round(s.a.y * 1000); cols.set(k, [...(cols.get(k) || []), s]); }
+    let checked = 0;
+    for (const [, ss] of cols) {
+      const xs = ss.flatMap((s: any) => [s.a.x, s.b.x]), lo = Math.min(...xs), hi = Math.max(...xs);
+      const W = hi - lo; if (W < 6) continue;
+      // both ends sit ≈ G inside the outline: symmetric about the centre line x = 25
+      expect(lo + hi).toBeCloseTo(50, 0); checked++;
+      // and the pieces in a column never leave a gap wider than G (+ tolerance)
+      const segs = ss.map((s: any) => [Math.min(s.a.x, s.b.x), Math.max(s.a.x, s.b.x)]).sort((a: any, b: any) => a[0] - b[0]);
+      for (let i = 1; i < segs.length; i++) expect(segs[i][0] - segs[i - 1][1]).toBeLessThanOrEqual(3 + 1e-6);
+    }
+    expect(checked).toBeGreaterThan(20);
+  });
+});

@@ -171,14 +171,23 @@ export function bendPlan(shapes: Shape[], nodes: PNode[], o: BendOpts): BendPlan
   const co = new ClipperLib.ClipperOffset(2, 0.0005 * S); co.AddPaths(solid, ClipperLib.JoinType.jtRound, ClipperLib.EndType.etClosedPolygon);
   const ins = new ClipperLib.Paths(); co.Execute(ins, -o.G * S); const inset: Point[][] = (ins as any[]).map(fromI);
   const vs = inset.flat().map(q => q.y), v0 = vs.length ? Math.min(...vs) : 0;
-  const Pd = o.L + o.G;
+  /**
+   * Slits across one column, fitted to that column's own width so they always run
+   * edge to edge (G clear): A = m slits with G gaps between; B = the same shifted half
+   * a slit, its end slits reaching the edges. m is the whole number of slits nearest
+   * the chosen slit length.
+   */
   const cutsAt = (s: number, kind: 'A' | 'B'): [number, number][] => {
     const hits: number[] = [];
     for (const pl of inset) for (let i = 0; i < pl.length; i++) { const a = pl[i], b = pl[(i + 1) % pl.length]; if ((a.x <= s) !== (b.x <= s)) hits.push(a.y + (s - a.x) / (b.x - a.x) * (b.y - a.y)); }
-    hits.sort((a, b) => a - b); const out: [number, number][] = [], off = kind === 'B' ? Pd / 2 : 0;
+    hits.sort((a, b) => a - b); const out: [number, number][] = [], min = Math.max(o.G, 1);
     for (let i = 0; i + 1 < hits.length; i += 2) {
-      const ia = hits[i], ib = hits[i + 1];
-      for (let c0 = v0 - Pd + off; c0 < ib; c0 += Pd) { const a = Math.max(ia, c0), b = Math.min(ib, c0 + o.L); if (b - a >= Math.max(2 * o.G, 1)) out.push([a, b]); }
+      const a = hits[i], b = hits[i + 1], w = b - a; if (w < min) continue;
+      const m = Math.max(1, Math.round((w + o.G) / (o.L + o.G))), L = (w - (m - 1) * o.G) / m;
+      if (kind === 'A') { for (let k = 0; k < m; k++) out.push([a + k * (L + o.G), a + k * (L + o.G) + L]); continue; }
+      let y = a;
+      for (let k = 0; k < m; k++) { const c = a + L / 2 + k * (L + o.G); if (c - o.G / 2 - y >= min) out.push([y, c - o.G / 2]); y = c + o.G / 2; }
+      if (b - y >= min) out.push([y, b]);
     }
     return out;
   };

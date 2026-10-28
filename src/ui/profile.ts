@@ -38,7 +38,7 @@ export function openBend(ed: Editor) {
       <div class="ctl">
         <p class="hint" id="pbInfo"></p>
         <label class="sl">Bends along ${seg('pbAxis', [['v', 'Up–down'], ['h', 'Left–right']])}</label>
-        ${num('pbDepth', 'Depth of the curve', S.depth, 10, '%', 0, 'Makes the whole profile deeper or flatter')}
+        <label class="sl depth" title="Makes the whole profile deeper or flatter">Depth of the curve <input type="range" id="pbDepthR" min="0" max="200" step="1" value="${S.depth}"><input type="text" inputmode="decimal" id="pbDepth" value="${S.depth}" data-step="10" data-min="0"> <span>%</span> <button type="button" class="btn" id="pbDepth0" title="Back to 100%">↺</button></label>
         <h4>Material</h4>
         <label class="sl">Material <select id="pbMat">${MATERIALS.map(m => `<option value="${m.id}">${m.name}</option>`).join('')}</select></label>
         ${num('pbT', 'Thickness', S.t, 0.5, 'mm', 0.5)}${num('pbK', 'Laser kerf', S.kerf, 0.01, 'mm', 0)}
@@ -186,21 +186,31 @@ export function openBend(ed: Editor) {
   const later = () => { clearTimeout(timer); timer = window.setTimeout(() => update(), 120); };
   function syncInputs() {
     const set = (id: string, v: number) => { const el = $<HTMLInputElement>(id); if (document.activeElement !== el) el.value = String(+v.toFixed(3)); };
-    set('#pbD', S.D); set('#pbL', S.L); set('#pbG', S.G); set('#pbT', S.t); set('#pbK', S.kerf); set('#pbRD', S.ribDepth); set('#pbSp', S.speed); set('#pbPa', S.passes); set('#pbDepth', S.depth);
+    set('#pbD', S.D); set('#pbL', S.L); set('#pbG', S.G); set('#pbT', S.t); set('#pbK', S.kerf); set('#pbRD', S.ribDepth); set('#pbSp', S.speed); set('#pbPa', S.passes); set('#pbDepth', S.depth); dR.value = String(S.depth);
   }
   const bindNum = (id: string, key: keyof typeof S, min = 0) => { const el = $<HTMLInputElement>(id); el.addEventListener('input', () => { const v = parseFloat(el.value); if (isFinite(v) && v >= min) { (S as any)[key] = v; later(); } }); };
   bindNum('#pbT', 't', 0.5); bindNum('#pbK', 'kerf', 0); bindNum('#pbD', 'D', 0.3); bindNum('#pbL', 'L', 4); bindNum('#pbG', 'G', 0.5); bindNum('#pbRD', 'ribDepth', 5); bindNum('#pbSp', 'speed', 0.5); bindNum('#pbPa', 'passes', 1);
   // depth: scale every point's forward/back distance
   const dEl = $<HTMLInputElement>('#pbDepth');
-  dEl.addEventListener('input', () => { const v = parseFloat(dEl.value); if (!isFinite(v) || v < 0) return; const k = S.depth > 0 ? v / S.depth : 0; const ns = nodes.map(n => ({ ...n, z: S.depth > 0 ? n.z * k : n.z })); if (ok(ns) || v < S.depth) { nodes = ns; S.depth = v; later(); } else { ed.toast('That deep, the wood won’t bend tight enough'); } });
+  const dR = $<HTMLInputElement>('#pbDepthR');
+  /** scale every point's forward/back distance to the new depth (stops where the wood can't follow) */
+  const setDepth = (v: number) => {
+    if (!isFinite(v) || v < 0) return;
+    const k = S.depth > 0 ? v / S.depth : 0, ns = nodes.map(n => ({ ...n, z: S.depth > 0 ? n.z * k : n.z }));
+    if (ok(ns) || v < S.depth) { nodes = ns; S.depth = v; dR.value = String(v); if (document.activeElement !== dEl) dEl.value = String(v); later(); }
+    else { dR.value = String(S.depth); ed.toast('That deep, the wood won\u2019t bend tight enough'); }
+  };
+  dEl.addEventListener('input', () => setDepth(parseFloat(dEl.value)));
+  dR.addEventListener('input', () => setDepth(parseFloat(dR.value)));
+  $('#pbDepth0').onclick = () => setDepth(100);
   const segBind = (id: string, f: (v: string) => void) => root.querySelectorAll<HTMLElement>(`#${id} button`).forEach(b => b.onclick = () => { f(b.dataset.v!); update(); });
   segBind('pbMode', v => { S.mode = v as BendMode; if (S.mode === 'look' && !monotoneU(profileCurve(nodes))) { nodes = presetNodes(S.preset, Lu(), S.depth / 100); ed.toast('That profile turns back on itself, so it was reset for "Keep how it looks"'); } });
   segBind('pbAxis', v => { S.axis = v as Axis; const k = Lu() / (nodes[nodes.length - 1].u || 1); nodes = nodes.map(n => ({ u: n.u * k, z: n.z * k })); });
   segBind('pbWhere', v => S.where = v as any); segBind('pbAdapt', v => S.adapt = v === '1'); segBind('pbRibs', v => S.ribs = +v);
   root.querySelectorAll<HTMLElement>('[data-preset]').forEach(b => b.onclick = () => {
-    S.preset = b.dataset.preset!; let d = S.depth / 100, ns = presetNodes(S.preset, Lu(), d);
+    S.preset = b.dataset.preset!; let d = 1, ns = presetNodes(S.preset, Lu(), d);   // every preset starts at 100%
     for (let k = 0; k < 12 && !ok(ns); k++) { d *= 0.8; ns = presetNodes(S.preset, Lu(), d); }   // shallow it until the wood can take it
-    if (d !== S.depth / 100) { S.depth = Math.round(d * 100); ed.toast(`Made shallower (depth ${S.depth}%) so the wood can bend to it`); }
+    S.depth = Math.round(d * 100); dR.value = String(S.depth); if (d < 1) ed.toast(`Made shallower (depth ${S.depth}%) so the wood can bend to it`);
     nodes = ns; update();
   });
   $<HTMLSelectElement>('#pbMat').onchange = e => { S.mat = (e.target as HTMLSelectElement).value; update(); };
