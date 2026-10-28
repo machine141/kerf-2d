@@ -101,7 +101,7 @@ export function findRegion(click: Point, shapes: Shape[], tolMerge = 1e-6): Regi
   return { ok: false, pts: [], reason: 'Not a closed boundary — there may be a small gap' };
 }
 
-function pointInPoly(p: Point, pts: Point[]): boolean {
+export function pointInPoly(p: Point, pts: Point[]): boolean {
   let inside = false;
   for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
     const a = pts[i], b = pts[j];

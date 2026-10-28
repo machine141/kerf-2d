@@ -8,6 +8,7 @@ import { affEnt, affMove, affScale, type Affine } from '../geometry/affine';
 import { dimGeom } from '../geometry/dims';
 import { joinPieces, arcBulge, type Piece } from '../geometry/path';
 import { explodePath, pieceToShape } from '../geometry/trim';
+import { booleanShapes, isClosedShape, areaOf, type BoolOp } from '../geometry/boolean';
 import { snapPoint, type SnapResult } from '../snap/snap';
 import { DocStore } from '../model/document';
 import type { Entity, Shape } from '../model/types';
@@ -18,7 +19,7 @@ export type ChangeKind = 'doc' | 'sel' | 'tool' | 'prompt' | 'view' | 'aids' | '
 
 export const DEFAULT_OPTS: Record<string, any> = {
   rectFrom: 'corner', circFrom: 'centre', arcMode: '3pt', filletMode: 'fillet', filletR: 5, filletFollow: false, fixedR: '', dimMode: 'a', rotAngle: 60, rotCopies: 5, moveCopy: false, mirKeep: true,
-  offMode: 'shape', offSide: 'auto', offD: 5, offRound: '1', offCount: 1, offFollow: false, trimMode: 'whole', joinTol: 0.05, lockAspect: false,
+  offMode: 'shape', offSide: 'auto', offD: 5, offRound: '1', offCount: 1, offFollow: false, trimMode: 'whole', joinTol: 0.05, ringD: 10, ringHole: 5, ringOverlap: 2, lockAspect: false,
 };
 
 export class Editor {
@@ -208,7 +209,6 @@ export class Editor {
     this.store.change(() => { for (const e of sel) { e.group = e.group!.slice(0, -1); if (!e.group.length) delete e.group; } });
     this.toast('Ungrouped one level');
   }
-  /** Make Path: join selected lines, arcs and open paths that touch end-to-end into single paths (true arcs kept). */
   /** After Make Path: keep showing open ends while that result stays selected. */
   endsFlag = '';
   /** Lines, arcs and open paths in the selection as path pieces. */
@@ -226,6 +226,7 @@ export class Editor {
     const tol = Math.max(1e-6, +this.opt.joinTol || 0);
     return ends.filter((a, ai) => !ends.some((b, bi) => bi !== ai && dist(a.p, b.p) < tol)).map(x => x.p);
   }
+  /** Make Path: join selected lines, arcs and open paths that touch end-to-end into single paths (true arcs kept). */
   makePathSel() {
     const sel = this.selected().filter(e => e.type === 'line' || e.type === 'arc' || (e.type === 'poly' && !e.closed));
     if (sel.length < 1) { this.toast('Select lines, arcs or open paths that meet end to end'); return; }
@@ -259,6 +260,67 @@ export class Editor {
     if (!isFinite(best)) return '';
     return `smallest gap ${fmt(best, 3)} mm is bigger than the ${fmt(tol, 3)} mm "close gaps" setting — open ends are marked red`;
   }
+  /** Union / subtract / intersect the selected closed shapes. Subtract and intersect keep the largest shape. */
+  booleanSel(op: BoolOp) {
+    const sel = this.selected(), closed = sel.filter(e => isClosedShape(e as Shape));
+    const r = booleanShapes(op, closed as Shape[]);
+    if ('error' in r) { this.toast(r.error); return; }
+    const base = closed.reduce((b, e) => areaOf(e as Shape) > areaOf(b as Shape) ? e : b, closed[0]);
+    const made = this.replaceWith(closed, r.shapes, base);
+    const name = { union: 'Joined', subtract: 'Subtracted', intersect: 'Intersected' }[op];
+    this.toast(`${name} ${closed.length} shapes → ${made.length} outline${made.length > 1 ? 's (grouped)' : ''}${sel.length > closed.length ? ` · ${sel.length - closed.length} open shape(s) ignored` : ''}`);
+  }
+  /** Replace entities with new shapes (attributes and group from `like`); several results are grouped. Returns new ids. */
+  replaceWith(old: Entity[], shapes: Shape[], like: Entity): string[] {
+    const made: string[] = [];
+    this.store.change(() => {
+      const idx = this.doc.ents.indexOf(like);
+      this.store.remove(old.map(e => e.id));
+      const g = shapes.length > 1 ? 'g' + (this.doc.seq++) : null;
+      for (const sh of shapes) {
+        const ent = this.store.add(sh, { layer: like.layer, color: like.color, w: like.w });
+        const grp = [...(like.group || []), ...(g ? [g] : [])]; if (grp.length) ent.group = grp;
+        this.doc.ents.splice(this.doc.ents.indexOf(ent), 1); this.doc.ents.splice(Math.min(Math.max(0, idx) + made.length, this.doc.ents.length), 0, ent);
+        made.push(ent.id);
+      }
+    });
+    this.sel = new Set(made); this.changed('sel');
+    return made;
+  }
+  /**
+   * Tidy: remove zero-size and duplicate objects, and join lines/arcs/open paths
+   * that meet (or nearly meet, within "close gaps") into paths. Works on the
+   * selection, or the whole drawing when nothing is selected.
+   */
+  tidySel() {
+    const scope = (this.sel.size ? this.selected() : this.doc.ents.filter(this.store.usable)).filter(e => e.type !== 'dim');
+    const tiny = scope.filter(e => (e.type === 'line' && dist(e.a, e.b) < 1e-6) || ((e.type === 'circle' || e.type === 'arc') && e.r < 1e-6) || (e.type === 'poly' && e.pts.length < 2));
+    const seen = new Map<string, Entity>(), dup: Entity[] = [];
+    for (const e of scope) { if (tiny.includes(e)) continue; const k = shapeKey(e as Shape); if (seen.has(k)) dup.push(e); else seen.set(k, e); }
+    const gone = new Set([...tiny, ...dup].map(e => e.id));
+    const open = scope.filter(e => !gone.has(e.id) && (e.type === 'line' || e.type === 'arc' || (e.type === 'poly' && !e.closed)));
+    const tol = Math.max(1e-6, +this.opt.joinTol || 0), rep = { gapsClosed: 0, maxGap: 0 };
+    const byKey = new Map<string, Entity[]>(); for (const e of open) { const k = `${e.layer}|${e.color}|${(e.group || []).join('/')}`; byKey.set(k, [...(byKey.get(k) || []), e]); }
+    let joinedFrom = 0, joinedInto = 0, closedN = 0;
+    this.store.change(() => {
+      if (gone.size) this.store.remove([...gone]);
+      for (const grp of byKey.values()) {
+        if (grp.length < 2) continue;
+        const res = joinPieces(this.piecesOf(grp), tol, rep);
+        if (res.length === grp.length && !res.some(j => j.closed)) continue;
+        joinedFrom += grp.length; joinedInto += res.length; closedN += res.filter(j => j.closed).length;
+        const like = grp[0]; this.store.remove(grp.map(e => e.id));
+        for (const j of res) { const ent = this.store.add(pieceToShape(j.pts, j.closed ? j.bulge : j.bulge.slice(0, j.pts.length - 1), j.closed), { layer: like.layer, color: like.color, w: like.w }); if (like.group?.length) ent.group = like.group.slice(); }
+      }
+    });
+    this.sel = new Set(); this.changed('sel');
+    const parts: string[] = [];
+    if (dup.length) parts.push(`removed ${dup.length} duplicate${dup.length > 1 ? 's' : ''}`);
+    if (tiny.length) parts.push(`removed ${tiny.length} zero-size object${tiny.length > 1 ? 's' : ''}`);
+    if (joinedFrom) parts.push(`joined ${joinedFrom} pieces into ${joinedInto} path${joinedInto > 1 ? 's' : ''}${closedN ? ` (${closedN} closed)` : ''}`);
+    if (rep.gapsClosed) parts.push(`closed ${rep.gapsClosed} gap${rep.gapsClosed > 1 ? 's' : ''} (largest ${fmt(rep.maxGap, 3)} mm)`);
+    this.toast(parts.length ? 'Tidy: ' + parts.join(' · ') : 'Tidy: nothing to fix');
+  }
   selectAll() { this.setSelection(this.doc.ents.filter(this.store.usable).map(e => e.id)); }
 
   // ---- view ----
@@ -281,3 +343,16 @@ function arcDist(p: Point, pr: Extract<Prim, { t: 'arc' }>) {
   return Math.min(Math.hypot(p.x - s.x, p.y - s.y), Math.hypot(p.x - e.x, p.y - e.y));
 }
 export { boxCentre };
+
+/** Geometry fingerprint for duplicate detection (direction-independent for lines). */
+function shapeKey(e: Shape): string {
+  const r = (v: number) => (Math.round(v * 1e5) / 1e5).toFixed(5), pt = (p: Point) => r(p.x) + ',' + r(p.y);
+  switch (e.type) {
+    case 'line': return 'L' + [pt(e.a), pt(e.b)].sort().join(';');
+    case 'circle': return 'C' + pt(e.c) + ';' + r(e.r);
+    case 'arc': return 'A' + pt(e.c) + ';' + r(e.r) + ';' + r(normA(e.a0)) + ';' + r(normA(e.a1));
+    case 'ellipse': return 'E' + JSON.stringify(e);
+    case 'poly': return 'P' + (e.closed ? 'c' : 'o') + e.pts.map(pt).join(';') + '|' + (e.bulge || []).map(r).join(';');
+    default: return Math.random().toString();
+  }
+}

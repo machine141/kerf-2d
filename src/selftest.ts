@@ -205,6 +205,29 @@ export function runSelfTest(): { results: TestResult[]; doc: string | null } {
     typed(['abs', 650, 370], ['abs', 620, 370]); ed.finish(); const g3: any = last(); typed(['abs', 620, 370], ['abs', 620, 350.02]); ed.finish(); const g4: any = last(); ed.setTool('select');
     ed.setSelection([g1.id, g2.id, g3.id, g4.id]); ed.makePathSel(); const gp: any = ed.selected()[0];
     ok('Make Path closes a 0.02 mm gap', ed.sel.size === 1 && gp.type === 'poly' && gp.closed && gp.pts.length === 4, '4 lines with a 0.02 mm gap → 1 closed path (close-gaps setting 0.05 mm)');
+    // 12c · v0.5: booleans, Add a ring, Tidy
+    ed.store.change(() => { ed.store.add({ type: 'circle', c: P(700, 60), r: 10 } as Shape); ed.store.add({ type: 'circle', c: P(710, 60), r: 10 } as Shape); });
+    const n0 = ed.doc.ents.length; ed.setTool('select'); ed.setSelection([ed.doc.ents[n0 - 2].id, ed.doc.ents[n0 - 1].id]); ed.booleanSel('union'); const un: any = ed.selected()[0];
+    const unLen = un && un.type === 'poly' ? pathLength(un) : 0, unExp = 2 * 10 * (4 * Math.PI / 3);
+    ok('Union of two circles keeps true arcs', ed.sel.size === 1 && un.pts.length === 2 && hasBulge(un) && Math.abs(unLen - unExp) < 1e-8 && un.pts.every((q: Point) => Math.abs(q.x - 705) < 1e-9),
+      `2 arcs meeting at (705, ${fmt(60 - Math.sqrt(75), 6)}) and (705, ${fmt(60 + Math.sqrt(75), 6)}) · perimeter ${fmt(unLen, 9)} mm`);
+    ed.store.change(() => { ed.store.add({ type: 'poly', closed: true, pts: [P(700, 100), P(740, 100), P(740, 120), P(700, 120)] } as Shape); ed.store.add({ type: 'circle', c: P(720, 120), r: 5 } as Shape); });
+    const n1 = ed.doc.ents.length; ed.setSelection([ed.doc.ents[n1 - 2].id, ed.doc.ents[n1 - 1].id]); ed.booleanSel('subtract'); const sbt: any = ed.selected()[0];
+    const sbExp = 40 + 20 + 20 + 30 + Math.PI * 5;
+    ok('Subtract a circle from a rectangle (exact bite)', ed.sel.size === 1 && Math.abs(pathLength(sbt) - sbExp) < 1e-8, `perimeter ${fmt(pathLength(sbt), 9)} mm (expected ${fmt(sbExp, 9)})`);
+    ed.store.change(() => { ed.store.add({ type: 'poly', closed: true, pts: [P(700, 150), P(740, 150), P(740, 170), P(700, 170)] } as Shape); });
+    const tag = last(); ed.setSelection([]); ed.opt.ringD = 10; ed.opt.ringHole = 5; ed.opt.ringOverlap = 2;
+    ed.setTool('ring'); ed.tool.down!(ed, P(720, 176), { sp: P(0, 0), shift: false, alt: false, ctrl: false }); ed.setTool('select');
+    const ringOut: any = ed.doc.ents.find(e => e.type === 'poly' && e.group?.length && e.pts.some((q: Point) => q.x === 716 && q.y === 170));
+    const ringHole: any = ed.doc.ents.find(e => e.type === 'circle' && e.c.x === 720 && e.c.y === 173);
+    const ringExp = 40 + 20 + 20 + 32 + 5 * (2 * Math.PI - 2 * Math.acos(3 / 5));
+    ok('Add a ring: tab joined on, hole added, grouped', !byId(tag.id) && !!ringOut && !!ringHole && ringHole.r === 2.5 && ringOut.group?.[0] === ringHole.group?.[0] && Math.abs(pathLength(ringOut) - ringExp) < 1e-8,
+      `ring Ø10 centred (720, 173), hole Ø5, wall 2.5 mm · outline ${ringOut ? fmt(pathLength(ringOut), 6) : '?'} mm`);
+    ed.store.change(() => { const A = { type: 'line', a: P(700, 200), b: P(730, 200) } as Shape; ed.store.add(A); ed.store.add({ type: 'line', a: P(730, 200), b: P(700, 200) } as Shape);
+      ed.store.add({ type: 'line', a: P(730, 200), b: P(730, 220) } as Shape); ed.store.add({ type: 'line', a: P(730, 220), b: P(700, 220) } as Shape); ed.store.add({ type: 'line', a: P(700, 220), b: P(700, 200.03) } as Shape); ed.store.add({ type: 'line', a: P(705, 205), b: P(705, 205) } as Shape); });
+    const n2 = ed.doc.ents.length, tidyIds = ed.doc.ents.slice(n2 - 6).map(e => e.id); ed.setSelection(tidyIds); ed.tidySel();
+    const tp: any = ed.doc.ents[ed.doc.ents.length - 1];
+    ok('Tidy removes duplicates and closes small gaps', ed.doc.ents.length === n2 - 5 && tp.type === 'poly' && tp.closed && tp.pts.length === 4, '1 duplicate + 1 zero-length line removed · 4 lines (0.03 mm gap) → 1 closed path');
     // 12 · file round trips
     d.layers[1].visible = false;
     const geo = ed.doc.ents.filter(e => e.type !== 'dim'), geoNoEll = geo.filter(e => e.type !== 'ellipse');

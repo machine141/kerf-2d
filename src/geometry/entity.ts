@@ -121,7 +121,13 @@ export function bbox(e: Shape, dimLines?: (e: Shape) => { lines: [Point, Point][
   if (e.type === 'ellipse') { const c = Math.cos(e.rot), s = Math.sin(e.rot), hx = Math.hypot(e.rx * c, e.ry * s), hy = Math.hypot(e.rx * s, e.ry * c); return { x0: e.c.x - hx, y0: e.c.y - hy, x1: e.c.x + hx, y1: e.c.y + hy }; }
   let pts: Point[] = [];
   if (e.type === 'line') pts = [e.a, e.b];
-  else if (e.type === 'poly') pts = hasBulge(e) ? flatten(e, 0.001).pts : e.pts;
+  else if (e.type === 'poly') {
+    if (!hasBulge(e)) pts = e.pts;
+    else for (const sg of segsOf(e)) {
+      pts.push(sg.a, sg.b);
+      if (sg.kind === 'arc') { const pr = segPrim(sg) as { a0: number; a1: number }; for (let i = 0; i < 4; i++) { const a = i * Math.PI / 2; if (angIn(a, pr.a0, pr.a1)) pts.push(polar(sg.c, sg.r, a)); } }
+    }
+  }
   else if (e.type === 'arc') { pts = [polar(e.c, e.r, e.a0), polar(e.c, e.r, e.a1)]; for (let i = 0; i < 4; i++) { const a = i * Math.PI / 2; if (angIn(a, e.a0, e.a1)) pts.push(polar(e.c, e.r, a)); } }
   else if (e.type === 'dim') { if (dimLines) { const g = dimLines(e); g.lines.forEach(l => pts.push(l[0], l[1])); pts.push(g.text.p); } else pts = [e.p1, e.p2, e.off]; }
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;

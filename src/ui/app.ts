@@ -3,6 +3,7 @@ import { type Point, P, dist, normA, angOf, polar, fmt, DEG, parseLength, clean,
 import { prims, lengthOf, boxCentre } from '../geometry/entity';
 import { affMove, affScale, affRot } from '../geometry/affine';
 import { geomSettings } from '../geometry/entity';
+import type { BoolOp } from '../geometry/boolean';
 import type { Editor, CoordMode } from '../editor/editor';
 import type { OptionSpec, PointerInfo } from '../editor/tool';
 import { Renderer } from '../render/renderer';
@@ -154,6 +155,8 @@ export function startUI(ed: Editor) {
     if (ev.altKey && ['a', 'r', 'p'].includes(k.toLowerCase())) { ev.preventDefault(); setCm(({ a: 'abs', r: 'rel', p: 'pol' } as any)[k.toLowerCase()]); return; }
     if ((ev.ctrlKey || ev.metaKey) && !typing) {
       const c = k.toLowerCase();
+      const bop = ev.altKey ? ({ KeyU: 'union', KeyS: 'subtract', KeyI: 'intersect' } as Record<string, BoolOp>)[ev.code] : undefined;
+      if (bop) { ev.preventDefault(); ed.booleanSel(bop); return; }
       if (c === 'z') { ev.preventDefault(); ev.shiftKey ? ed.store.redo() : ed.store.undo(); }
       else if (c === 'y' || c === 'r') { ev.preventDefault(); ed.store.redo(); }
       else if (c === 'a') { ev.preventDefault(); ed.selectAll(); }
@@ -261,7 +264,9 @@ export function startUI(ed: Editor) {
       if (!sel.length) {
         pane.innerHTML = `<h3>Nothing selected</h3><p class="hint">Click a shape to see its handles and exact sizes. Double-click a shape to edit its points.</p>
           <h3>Drawing</h3><div class="grid2"><label>Objects</label><span class="mono">${ed.doc.ents.length}</span><label>Page</label><span class="mono">${ed.doc.page.w} × ${ed.doc.page.h} mm</span><label>Units</label><span class="mono">mm (type 2cm or 1in if you like)</span></div>
-          <h3>Keys</h3><p class="hint">Type numbers at any prompt to enter coordinates · Alt+A / R / P switch Abs, Rel, Pol · Space or F3 resets the relative origin · Backspace removes the last point · F4 grid · F5 grid lock · F6 step · F7 attach · F8 radial · Esc cancels · wheel zooms, Shift+wheel or middle-drag pans.</p>`;
+          <h3>Keys</h3><p class="hint">Type numbers at any prompt to enter coordinates · Alt+A / R / P switch Abs, Rel, Pol · Space or F3 resets the relative origin · Backspace removes the last point · F4 grid · F5 grid lock · F6 step · F7 attach · F8 radial · Esc cancels · wheel zooms, Shift+wheel or middle-drag pans.</p>
+          <h3>Clean up</h3><div class="row"><button class="btn" id="bTidyAll" title="Remove duplicates and zero-size objects; join pieces that meet (within the close-gaps setting)">Tidy drawing</button></div>`;
+        $('#bTidyAll').onclick = () => ed.tidySel();
         return;
       }
       const sz = sizeBlock();
@@ -270,8 +275,11 @@ export function startUI(ed: Editor) {
         const grouped = sel.some(e => e.group?.length), roots = new Set(sel.map(e => ed.groupRoot(e)).filter(Boolean));
         pane.innerHTML = `<h3>${sel.length} objects selected</h3><p class="hint">${Object.entries(types).map(([k, v]) => `${v} × ${k}`).join(', ')}${grouped ? ` · ${roots.size === 1 && sel.every(e => e.group?.length) ? 'one group' : 'includes groups'}` : ''}</p>${sz.html}
           <div class="row"><button class="btn" id="pGroup" title="Ctrl+G">Group</button><button class="btn" id="pUngroup" title="Ctrl+U" ${grouped ? '' : 'disabled'}>Ungroup</button><button class="btn" id="pPath" title="Join touching lines and arcs into one path (Ctrl+H)">Make path</button><button class="btn" id="pExplode" title="Ctrl+E">Explode</button><button class="btn" id="pDel">Delete</button></div>
-          <p class="hint">Explode ungroups one level at a time; on paths it breaks them into lines and arcs.</p>`;
-        bindFields(sz.fields); bindSize(); $('#pExplode').onclick = () => ed.explodeSel(); $('#pDel').onclick = () => ed.deleteSel(); $('#pGroup').onclick = () => ed.groupSel(); $('#pUngroup').onclick = () => ed.ungroupSel(); $('#pPath').onclick = () => ed.makePathSel(); return;
+          <p class="hint">Explode ungroups one level at a time; on paths it breaks them into lines and arcs.</p>
+          <h3>Combine shapes</h3><div class="row"><button class="btn" id="bUnion" title="Join overlapping closed shapes into one outline (Ctrl+Alt+U)">Union</button><button class="btn" id="bSub" title="Cut the smaller shapes out of the largest (Ctrl+Alt+S)">Subtract</button><button class="btn" id="bInt" title="Keep only the overlap (Ctrl+Alt+I)">Intersect</button><button class="btn" id="bTidy" title="Remove duplicates and zero-size objects; join pieces that meet">Tidy</button></div>
+          <p class="hint">Subtract keeps the largest shape and cuts the others out of it. Curves stay true arcs.</p>`;
+        bindFields(sz.fields); bindSize(); $('#pExplode').onclick = () => ed.explodeSel(); $('#pDel').onclick = () => ed.deleteSel(); $('#pGroup').onclick = () => ed.groupSel(); $('#pUngroup').onclick = () => ed.ungroupSel(); $('#pPath').onclick = () => ed.makePathSel();
+        $('#bUnion').onclick = () => ed.booleanSel('union'); $('#bSub').onclick = () => ed.booleanSel('subtract'); $('#bInt').onclick = () => ed.booleanSel('intersect'); $('#bTidy').onclick = () => ed.tidySel(); return;
       }
       const e: any = sel[0], F: Field[] = [];
       const pt = (lbl: string, k: string) => { F.push(numField(lbl + ' X', e[k].x, v => { (ed.store.byId(e.id) as any)[k] = P(v, e[k].y); })); F.push(numField(lbl + ' Y', e[k].y, v => { (ed.store.byId(e.id) as any)[k] = P(e[k].x, v); })); };
