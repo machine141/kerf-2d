@@ -16,12 +16,17 @@ import type { Shape } from '../model/types';
 
 const S = {
   mode: 'look' as BendMode, axis: 'v' as Axis, mat: 'ply', t: 3, kerf: 0.15, where: 'bends' as 'bends' | 'all', adapt: true,
-  D: 2.5, L: 30, G: 3.6, ribs: 1, ribDepth: 20, speed: 15, passes: 1, depth: 100, preset: 'arc',
+  D: 2.5, L: 30, G: 3.6, ribs: 1, ribDepth: 20, open: true, ribLabel: 'FORMER', speed: 15, passes: 1, depth: 100, preset: 'arc',
 };
 const mins = (s: number) => s < 90 ? `${Math.round(s)} s` : s < 5400 ? `${Math.round(s / 60)} min` : `${(s / 3600).toFixed(1)} h`;
 const metres = (mm: number) => mm >= 1000 ? `${fmt(mm / 1000, 1)} m` : `${fmt(mm, 0)} mm`;
 const moved = (s: Shape, dx: number, dy: number) => { const t: any = affEnt(s, affMove(P(dx, dy))); if (t.pts) t.pts = t.pts.map(cp); if (t.a) { t.a = cp(t.a); t.b = cp(t.b); } if (t.c) t.c = cp(t.c); return t as Shape; };
 const pathD = (s: Shape) => { const f = flatten(s, 0.05); return `M${f.pts.map(q => `${fmt(q.x, 2)} ${fmt(-q.y, 2)}`).join('L')}${f.closed ? 'Z' : ''}`; };
+
+/** Map every point of a line / path / circle through f. */
+const mapShape = (s: Shape, f: (p: any) => any): Shape => { const t: any = structuredClone(s); if (t.pts) t.pts = t.pts.map(f); if (t.a) { t.a = f(t.a); t.b = f(t.b); } if (t.c) t.c = f(t.c); return t; };
+/** Stand a former (and its label) upright: u runs down the sheet, z across; returns the move to put its top-left at (x, yTop). */
+function upright(r: Shape, vert: boolean) { const turn = (q: any) => vert ? P(q.y, -q.x) : P(q.x, q.y), pts = (r as any).pts.map(turn), rb = unionBox([bbox({ type: 'poly', closed: true, pts } as Shape)])!; return { turn, rb }; }
 
 export function openBend(ed: Editor) {
   document.querySelector('#bend')?.remove();
@@ -47,9 +52,11 @@ export function openBend(ed: Editor) {
         ${seg('pbAdapt', [['1', 'Spacing fits the curve'], ['0', 'Same spacing']])}
         <div id="pbDRow">${num('pbD', 'Spacing between cuts', S.D, 0.1, 'mm', 0.3)}</div>
         ${num('pbL', 'Slit length', S.L, 1, 'mm', 4)}${num('pbG', 'Gap (bridge)', S.G, 0.1, 'mm', 0.5)}
+        <label class="chk"><input type="checkbox" id="pbOpen" checked>Every other row runs out through the edges (needed for it to bend)</label>
         <h4>Former (holds the shape)</h4>
         ${seg('pbRibs', [['0', 'None'], ['1', 'One'], ['2', 'Two']])}
-        <div id="pbRibRow">${num('pbRD', 'Former depth', S.ribDepth, 5, 'mm', 5)}</div>
+        <div id="pbRibRow">${num('pbRD', 'Former depth', S.ribDepth, 5, 'mm', 5)}
+          <label class="sl txt" title="Engraved small on the former. Leave empty for no label.">Label (engraved) <input type="text" id="pbLab" value="${S.ribLabel}" maxlength="20"></label></div>
         <p class="hint">A former is a stand cut to the side profile: glue the bent piece onto its edge (or leave the piece free to flop).</p>
         <h4>Laser time</h4>${num('pbSp', 'Cutting speed', S.speed, 1, 'mm/s', 0.5)}${num('pbPa', 'Passes', S.passes, 1, '', 1)}
       </div>
@@ -74,7 +81,7 @@ export function openBend(ed: Editor) {
 
   function compute() {
     if (!parts.length) { plan = null; error = 'Select the shape to bend first (with Select, V) — and, if you like, a curve you drew as its side profile — then open this again.'; return; }
-    const r = bendPlan(parts.map(s => structuredClone(s)), nodes, { mode: S.mode, axis: S.axis, t: S.t, kerf: S.kerf, mat: mat(), sf: 1.5, G: S.G, L: S.L, adapt: S.adapt, where: S.where, D: S.D, ribs: S.ribs, ribDepth: S.ribDepth });
+    const r = bendPlan(parts.map(s => structuredClone(s)), nodes, { mode: S.mode, axis: S.axis, t: S.t, kerf: S.kerf, mat: mat(), sf: 1.5, G: S.G, L: S.L, adapt: S.adapt, where: S.where, D: S.D, ribs: S.ribs, ribDepth: S.ribDepth, open: S.open, ribLabel: S.ribLabel });
     if ('error' in r) { plan = null; error = r.error; } else { plan = r; error = ''; }
   }
 
@@ -149,13 +156,14 @@ export function openBend(ed: Editor) {
     for (const s of plan.marks) out.push(`<path class="mk" d="${pathD(moved(s, ldx, ldy))}"/>`);
     out.push(`<text x="${fmt(ldx + (flb.x0 + flb.x1) / 2, 1)}" y="${fmt(-3, 1)}">flat piece to cut</text>`);
     let x = ldx + flb.x1 + gap, maxY = Math.max(fb.y1 - fb.y0, flb.y1 - flb.y0);
-    for (const r of plan.ribs) {
-      // show the former upright beside the piece (u down, z across)
-      const pts = (r as any).pts.map((q: any) => P(q.y, -q.x)), rb = unionBox([bbox({ type: 'poly', closed: true, pts } as Shape)])!;
-      out.push(`<path class="cut" d="${pathD({ type: 'poly', closed: true, pts: pts.map((q: any) => P(q.x - rb.x0 + x, q.y - rb.y1)) } as Shape)}"/>`);
+    plan.ribs.forEach((r, k) => {
+      // show the former upright beside the piece (u down, z across), with its engraved label
+      const { turn, rb } = upright(r, true), f = (q: any) => { const t = turn(q); return P(t.x - rb.x0 + x, t.y - rb.y1); };
+      out.push(`<path class="cut" d="${pathD(mapShape(r, f))}"/>`);
+      for (const l of plan!.ribLabels[k] || []) out.push(`<path class="mk lbl" d="${pathD(mapShape(l, f))}"/>`);
       out.push(`<text x="${fmt(x + (rb.x1 - rb.x0) / 2, 1)}" y="${fmt(-3, 1)}">former</text>`);
       x += rb.x1 - rb.x0 + gap; maxY = Math.max(maxY, rb.y1 - rb.y0);
-    }
+    });
     const W = x, Hh = maxY;
     svg.setAttribute('viewBox', `${fmt(-6, 1)} ${fmt(-12, 1)} ${fmt(W + 12, 1)} ${fmt(Hh + 18, 1)}`);
     svg.innerHTML = out.join('');
@@ -213,6 +221,8 @@ export function openBend(ed: Editor) {
     S.depth = Math.round(d * 100); dR.value = String(S.depth); if (d < 1) ed.toast(`Made shallower (depth ${S.depth}%) so the wood can bend to it`);
     nodes = ns; update();
   });
+  $<HTMLInputElement>('#pbOpen').onchange = e => { S.open = (e.target as HTMLInputElement).checked; update(); };
+  const lab = $<HTMLInputElement>('#pbLab'); lab.addEventListener('input', () => { S.ribLabel = lab.value.toUpperCase().slice(0, 20); later(); });
   $<HTMLSelectElement>('#pbMat').onchange = e => { S.mat = (e.target as HTMLSelectElement).value; update(); };
   $('#pbRec').onclick = () => {
     const m = mat(); S.G = Math.round(Math.max(1.5, 1.2 * S.t) * 10) / 10;
@@ -230,10 +240,12 @@ export function openBend(ed: Editor) {
       for (const s of [...plan!.flat, ...plan!.slits]) { const e = ed.store.add(moved(s, dx, dy)); e.group = [g]; out.push(e.id); }
       for (const s of plan!.marks) { const e = ed.store.add(moved(s, dx, dy), { color: 'blue' }); e.group = [g]; out.push(e.id); }
       let x = flb.x1 + dx + gap;
-      for (const r of plan!.ribs) {
-        const pts = (r as any).pts.map((q: any) => S.axis === 'v' ? P(q.y, -q.x) : P(q.x, q.y)), rb = unionBox([bbox({ type: 'poly', closed: true, pts } as Shape)])!;
-        const e = ed.store.add({ type: 'poly', closed: true, pts: pts.map((q: any) => cp(P(q.x - rb.x0 + x, q.y - rb.y1 + B.y1))) } as Shape); out.push(e.id); x += rb.x1 - rb.x0 + gap;
-      }
+      plan!.ribs.forEach((r, k) => {
+        const { turn, rb } = upright(r, S.axis === 'v'), f = (q: any) => { const t = turn(q); return cp(P(t.x - rb.x0 + x, t.y - rb.y1 + B.y1)); }, g2 = 'g' + (ed.doc.seq++);
+        const e = ed.store.add(mapShape(r, f)); e.group = [g2]; out.push(e.id);
+        for (const l of plan!.ribLabels[k] || []) { const le = ed.store.add(mapShape(l, f), { color: 'blue' }); le.group = [g2]; out.push(le.id); }
+        x += rb.x1 - rb.x0 + gap;
+      });
       return out;
     });
     ed.setTool('select'); ed.setSelection(ids); close(); ed.fit();

@@ -236,6 +236,9 @@ table.res td:last-child{text-align:right;white-space:nowrap}
 #bend .ctl label.depth{display:grid;grid-template-columns:1fr 64px auto auto;grid-template-rows:auto auto;gap:4px 6px}
 #bend .ctl label.depth input[type=range]{grid-column:1/-1;grid-row:2;width:100%}
 #bend .ctl label.depth .btn{padding:1px 7px}
+#bend .ctl>*,#bend .ctl>div>*{flex-shrink:0}
+#bend .ctl label.sl.txt{display:flex;justify-content:space-between;align-items:center;gap:8px}#bend .ctl label.sl.txt input{width:130px;min-width:0}
+#bend svg .mk.lbl{stroke-dasharray:none;stroke-width:1}
 #bend .presets{display:flex;flex-wrap:wrap;gap:4px;padding-top:6px}
 #bend .presets .btn{font-size:11.5px;padding:3px 8px}
 #bend .presets .btn[aria-pressed=true]{border-color:var(--accent);color:var(--accent)}
@@ -344,7 +347,7 @@ body.dropping #main{outline:3px dashed var(--accent);outline-offset:-6px}
 </head>
 <body>
 <header>
-  <div class="brand"><b>Kerf 2D</b><span>precision drafting · v0.10.1</span></div>
+  <div class="brand"><b>Kerf 2D</b><span>precision drafting · v0.10.2</span></div>
   <input id="docName" aria-label="Drawing name" value="Glasses front">
   <div class="actions">
     <button class="btn" id="bNew">New</button>

@@ -24,6 +24,7 @@ import { flatten, bbox, unionBox, lengthOf } from '../geometry/entity';
 import { autoHandles, flattenSpline } from '../geometry/spline';
 import { type HMat, type Column, minRadius, bestPitch, pitchRange } from './hinge';
 import type { Shape } from '../model/types';
+import { strokeText, textWidth } from '../text/stroke';
 
 export interface PNode { u: number; z: number }
 export type BendMode = 'look' | 'length';
@@ -100,6 +101,10 @@ export interface BendOpts {
   mode: BendMode; axis: Axis; t: number; kerf: number; mat: HMat; sf: number;
   G: number; L: number; adapt: boolean; where: 'bends' | 'all'; D: number;
   ribs: number; ribDepth: number;
+  /** every other row of slits runs right out through the edge (default) — no solid strip along the sides */
+  open?: boolean;
+  /** engraved on each former (empty = none) */
+  ribLabel?: string;
 }
 export interface BendPlan {
   Lu: number; Ls: number; stretch: number; tightest: number;
@@ -107,6 +112,7 @@ export interface BendPlan {
   flat: Shape[]; slits: Shape[]; slitState: Column['state'][]; columns: (Column & { Leff: number })[];
   front: Shape[];                          // what it looks like from the front once bent
   ribs: Shape[];                           // former(s), in side-view coordinates P(u, z) moved to start at 0
+  ribLabels: Shape[][];                    // engraved label strokes for each former, same coordinates
   marks: Shape[];                          // engrave guides on the flat piece (where the former goes)
   state: 'ok' | 'tight' | 'bad'; warnings: string[]; cutLen: number; frame: { ox: number; oy: number };
 }
@@ -177,17 +183,26 @@ export function bendPlan(shapes: Shape[], nodes: PNode[], o: BendOpts): BendPlan
    * a slit, its end slits reaching the edges. m is the whole number of slits nearest
    * the chosen slit length.
    */
+  // which outlines are holes (inside another outline)
+  const inPoly = (p: Point, pl: Point[]) => { let w = false; for (let i = 0, j = pl.length - 1; i < pl.length; j = i++) { const a = pl[i], b = pl[j]; if ((a.y > p.y) !== (b.y > p.y) && p.x < (b.x - a.x) * (p.y - a.y) / (b.y - a.y) + a.x) w = !w; } return w; };
+  const isHole = closedUV.map((pl, k) => closedUV.reduce((n, other, j) => n + (j !== k && inPoly(pl[0], other) ? 1 : 0), 0) % 2 === 1);
   const cutsAt = (s: number, kind: 'A' | 'B'): [number, number][] => {
     const hits: number[] = [];
     for (const pl of inset) for (let i = 0; i < pl.length; i++) { const a = pl[i], b = pl[(i + 1) % pl.length]; if ((a.x <= s) !== (b.x <= s)) hits.push(a.y + (s - a.x) / (b.x - a.x) * (b.y - a.y)); }
     hits.sort((a, b) => a - b); const out: [number, number][] = [], min = Math.max(o.G, 1);
+    // the true edges here (for B rows that run out through the edge)
+    const edge: { y: number; outer: boolean }[] = [];
+    closedUV.forEach((pl, k) => { for (let i = 0; i < pl.length; i++) { const a = pl[i], b = pl[(i + 1) % pl.length]; if ((a.x <= s) !== (b.x <= s)) edge.push({ y: a.y + (s - a.x) / (b.x - a.x) * (b.y - a.y), outer: !isHole[k] }); } });
+    // run out to the nearest edge beyond y — only if that edge is the outside (never into a hole such as an eye)
+    const outTo = (y: number, dir: -1 | 1) => { let best: { y: number; outer: boolean } | null = null; for (const e of edge) if (dir < 0 ? e.y <= y && (!best || e.y > best.y) : e.y >= y && (!best || e.y < best.y)) best = e; return best && best.outer ? best.y : y; };
     for (let i = 0; i + 1 < hits.length; i += 2) {
       const a = hits[i], b = hits[i + 1], w = b - a; if (w < min) continue;
       const m = Math.max(1, Math.round((w + o.G) / (o.L + o.G))), L = (w - (m - 1) * o.G) / m;
       if (kind === 'A') { for (let k = 0; k < m; k++) out.push([a + k * (L + o.G), a + k * (L + o.G) + L]); continue; }
-      let y = a;
-      for (let k = 0; k < m; k++) { const c = a + L / 2 + k * (L + o.G); if (c - o.G / 2 - y >= min) out.push([y, c - o.G / 2]); y = c + o.G / 2; }
-      if (b - y >= min) out.push([y, b]);
+      const open = o.open !== false, A0 = open ? outTo(a, -1) : a, B0 = open ? outTo(b, 1) : b;
+      let y = A0;
+      for (let k = 0; k < m; k++) { const c = a + L / 2 + k * (L + o.G); if (c - o.G / 2 - y >= min || (k === 0 && A0 < a)) out.push([y, c - o.G / 2]); y = c + o.G / 2; }
+      if (B0 - y >= min || B0 > b) out.push([y, B0]);
     }
     return out;
   };
@@ -211,7 +226,7 @@ export function bendPlan(shapes: Shape[], nodes: PNode[], o: BendOpts): BendPlan
   }
 
   // ---------- former (rib): a stand cut to the profile, the part glues onto its edge ----------
-  const ribs: Shape[] = [], marks: Shape[] = [];
+  const ribs: Shape[] = [], marks: Shape[] = [], ribLabels: Shape[][] = [];
   if (o.ribs > 0) {
     const r = resample(prof, 0.5), back: Point[] = [], outer: Point[] = [];
     for (let i = 0; i < r.pts.length; i++) {
@@ -221,7 +236,14 @@ export function bendPlan(shapes: Shape[], nodes: PNode[], o: BendOpts): BendPlan
     const ring = back.concat(outer.reverse()), cc = new ClipperLib.Clipper(), sol = new ClipperLib.Paths();
     cc.AddPath(toI(ring), ClipperLib.PolyType.ptSubject, true); cc.Execute(ClipperLib.ClipType.ctUnion, sol, ClipperLib.PolyFillType.pftNonZero, ClipperLib.PolyFillType.pftNonZero);
     const best = (sol as any[]).sort((a, b) => Math.abs(ClipperLib.Clipper.Area(b)) - Math.abs(ClipperLib.Clipper.Area(a)))[0];
-    if (best) { const pts = dp(fromI(best), 0.01), m = Math.min(...pts.map(q => q.x)), mz = Math.min(...pts.map(q => q.y)); for (let k = 0; k < o.ribs; k++) ribs.push({ type: 'poly', closed: true, pts: pts.map(q => P(q.x - m, q.y - mz)) } as Shape); }
+    if (best) {
+      const pts = dp(fromI(best), 0.01), m = Math.min(...pts.map(q => q.x)), mz = Math.min(...pts.map(q => q.y)), rp = pts.map(q => P(q.x - m, q.y - mz));
+      for (let k = 0; k < o.ribs; k++) {
+        ribs.push({ type: 'poly', closed: true, pts: rp } as Shape);
+        const txt = (o.ribLabel ?? 'FORMER').trim();
+        ribLabels.push(txt ? fitLabel(rp, o.ribs > 1 ? `${txt} ${k + 1}` : txt) : []);
+      }
+    }
     // engrave where each former meets the flat piece (centre line, or thirds for two)
     const vs2 = closedUV.flat().map(q => q.y), vlo = Math.min(...vs2), vhi = Math.max(...vs2);
     const at = o.ribs === 1 ? [(vlo + vhi) / 2] : [vlo + (vhi - vlo) / 3, vlo + 2 * (vhi - vlo) / 3];
@@ -238,7 +260,7 @@ export function bendPlan(shapes: Shape[], nodes: PNode[], o: BendOpts): BendPlan
   if (o.mode === 'look' && Ls > Lu * 1.6) warnings.push(`The flat piece is ${(Ls / Lu * 100 - 100).toFixed(0)}% longer than your drawing — a very deep profile`);
   const state: BendPlan['state'] = columns.some(c => c.state === 'bad') || tightest < Rcap ? 'bad' : columns.some(c => c.state === 'tight') ? 'tight' : 'ok';
   let cutLen = cut; for (const s of flat) cutLen += lengthOf(s); for (const s of ribs) cutLen += lengthOf(s);
-  return { Lu, Ls, stretch: Ls / Lu, tightest, profile: prof, flat, slits, slitState, columns, front, ribs, marks, state, warnings, cutLen, frame: { ox: B.x0, oy: B.y0 } };
+  return { Lu, Ls, stretch: Ls / Lu, tightest, profile: prof, flat, slits, slitState, columns, front, ribs, ribLabels, marks, state, warnings, cutLen, frame: { ox: B.x0, oy: B.y0 } };
 }
 
 /** Tightest radius allowed while dragging (finest spacing, no safety margin). */
@@ -248,4 +270,29 @@ export function tightestOf(nodes: PNode[], mode: BendMode, Lu: number): number {
   let prof = profileCurve(nodes);
   if (mode === 'length') { const r = resample(prof, 0.5), k = Lu / (r.total || 1), a = prof[0]; prof = prof.map(p => add(a, mul(sub(p, a), k))); }
   const r = openRadii(prof, 0.25, 3); let m = Infinity; for (const x of r.R) m = Math.min(m, Math.abs(x)); return m;
+}
+
+/**
+ * Engraved label that fits inside a part: tries cap heights 5 → 2 mm, along and
+ * across, at places nearest the part's middle, keeping 1 mm clear of every edge.
+ */
+export function fitLabel(poly: Point[], text: string): Shape[] {
+  const co = new ClipperLib.ClipperOffset(2, 0.01 * S), out = new ClipperLib.Paths();
+  co.AddPath(toI(poly), ClipperLib.JoinType.jtRound, ClipperLib.EndType.etClosedPolygon); co.Execute(out, -1 * S);
+  const safe: Point[][] = (out as any[]).map(fromI); if (!safe.length) return [];
+  const inside = (p: Point) => { let w = false; for (const pl of safe) for (let i = 0, j = pl.length - 1; i < pl.length; j = i++) { const a = pl[i], b = pl[j]; if ((a.y > p.y) !== (b.y > p.y) && p.x < (b.x - a.x) * (p.y - a.y) / (b.y - a.y) + a.x) w = !w; } return w; };
+  const xs = poly.map(q => q.x), ys = poly.map(q => q.y), x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys), cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+  for (const h of [5, 4, 3, 2.5, 2]) {
+    const w = textWidth(text, h);
+    for (const ang of [0, Math.PI / 2]) {
+      const bw = ang ? h : w, bh = ang ? w : h, cand: Point[] = [];
+      for (let x = x0; x + bw <= x1; x += 1) for (let y = y0; y + bh <= y1; y += 1) cand.push(P(x, y));
+      cand.sort((a, b) => Math.hypot(a.x + bw / 2 - cx, a.y + bh / 2 - cy) - Math.hypot(b.x + bw / 2 - cx, b.y + bh / 2 - cy));
+      for (const c of cand) {
+        const pts: Point[] = []; for (let i = 0; i <= 4; i++) for (let j = 0; j <= 2; j++) pts.push(P(c.x + bw * i / 4, c.y + bh * j / 2));
+        if (pts.every(inside)) return ang ? strokeText(text, h, P(c.x + h, c.y), Math.PI / 2) : strokeText(text, h, c);
+      }
+    }
+  }
+  return [];
 }

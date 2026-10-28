@@ -38,7 +38,8 @@ describe('bend to a profile', () => {
     // the flat oval's outline; every slit end stays ≥ G − tol inside it
     const out = flatten(p.flat[0], 0.01).pts;
     const dEdge = (q: any) => Math.min(...out.map((a, i) => { const b = out[(i + 1) % out.length], dx = b.x - a.x, dy = b.y - a.y, L2 = dx * dx + dy * dy || 1e-12, t = Math.max(0, Math.min(1, ((q.x - a.x) * dx + (q.y - a.y) * dy) / L2)); return Math.hypot(q.x - a.x - t * dx, q.y - a.y - t * dy); }));
-    for (const s of p.slits as any[]) for (const q of [s.a, s.b]) expect(dEdge(q)).toBeGreaterThan(3.6 - 0.05);
+    // each slit end is either G inside the edge (bridges) or right on the edge (rows that run out)
+    for (const s of p.slits as any[]) for (const q of [s.a, s.b]) { const d = dEdge(q); expect(d < 0.02 || d > 3.6 - 0.05).toBe(true); }
     // the S changes direction in the middle: around there it's almost straight, so no slits (centre ±4 mm)
     // spacing is wider where the S changes direction (gentle) than where it bends hardest
     const near = (x: number) => p.columns.reduce((b, c) => Math.abs(c.x - x) < Math.abs(b.x - x) ? c : b);
@@ -80,11 +81,35 @@ describe('slits run edge to edge (v0.10.1)', () => {
       const xs = ss.flatMap((s: any) => [s.a.x, s.b.x]), lo = Math.min(...xs), hi = Math.max(...xs);
       const W = hi - lo; if (W < 6) continue;
       // both ends sit ≈ G inside the outline: symmetric about the centre line x = 25
-      expect(lo + hi).toBeCloseTo(50, 0); checked++;
+      expect(lo + hi).toBeCloseTo(50, 0); checked++;   // symmetric about the centre line
       // and the pieces in a column never leave a gap wider than G (+ tolerance)
       const segs = ss.map((s: any) => [Math.min(s.a.x, s.b.x), Math.max(s.a.x, s.b.x)]).sort((a: any, b: any) => a[0] - b[0]);
       for (let i = 1; i < segs.length; i++) expect(segs[i][0] - segs[i - 1][1]).toBeLessThanOrEqual(3 + 1e-6);
     }
     expect(checked).toBeGreaterThan(20);
+  });
+});
+
+describe('rows run out through the edge (v0.10.2)', () => {
+  it('B rows touch the outline on both sides; A rows keep a bridge G at both ends', () => {
+    const p = go([rect(50, 120)], presetNodes('arc', 120), { where: 'all', G: 3, L: 20 });
+    const rows = new Map<number, any[]>(); for (const s of p.slits as any[]) { const k = Math.round(s.a.y * 1000); rows.set(k, [...(rows.get(k) || []), s]); }
+    let open = 0, closed = 0;
+    for (const [, ss] of rows) {
+      const xs = ss.flatMap((s: any) => [s.a.x, s.b.x]), lo = Math.min(...xs), hi = Math.max(...xs);
+      if (lo < 1e-6 && hi > 50 - 1e-6) open++; else { expect(lo).toBeCloseTo(3, 6); expect(hi).toBeCloseTo(47, 6); closed++; }
+    }
+    expect(open).toBeGreaterThan(10); expect(closed).toBeGreaterThan(10); expect(Math.abs(open - closed)).toBeLessThanOrEqual(2);
+  });
+  it('turning it off keeps every row inside', () => {
+    const p = go([rect(50, 120)], presetNodes('arc', 120), { where: 'all', G: 3, L: 20, open: false });
+    for (const s of p.slits as any[]) for (const x of [s.a.x, s.b.x]) { expect(x).toBeGreaterThanOrEqual(3 - 1e-6); expect(x).toBeLessThanOrEqual(47 + 1e-6); }
+  });
+  it('the former gets a small engraved label inside it (or none)', () => {
+    const p = go([rect(40, 100)], presetNodes('arc', 100), { ribs: 2, ribLabel: 'Former' });
+    expect(p.ribLabels.length).toBe(2); expect(p.ribLabels[0].length).toBeGreaterThan(5);
+    const rb = bbox(p.ribs[0]), lb = unionBox(p.ribLabels[0].map(s => bbox(s)))!;
+    expect(lb.x0).toBeGreaterThanOrEqual(rb.x0); expect(lb.x1).toBeLessThanOrEqual(rb.x1); expect(lb.y0).toBeGreaterThanOrEqual(rb.y0); expect(lb.y1).toBeLessThanOrEqual(rb.y1);
+    expect(go([rect(40, 100)], presetNodes('arc', 100), { ribs: 1, ribLabel: '' }).ribLabels[0]).toEqual([]);
   });
 });
