@@ -55,11 +55,11 @@ export function booleanShapes(op: BoolOp, shapes: Shape[], base?: number): { sha
 }
 
 // ---------- refit: polyline → exact lines and arcs ----------
-type Geo = { kind: 'line'; a: Point; d: Point } | { kind: 'circ'; c: Point; r: number };
+export type Geo = { kind: 'line'; a: Point; d: Point } | { kind: 'circ'; c: Point; r: number };
 const geo = (pr: Prim): Geo => pr.t === 'seg' ? { kind: 'line', a: pr.a, d: sub(pr.b, pr.a) } : { kind: 'circ', c: pr.c, r: pr.r };
 
 /** Intersections of the infinite line / full circle carrying two primitives. */
-function meet(A: Geo, B: Geo): Point[] {
+export function meet(A: Geo, B: Geo): Point[] {
   if (A.kind === 'line' && B.kind === 'line') {
     const den = cross(A.d, B.d); if (Math.abs(den) < 1e-14) return [];
     return [add(A.a, mul(A.d, cross(sub(B.a, A.a), B.d) / den))];

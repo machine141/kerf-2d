@@ -3,7 +3,7 @@
  * crossings/ends around the clicked point. Pure function — the caller supplies
  * the primitives of every other shape that can cut. Paths keep their true arcs.
  */
-import { type Point, add, sub, mul, dot, dist, normA, angOf, cp } from './vec';
+import { type Point, add, sub, mul, dot, dist, normA, angOf, cp, clean } from './vec';
 import { prims, intersect, flatten, nearestOnPrim, type Prim } from './entity';
 import { segsOf, segPrim, segParam, subPath, type PSeg, type PathLike } from './path';
 import type { Shape } from '../model/types';
@@ -14,7 +14,7 @@ export type TrimMode = 'whole' | 'segments';
 export function explodePath(p: PathLike): Shape[] {
   return segsOf(p).map(s => {
     if (s.kind === 'seg') return { type: 'line', a: s.a, b: s.b } as Shape;
-    const pr = segPrim(s) as any; return { type: 'arc', c: s.c, r: s.r, a0: pr.a0, a1: pr.a1 } as Shape;
+    const pr = segPrim(s) as any; return { type: 'arc', c: cp(s.c), r: clean(s.r), a0: pr.a0, a1: pr.a1 } as Shape;
   });
 }
 /** A single path piece becomes a simple line/arc; otherwise a path. */

@@ -20,7 +20,7 @@ const esc = (s: string) => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<
 export function startUI(ed: Editor) {
   const cv = $<HTMLCanvasElement>('#cv'), R = new Renderer(cv, ed);
   const prefs = loadPrefs(); if (prefs.joinTol != null) ed.opt.joinTol = prefs.joinTol;
-  const ui = { tab: 'props', spaceDown: false, lastTest: null as null | { results: TestResult[]; doc: string | null }, exportOpts: { splitArcs: false, includeHidden: false, curveTol: 0.01 } as DxfOptions };
+  const ui = { ptsOpen: false, tab: 'props', spaceDown: false, lastTest: null as null | { results: TestResult[]; doc: string | null }, exportOpts: { splitArcs: false, includeHidden: false, curveTol: 0.01 } as DxfOptions };
   let DL: any = null;
   (async () => { try { DL = (window as any).claude?.use ? await (window as any).claude.use('downloads') : null; } catch { DL = null; } })();
 
@@ -239,7 +239,8 @@ export function startUI(ed: Editor) {
   document.querySelectorAll<HTMLElement>('.tabs button').forEach(b => b.onclick = () => { ui.tab = b.dataset.tab!; document.querySelectorAll('.tabs button').forEach(x => x.setAttribute('aria-selected', String(x === b))); renderPane(); });
   let fid = 0;
   type Field = { html: string; id: string; set: (v: number) => void; unit?: boolean };
-  const numField = (label: string, val: number, set: (v: number) => void, unit = true): Field => { const id = 'f' + (++fid); return { id, set, unit, html: `<label for="${id}">${label}</label><input type="text" inputmode="decimal" id="${id}" value="${fmt(val, 6)}">` }; };
+  const numField = (label: string, val: number, set: (v: number) => void, unit = true): Field => { const id = 'f' + (++fid); return { id, set, unit, html: `<label for="${id}">${label}</label><input type="text" inputmode="decimal" id="${id}" value="${fmt(val, dp())}" title="Exact: ${fmt(val, 6)}">` }; };
+  const dp = () => Math.min(6, Math.max(0, prefs.dp ?? 2));
   const bindFields = (fields: Field[]) => { for (const f of fields) $(`#${f.id}`).onchange = (ev: Event) => { const t = (ev.target as HTMLInputElement).value, v = f.unit ? parseLength(t) : parseFloat(t); if (!isFinite(v)) { renderPane(); return; } ed.store.change(() => f.set(v)); }; };
   function sizeBlock(): { html: string; fields: Field[] } {
     const b = ed.selBox(); if (!b) return { html: '', fields: [] };
@@ -283,7 +284,7 @@ export function startUI(ed: Editor) {
       }
       const e: any = sel[0], F: Field[] = [];
       const pt = (lbl: string, k: string) => { F.push(numField(lbl + ' X', e[k].x, v => { (ed.store.byId(e.id) as any)[k] = P(v, e[k].y); })); F.push(numField(lbl + ' Y', e[k].y, v => { (ed.store.byId(e.id) as any)[k] = P(e[k].x, v); })); };
-      let title: string = e.type, extra = '';
+      let title: string = e.type, extra = '', ptsHtml = '';
       const live = () => ed.store.byId(e.id) as any;
       if (e.type === 'line') { title = 'Line'; pt('Start', 'a'); pt('End', 'b');
         F.push(numField('Length', dist(e.a, e.b), v => { const x = live(), u = sub(x.b, x.a), L = len(u) || 1; x.b = cp(add(x.a, mul(u, v / L))); }));
@@ -294,14 +295,19 @@ export function startUI(ed: Editor) {
         F.push(numField('Start °', normA(e.a0) / DEG, v => live().a0 = normA(v * DEG), false)); F.push(numField('End °', normA(e.a1) / DEG, v => live().a1 = normA(v * DEG), false));
         extra = `<p class="hint">Arc length ${fmt(lengthOf(e), 3)} mm · runs anticlockwise from start to end</p>`; }
       else if (e.type === 'poly') { title = e.closed ? 'Closed path' : 'Path';
-        if (e.pts.length <= 24) e.pts.forEach((p: Point, i: number) => { F.push(numField(`P${i + 1} X`, p.x, v => { const x = live(); x.pts[i] = P(v, x.pts[i].y); })); F.push(numField(`P${i + 1} Y`, p.y, v => { const x = live(); x.pts[i] = P(x.pts[i].x, v); })); });
-        extra = `<p class="hint">${e.closed ? 'Perimeter' : 'Length'} ${fmt(lengthOf(e), 3)} mm · ${e.pts.length} points${e.pts.length > 24 ? ' (edit points on the drawing)' : ''}</p><div class="row"><button class="btn" id="pExplode">Explode to lines</button></div>`; }
+        const PF: Field[] = [];
+        if (e.pts.length <= 60) e.pts.forEach((p: Point, i: number) => { PF.push(numField(`P${i + 1} X`, p.x, v => { const x = live(); x.pts[i] = P(v, x.pts[i].y); })); PF.push(numField(`P${i + 1} Y`, p.y, v => { const x = live(); x.pts[i] = P(x.pts[i].x, v); })); });
+        F.push(...PF); ptsHtml = PF.length ? `<details id="pPts" ${ui.ptsOpen ? 'open' : ''}><summary>Point coordinates (${e.pts.length})</summary><div class="grid2">${PF.map(f => f.html).join('')}</div></details>` : '';
+        extra = `<p class="hint">${e.closed ? 'Perimeter' : 'Length'} ${fmt(lengthOf(e), dp())} mm · ${e.pts.length} points</p>`; }
       else if (e.type === 'dim') { title = 'Dimension'; pt('Point 1', 'p1'); pt('Point 2', 'p2'); extra = `<div class="grid2"><label for="dTxt">Text override</label><input type="text" id="dTxt" value="${esc(e.text || '')}" placeholder="${esc(fmt(ed.dimGeom(e).val, ed.doc.dim.dec))}"></div>`; }
-      pane.innerHTML = `<h3>${title}</h3><div class="grid2">${F.map(f => f.html).join('')}</div>${extra}
-        <div class="row"><button class="btn" id="pNodes">${ed.state.node ? 'Finish editing points' : 'Edit points'}</button></div>${sz.html}
+      const mainF = F.filter(f => !ptsHtml.includes(`id="${f.id}"`));
+      pane.innerHTML = `<h3>${title}</h3>
+        <div class="row"><button class="btn" id="pNodes" title="Drag points; double-click a shape to do the same">${ed.state.node ? 'Finish editing points' : 'Edit points'}</button>${e.type === 'poly' ? '<button class="btn" id="pExplode" title="Ctrl+E">Explode to lines</button>' : ''}<button class="btn" id="pDel">Delete</button></div>
+        ${mainF.length ? `<div class="grid2">${mainF.map(f => f.html).join('')}</div>` : ''}${extra}${sz.html}${ptsHtml}
         <p class="hint">Layer ${esc(ed.store.layer(e.layer)?.name || '?')} · ${COLORS[e.color as ColorKey]?.label || e.color} · ${e.w} mm</p>`;
       bindFields(F.concat(sz.fields)); bindSize();
-      document.querySelector<HTMLElement>('#pExplode')?.addEventListener('click', () => ed.explodeSel());
+      document.querySelector<HTMLElement>('#pExplode')?.addEventListener('click', () => ed.explodeSel()); $('#pDel').onclick = () => ed.deleteSel();
+      document.querySelector<HTMLDetailsElement>('#pPts')?.addEventListener('toggle', ev => { ui.ptsOpen = (ev.target as HTMLDetailsElement).open; });
       $('#pNodes').onclick = () => { if (ed.state.node) { ed.state.node = null; ed.changed('prompt'); renderPane(); } else { ed.setTool('select'); enterNodeEdit(ed, e); } };
       document.querySelector<HTMLInputElement>('#dTxt')?.addEventListener('change', ev => ed.store.change(() => { live().text = (ev.target as HTMLInputElement).value; }));
     } else if (t === 'layers') {
@@ -333,9 +339,9 @@ export function startUI(ed: Editor) {
         <h3>Attach (snap to)</h3><div class="row">${[['end', 'Endpoints'], ['mid', 'Midpoints'], ['centre', 'Centres'], ['quad', 'Quadrants'], ['inter', 'Intersections'], ['nearest', 'Nearest'], ['perp', 'Perpendicular'], ['tangent', 'Tangent']].map(([k, l]) => `<label class="chk"><input type="checkbox" data-a="${k}" ${(at as any)[k] ? 'checked' : ''}>${l}</label>`).join('')}</div>
         <div class="grid2"><label for="sBox">Target box px</label><input type="text" id="sBox" value="${at.box}"></div>
         <h3>Dimensions</h3><div class="grid2"><label for="sDd">Decimals</label><input type="text" id="sDd" value="${ed.doc.dim.dec}"><label for="sDh">Text height mm</label><input type="text" id="sDh" value="${ed.doc.dim.textH}"></div>
-        <h3>Accuracy</h3><div class="grid2"><label for="sTol">Curve tolerance</label><input type="text" id="sTol" value="${geomSettings.flatTol}"><label for="sJt">Close gaps up to mm</label><input type="text" id="sJt" value="${ed.opt.joinTol}"></div>
+        <h3>Accuracy</h3><div class="grid2"><label for="sTol">Curve tolerance</label><input type="text" id="sTol" value="${geomSettings.flatTol}"><label for="sJt">Close gaps up to mm</label><input type="text" id="sJt" value="${ed.opt.joinTol}"><label for="sDp">Decimals shown</label><input type="text" id="sDp" value="${dp()}"></div>
         <h3>Mouse &amp; trackpad</h3><div class="row"><label class="chk"><input type="radio" name="wh" value="zoom" ${prefs.wheelPans ? '' : 'checked'}>Wheel zooms at pointer</label><label class="chk"><input type="radio" name="wh" value="pan" ${prefs.wheelPans ? 'checked' : ''}>Two-finger scroll pans (pinch zooms)</label></div>
-        <p class="hint">Close gaps: Make Path and Trim treat ends this close as touching. Curve tolerance is how closely contours follow curves (mm). Smaller is more accurate but makes bigger files. These settings, except tolerance, are saved with the drawing.</p>`;
+        <p class="hint">Decimals shown: sizes are kept exactly; this only rounds what you see (hover a box for the exact value). Close gaps: Make Path and Trim treat ends this close as touching. Curve tolerance is how closely contours follow curves (mm). Smaller is more accurate but makes bigger files. These settings, except tolerance, are saved with the drawing.</p>`;
       ($('#sPre') as HTMLSelectElement).value = pg.preset || 'CUSTOM';
       const num = (id: string, f: (v: number) => void, unit = true) => { $(`#${id}`).onchange = (ev: Event) => { const t2 = (ev.target as HTMLInputElement).value, v = unit ? parseLength(t2) : parseFloat(t2); if (isFinite(v)) { f(v); ed.changed('view'); } }; };
       ($('#sPre') as HTMLSelectElement).onchange = ev => { const k = (ev.target as HTMLSelectElement).value, v = PAGES[k]; pg.preset = k; if (v[0]) { pg.w = v[0]; pg.h = v[1]; } renderPane(); ed.fit(); };
@@ -344,6 +350,7 @@ export function startUI(ed: Editor) {
       num('sRs', v => A.radial.start = v, false); num('sRp', v => A.radial.step = Math.max(0.1, v), false);
       num('sBox', v => at.box = Math.max(4, v), false); num('sDd', v => ed.doc.dim.dec = Math.min(6, Math.max(0, Math.round(v))), false); num('sDh', v => ed.doc.dim.textH = Math.max(0.5, v));
       num('sTol', v => { geomSettings.flatTol = Math.min(0.1, Math.max(0.0001, v)); });
+      num('sDp', v => { prefs.dp = Math.min(6, Math.max(0, Math.round(v))); savePrefs(prefs); }, false);
       num('sJt', v => { ed.opt.joinTol = Math.min(2, Math.max(0, v)); prefs.joinTol = ed.opt.joinTol; savePrefs(prefs); });
       pane.querySelectorAll<HTMLInputElement>('[name=wh]').forEach(r => r.onchange = () => { prefs.wheelPans = r.value === 'pan'; savePrefs(prefs); });
       pane.querySelectorAll<HTMLInputElement>('[data-a]').forEach(c => c.onchange = () => { (at as any)[c.dataset.a!] = c.checked; });
@@ -368,6 +375,6 @@ export function startUI(ed: Editor) {
 export { clean, prims };
 
 /** Per-browser conveniences (never essential; storage may be unavailable). */
-interface Prefs { wheelPans?: boolean; joinTol?: number }
+interface Prefs { wheelPans?: boolean; joinTol?: number; dp?: number }
 function loadPrefs(): Prefs { try { return JSON.parse(localStorage.getItem('kerf2d.prefs') || '{}') || {}; } catch { return {}; } }
 function savePrefs(p: Prefs) { try { localStorage.setItem('kerf2d.prefs', JSON.stringify(p)); } catch { /* ignore */ } }

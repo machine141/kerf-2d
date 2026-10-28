@@ -101,6 +101,9 @@ table.res td:last-child{text-align:right;white-space:nowrap}
 .pill{display:inline-block;padding:1px 7px;border-radius:9px;font-size:11px;font-weight:600}
 .pill.ok{color:var(--ok);border:1px solid var(--ok)}
 .pill.bad{color:var(--bad);border:1px solid var(--bad)}
+#pane details{margin-top:12px;border-top:1px solid var(--line);padding-top:8px}
+#pane details summary{cursor:pointer;font-size:12px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);padding:4px 0}
+#pane details[open] summary{margin-bottom:6px}
 .summary{padding:8px 10px;border-radius:6px;border:1px solid var(--line);background:var(--panel)}
 #status{grid-area:status;border-top:1px solid var(--line);display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px 16px;padding-block:6px;align-items:center}
 #prompt{font-size:12.5px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -137,7 +140,7 @@ table.res td:last-child{text-align:right;white-space:nowrap}
 </head>
 <body>
 <header>
-  <div class="brand"><b>Kerf 2D</b><span>precision drafting · v0.5</span></div>
+  <div class="brand"><b>Kerf 2D</b><span>precision drafting · v0.5.1</span></div>
   <input id="docName" aria-label="Drawing name" value="Glasses front">
   <div class="actions">
     <button class="btn" id="bNew">New</button>

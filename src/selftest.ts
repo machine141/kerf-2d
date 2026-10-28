@@ -16,7 +16,7 @@ import { exportDXF, importDXF } from './io/dxf';
 import { exportSVG, importSVG } from './io/svg';
 import type { Entity, Shape } from './model/types';
 import { applyAllCorners, applyCorner } from './tools/fillet';
-import { pathCorner, linesCorner } from './geometry/corner';
+import { pathCorner, linesCorner, unfillet, vertexCorner } from './geometry/corner';
 import { pathLength, hasBulge, segsOf } from './geometry/path';
 
 export interface TestResult { name: string; ok: boolean; detail: string }
@@ -196,6 +196,23 @@ export function runSelfTest(): { results: TestResult[]; doc: string | null } {
     const tk1 = ed.snapAt(P(565.4, 350)); ed.track = [P(565, 310), P(590, 380)]; const tk2 = ed.snapAt(P(565.3, 379.6));
     ed.setTool('select'); d.aids.attach.on = false;
     ok('Alignment guides lock to touched points', tk1.k === 'track' && tk1.p.x === 565 && tk1.p.y === 350 && tk2.k === 'track' && tk2.p.x === 565 && tk2.p.y === 380, `vertical guide → (${tk1.p.x}, ${tk1.p.y}) · crossing of two guides → (${tk2.p.x}, ${tk2.p.y})`);
+    // 12a2 · re-fillet and fillets next to arcs
+    ed.setTool('rect'); typed(['abs', 620, 20], ['rel', 40, 20]); const rf: any = last(); ed.setTool('select');
+    ed.setSelection([rf.id]); ed.opt.filletMode = 'fillet'; ed.opt.filletR = 5; applyAllCorners(ed);
+    const rf5: any = byId(rf.id), kArc = segsOf(rf5).findIndex(g => g.kind === 'arc'), uf = unfillet(rf5, kArc)!;
+    applyCorner(ed, { kind: 'refillet', id: rf.id, k: kArc, V: uf.path.pts[uf.i], theta: vertexCorner(uf.path, uf.i)!.theta, r0: 5 }, 8);
+    const loss = (r: number) => 2 * r - Math.PI * r / 2, rfExp = 120 - 3 * loss(5) - loss(8), rf8: any = byId(rf.id);
+    ok('An existing fillet can be resized', Math.abs(pathLength(rf8) - rfExp) < 1e-9 && rf8.pts.length === 8, `R5 corner changed to R8 · perimeter ${fmt(pathLength(rf8), 9)} mm (expected ${fmt(rfExp, 9)})`);
+    const lg2: any = linesCorner(byId(la.id) as any, P(460, 150), byId(lb.id) as any, P(490, 180));
+    applyCorner(ed, { kind: 'lines', idA: la.id, clickA: P(460, 150), idB: lb.id, clickB: P(490, 180), V: lg2.X, theta: lg2.theta, remove: fa.id, r0: 5 }, 3);
+    const la3: any = byId(la.id), lb3: any = byId(lb.id), fa3: any = last();
+    ok('Two filleted lines can be filleted again', !byId(fa.id) && la3.b.x === 487 && lb3.b.y === 153 && fa3.type === 'arc' && fa3.r === 3, 'old R5 arc replaced by R3 · lines end at (487, 150) and (490, 153)');
+    ed.store.change(() => { ed.store.add({ type: 'line', a: P(620, 60), b: P(630, 60) } as Shape); ed.store.add({ type: 'arc', c: P(640, 60), r: 10, a0: 0, a1: Math.PI } as Shape); });
+    const rl: any = ed.doc.ents[ed.doc.ents.length - 2], ra: any = last();
+    applyCorner(ed, { kind: 'pair', idA: rl.id, idB: ra.id, V: P(630, 60), theta: Math.PI / 2 }, 2);
+    const bf: any = last(), bx = 640 - Math.sqrt(140), rl2: any = byId(rl.id), ra2: any = byId(ra.id);
+    ok('Fillet where a line runs onto an arc', bf.type === 'arc' && Math.abs(bf.r - 2) < 1e-9 && Math.abs(bf.c.x - bx) < 1e-9 && Math.abs(bf.c.y - 62) < 1e-9 && Math.abs(rl2.b.x - bx) < 1e-9 && ra2.type === 'arc' && Math.abs(ra2.r - 10) < 1e-9,
+      `R2 fillet centred (${fmt(bf.c.x, 6)}, ${fmt(bf.c.y, 6)}) tangent to the road and to the R10 bump`);
     // 12b · fixes: trim keeps closed shapes, Make Path closes tiny gaps
     ed.setTool('rect'); typed(['abs', 620, 300], ['rel', 40, 30]); const gl: any = last(); ed.setTool('select');
     ed.opt.arcMode = '3pt'; ed.setTool('arc'); typed(['abs', 660, 320], ['abs', 680, 320], ['abs', 670, 325]); ed.opt.arcMode = 'centre'; ed.setTool('select');

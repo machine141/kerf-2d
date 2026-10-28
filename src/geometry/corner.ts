@@ -91,3 +91,80 @@ export function cornerLines(A: { a: Point; b: Point }, clickA: Point, B: { a: Po
   return { lineA, lineB, join: { type: 'arc', c, r: clean(size), a0, a1 } as Shape };
 }
 export { P };
+
+// ---------- corners next to arcs, and changing an existing fillet ----------
+import { segsOf, segTangent, segParam, pieceBulge, type PSeg } from './path';
+import { meet, type Geo } from './boolean';
+
+/** Angle info at any path vertex (straight or curved neighbours). Null when the path is already smooth there. */
+export function vertexCorner(p: PathLike, i: number): { V: Point; theta: number; curved: boolean } | null {
+  const n = p.pts.length, nseg = segCount(p);
+  if (nseg < 2 || (!p.closed && (i === 0 || i === n - 1))) return null;
+  const segs = segsOf(p), s1 = segs[(i - 1 + nseg) % nseg], s2 = segs[i % nseg];
+  if (s1.len < 1e-9 || s2.len < 1e-9) return null;
+  const t1 = segTangent(s1, 1), t2 = segTangent(s2, 0), theta = Math.acos(Math.max(-1, Math.min(1, -dot(t1, t2))));
+  if (Math.PI - theta < 1e-4 || theta < 1e-6) return null;
+  return { V: p.pts[i], theta, curved: s1.kind === 'arc' || s2.kind === 'arc' };
+}
+
+/**
+ * Fillet a path vertex whose neighbours may be arcs (e.g. a line running onto a
+ * "bump"). The fillet circle is tangent to both neighbours: its centre is where
+ * the two curves, each offset inwards by the radius, meet.
+ */
+export function cornerArcPath(p: PathLike, i: number, r: number): { pts: Point[]; bulge: number[]; closed: boolean } | { error: string } {
+  const n = p.pts.length, nseg = segCount(p);
+  if (!p.closed && (i === 0 || i === n - 1)) return { error: 'Not a corner' };
+  if (!(r > 0)) return { error: 'Size must be more than 0' };
+  const segs = segsOf(p), i1 = (i - 1 + nseg) % nseg, i2 = i % nseg, s1 = segs[i1], s2 = segs[i2], V = p.pts[i];
+  const t1 = segTangent(s1, 1), t2 = segTangent(s2, 0), turn = cross(t1, t2);
+  if (Math.abs(turn) < 1e-9 && dot(t1, t2) > 0) return { error: 'No corner here — the edges already meet smoothly' };
+  const s = turn >= 0 ? 1 : -1;
+  const off = (g: PSeg): Geo | null => {
+    if (g.kind === 'seg') { const t = segTangent(g, 0); return { kind: 'line', a: add(g.a, mul(P(-t.y, t.x), s * r)), d: sub(g.b, g.a) }; }
+    const R2 = g.r - s * (g.sweep > 0 ? 1 : -1) * r; return R2 > 1e-9 ? { kind: 'circ', c: g.c, r: R2 } : null;
+  };
+  const o1 = off(s1), o2 = off(s2);
+  if (!o1 || !o2) return { error: 'Too large for the curve next to this corner' };
+  const foot = (g: PSeg, C: Point) => g.kind === 'seg' ? add(g.a, mul(sub(g.b, g.a), dot(sub(C, g.a), sub(g.b, g.a)) / (g.len * g.len))) : add(g.c, mul(sub(C, g.c), g.r / (dist(C, g.c) || 1)));
+  let best: { C: Point; T1: Point; T2: Point; u1: number; u2: number; d: number } | null = null;
+  for (const C of meet(o1, o2)) {
+    const T1 = foot(s1, C), T2 = foot(s2, C);
+    const u1 = s1.kind === 'seg' ? segParam(s1, T1) : (dist(T1, s1.b) < 1e-9 ? 1 : segParam(s1, T1)), u2 = s2.kind === 'seg' ? segParam(s2, T2) : (dist(T2, s2.a) < 1e-9 ? 0 : segParam(s2, T2));
+    if (u1 < -1e-9 || u1 > 1 + 1e-9 || u2 < -1e-9 || u2 > 1 + 1e-9) continue;
+    const d = dist(C, V); if (!best || d < best.d) best = { C, T1, T2, u1, u2, d };
+  }
+  if (!best) return { error: 'Too large for this corner' };
+  const { C } = best, T1 = cp(best.T1), T2 = cp(best.T2);
+  const aa = angOf(C, T1), ab = angOf(C, T2), sweep = s > 0 ? normA(ab - aa) : -normA(aa - ab);
+  const pts = p.pts.slice(), bulge = Array.from({ length: nseg }, (_, k) => bulgeAt(p, k));
+  bulge[i1] = pieceBulge(s1, 0, Math.min(1, Math.max(0, best.u1))); bulge[i2] = pieceBulge(s2, Math.min(1, Math.max(0, best.u2)), 1);
+  pts.splice(i, 1, T1, T2); bulge.splice(i, 0, Math.tan(sweep / 4));
+  return dedupe(pts, bulge, p.closed);
+}
+
+/** Fillet or chamfer any path vertex (straight or curved neighbours). */
+export function cornerAny(p: PathLike, i: number, size: number, mode: CornerMode) {
+  if (pathCorner(p, i)) return cornerPath(p, i, size, mode);
+  if (mode === 'chamfer') return { error: 'Chamfer needs two straight edges — use Fillet next to curves' };
+  return cornerArcPath(p, i, size);
+}
+
+/**
+ * An arc segment of a path that rounds a corner between two straight segments
+ * (an existing fillet): returns the path with the sharp corner put back, the
+ * index of that corner, and the fillet's radius.
+ */
+export function unfillet(p: PathLike, k: number): { path: { pts: Point[]; bulge: number[]; closed: boolean }; i: number; r: number } | null {
+  const nseg = segCount(p), segs = segsOf(p), g = segs[k];
+  if (!g || g.kind !== 'arc' || nseg < 3) return null;
+  if (!p.closed && (k === 0 || k === nseg - 1)) return null;
+  const prev = segs[(k - 1 + nseg) % nseg], next = segs[(k + 1) % nseg];
+  if (prev.kind !== 'seg' || next.kind !== 'seg') return null;
+  const X = meet({ kind: 'line', a: prev.a, d: sub(prev.b, prev.a) }, { kind: 'line', a: next.a, d: sub(next.b, next.a) })[0];
+  if (!X || dist(X, g.a) > 1e6) return null;
+  let pts = p.pts.slice(), bulge = Array.from({ length: nseg }, (_, j) => bulgeAt(p, j)), kk = k;
+  if (p.closed) { const rot = (k - 1 + nseg) % nseg; pts = pts.slice(rot).concat(pts.slice(0, rot)); bulge = bulge.slice(rot).concat(bulge.slice(0, rot)); kk = 1; }
+  pts.splice(kk, 2, cp(X)); bulge.splice(kk, 1);
+  return { path: { pts, bulge, closed: p.closed }, i: kk, r: g.r };
+}
