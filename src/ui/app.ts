@@ -5,7 +5,7 @@ import { affMove, affScale, affRot } from '../geometry/affine';
 import { geomSettings } from '../geometry/entity';
 import type { BoolOp } from '../geometry/boolean';
 import { openTrace } from './trace';
-import type { Editor, CoordMode } from '../editor/editor';
+import { DEFAULT_OPTS, type Editor, type CoordMode } from '../editor/editor';
 import type { OptionSpec, PointerInfo } from '../editor/tool';
 import { Renderer } from '../render/renderer';
 import { COLORS, WIDTHS, PAGES, newDoc, type Entity, type Shape, type ColorKey } from '../model/types';
@@ -48,6 +48,21 @@ export function startUI(ed: Editor) {
     } else { const dx = ev.shiftKey && ev.deltaX === 0 ? ev.deltaY : ev.deltaX, dy = ev.shiftKey && ev.deltaX === 0 ? 0 : ev.deltaY; ed.panBy(dx * unit, dy * unit); }
   }, { passive: false });
 
+  // ---------- mouse wheel on a focused number box nudges its value ----------
+  const NUMERIC = /^\s*-?(\d+\.?\d*|\.\d+)\s*(mm|cm|in|°|%)?\s*$/i;
+  const changeT = new WeakMap<HTMLInputElement, number>();
+  document.addEventListener('wheel', ev => {
+    const el = ev.target as HTMLInputElement;
+    if (!(el instanceof HTMLInputElement) || el.type !== 'text' || document.activeElement !== el || !NUMERIC.test(el.value || '0')) return;
+    ev.preventDefault();
+    const base = parseFloat(el.dataset.step || '') || (/^\s*-?\d+\s*$/.test(el.value) || !el.value ? 1 : 1), step = ev.shiftKey ? base / 10 : ev.altKey ? base * 10 : base;
+    const dir = (ev.deltaY || ev.deltaX) < 0 ? 1 : -1, cur = parseFloat(el.value) || 0, dec = Math.max(0, -Math.floor(Math.log10(step) + 1e-9));
+    let v = +(Math.round((cur + dir * step) / step) * step).toFixed(dec);
+    if (el.dataset.min != null) v = Math.max(+el.dataset.min, v); if (el.dataset.max != null) v = Math.min(+el.dataset.max, v);
+    el.value = String(v); el.dispatchEvent(new Event('input', { bubbles: true }));
+    clearTimeout(changeT.get(el)); changeT.set(el, window.setTimeout(() => el.dispatchEvent(new Event('change', { bubbles: true })), 300));
+  }, { passive: false, capture: true });
+
   // ---------- change routing ----------
   ed.on(k => {
     if (k === 'view') { R.request(); return; }
@@ -76,7 +91,7 @@ export function startUI(ed: Editor) {
   function optHTML(o: OptionSpec): string {
     const v = ed.opt[o.key];
     if (o.type === 'seg') return `<label>${esc(o.label)} <span class="segc" role="group" data-opt="${o.key}">${o.choices.map(([cv, l]) => `<button type="button" data-v="${cv}" aria-pressed="${String(v) === cv}">${esc(l)}</button>`).join('')}</span></label>`;
-    if (o.type === 'number') return `<label>${esc(o.label)} <input type="text" inputmode="decimal" data-opt="${o.key}" value="${esc(String(v ?? ''))}" placeholder="${esc(o.placeholder || '')}">${o.unit ? `<span>${o.unit}</span>` : ''}</label>`;
+    if (o.type === 'number') return `<label>${esc(o.label)} <input type="text" inputmode="decimal" data-opt="${o.key}" data-step="${o.step ?? 1}"${o.min != null ? ` data-min="${o.min}"` : ''}${o.max != null ? ` data-max="${o.max}"` : ''} value="${esc(String(v ?? ''))}" placeholder="${esc(o.placeholder || '')}">${o.unit ? `<span>${o.unit}</span>` : ''}</label>`;
     if (o.type === 'check') return `<label><input type="checkbox" data-opt="${o.key}" ${v ? 'checked' : ''}> ${esc(o.label)}</label>`;
     if (o.type === 'select') return `<label>${esc(o.label)} <select data-opt="${o.key}">${o.choices.map(([cv, l]) => `<option value="${cv}" ${String(v) === cv ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select></label>`;
     if (o.type === 'button') return `<button class="btn" data-opt="${o.key}">${esc(o.label)}</button>`;
@@ -285,7 +300,18 @@ export function startUI(ed: Editor) {
     const fh = document.querySelector<HTMLElement>('#pFlipH'); if (fh) fh.onclick = () => ed.flipSel('h');
     const fv = document.querySelector<HTMLElement>('#pFlipV'); if (fv) fv.onclick = () => ed.flipSel('v');
   }
+  /** Re-render the side panel, keeping the focused number box focused (so the wheel keeps working). */
   function renderPane() {
+    const a = document.activeElement as HTMLInputElement | null, pane = $('#pane');
+    const key = a && pane.contains(a) ? (a.id && !/^f\d+$/.test(a.id) ? '#' + a.id : pane.querySelector(`label[for="${a.id}"]`)?.textContent || null) : null;
+    renderPaneInner();
+    if (!key) return;
+    let el: HTMLInputElement | null = null;
+    if (key.startsWith('#')) el = pane.querySelector<HTMLInputElement>(key);
+    else { const l = [...pane.querySelectorAll('label')].find(x => x.textContent === key); el = l ? pane.querySelector<HTMLInputElement>('#' + l.htmlFor) : null; }
+    if (el) { el.focus(); const n = el.value.length; try { el.setSelectionRange(n, n); } catch { /* ignore */ } }
+  }
+  function renderPaneInner() {
     const pane = $('#pane'), t = ui.tab;
     if (t === 'props') {
       const sel = ed.selected();
@@ -371,7 +397,9 @@ export function startUI(ed: Editor) {
         <p class="hint">New dimensions use this colour. Dimensions are left out of SVG/DXF exports unless you tick "Include dimensions", so they are never cut.</p>
         <h3>Accuracy</h3><div class="grid2"><label for="sTol">Curve tolerance</label><input type="text" id="sTol" value="${geomSettings.flatTol}"><label for="sJt">Close gaps up to mm</label><input type="text" id="sJt" value="${ed.opt.joinTol}"><label for="sDp">Decimals shown</label><input type="text" id="sDp" value="${dp()}"><label for="sPk">Click reach px</label><input type="text" id="sPk" value="${ed.opt.pickPx}"></div>
         <h3>Mouse &amp; trackpad</h3><div class="row"><label class="chk"><input type="radio" name="wh" value="zoom" ${prefs.wheelPans ? '' : 'checked'}>Wheel zooms at pointer</label><label class="chk"><input type="radio" name="wh" value="pan" ${prefs.wheelPans ? 'checked' : ''}>Two-finger scroll pans (pinch zooms)</label></div>
-        <p class="hint">Click reach: how far from a line (in screen pixels) a click still picks it — the nearest line wins. Decimals shown: sizes are kept exactly; this only rounds what you see (hover a box for the exact value). Close gaps: Make Path and Trim treat ends this close as touching. Curve tolerance is how closely contours follow curves (mm). Smaller is more accurate but makes bigger files. These settings, except tolerance, are saved with the drawing.</p>`;
+        <p class="hint">Click reach: how far from a line (in screen pixels) a click still picks it — the nearest line wins. Decimals shown: sizes are kept exactly; this only rounds what you see (hover a box for the exact value). Close gaps: Make Path and Trim treat ends this close as touching. Curve tolerance is how closely contours follow curves (mm). Smaller is more accurate but makes bigger files. These settings, except tolerance, are saved with the drawing.</p>
+        <h3>Defaults</h3><div class="row"><button class="btn" id="sReset" title="Grid, snaps, dimensions, click reach, tool options… back to how they started. Your drawing is not changed.">Reset all settings to defaults</button></div>
+        <p class="hint">Tip: click in any number box, then use the mouse wheel to change it (Shift = finer, Alt = coarser).</p>`;
       ($('#sPre') as HTMLSelectElement).value = pg.preset || 'CUSTOM';
       const du = $<HTMLSelectElement>('#sDu'), dc = $<HTMLSelectElement>('#sDc'); du.value = ed.doc.dim.unit; dc.value = ed.doc.dim.color;
       du.onchange = () => { ed.doc.dim.unit = du.value as any; ed.changed('view'); };
@@ -383,6 +411,13 @@ export function startUI(ed: Editor) {
       num('sRs', v => A.radial.start = v, false); num('sRp', v => A.radial.step = Math.max(0.1, v), false);
       num('sBox', v => at.box = Math.max(4, v), false); num('sDd', v => ed.doc.dim.dec = Math.min(6, Math.max(0, Math.round(v))), false); num('sDh', v => ed.doc.dim.textH = Math.max(0.5, v));
       num('sTol', v => { geomSettings.flatTol = Math.min(0.1, Math.max(0.0001, v)); });
+      $('#sReset').onclick = ev => {
+        const b = ev.currentTarget as HTMLButtonElement;
+        if (b.dataset.armed !== '1') { b.dataset.armed = '1'; b.textContent = 'Click again to reset'; b.classList.add('primary'); setTimeout(() => { if (b.isConnected) { b.dataset.armed = ''; b.textContent = 'Reset all settings to defaults'; b.classList.remove('primary'); } }, 3000); return; }
+        const d0 = newDoc(); ed.doc.aids = d0.aids; ed.doc.dim = d0.dim; Object.keys(ed.opt).forEach(k => delete ed.opt[k]); Object.assign(ed.opt, structuredClone(DEFAULT_OPTS));
+        geomSettings.flatTol = 0.0005; for (const k of Object.keys(prefs)) delete (prefs as any)[k]; savePrefs(prefs);
+        renderToggles(); renderOptions(); renderPane(); ed.changed('view'); ed.toast('Settings reset to defaults — your drawing is unchanged');
+      };
       num('sPk', v => { ed.opt.pickPx = Math.min(60, Math.max(3, Math.round(v))); prefs.pickPx = ed.opt.pickPx; savePrefs(prefs); }, false);
       num('sDp', v => { prefs.dp = Math.min(6, Math.max(0, Math.round(v))); savePrefs(prefs); }, false);
       num('sJt', v => { ed.opt.joinTol = Math.min(2, Math.max(0, v)); prefs.joinTol = ed.opt.joinTol; savePrefs(prefs); });
