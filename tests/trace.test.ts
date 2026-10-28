@@ -48,3 +48,11 @@ describe('colours on a graduated background', () => {
     expect(r.loops.length).toBe(1); expect(Math.abs(r.loops[0].area)).toBeGreaterThan(55 * 35);
   });
 });
+import { whyEmpty } from '../src/trace/trace';
+describe('explains an empty trace', () => {
+  const img = (() => { const d = new Uint8ClampedArray(60 * 60 * 4); for (let i = 0; i < 3600; i++) { const x = i % 60, y = (i / 60) | 0, v = Math.hypot(x - 30, y - 30) < 15 ? 20 : 240; d[i * 4] = d[i * 4 + 1] = d[i * 4 + 2] = v; d[i * 4 + 3] = 255; } return { w: 60, h: 60, data: d }; })();
+  it('specks too big', () => { const o = { ...base, speckPx: 1e6 }; expect(whyEmpty(trace(img, o), o)).toMatch(/smaller than "Ignore specks"/); });
+  it('threshold too low', () => { const o = { ...base, threshold: 5 }; expect(whyEmpty(trace(img, o), o)).toMatch(/Nothing is darker/); });
+  it('all colours dropped', () => { const o = { ...base, mode: 'colours' as const, keep: [false, false] }; expect(whyEmpty(trace(img, o), o)).toMatch(/All colours are dropped/); });
+  it('nothing to explain when outlines exist', () => { expect(whyEmpty(trace(img, base), base)).toBeNull(); });
+});

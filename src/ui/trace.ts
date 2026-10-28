@@ -3,13 +3,14 @@
  * place them in the drawing at an exact size. Includes an eraser brush for
  * the picture (drag to remove flakes and background; Alt-drag restores).
  */
-import { trace, type TraceOpts, type TraceResult, type Img } from '../trace/trace';
+import { trace, whyEmpty, type TraceOpts, type TraceResult, type Img } from '../trace/trace';
 import { P, fmt } from '../geometry/vec';
 import type { Editor } from '../editor/editor';
 import type { Shape } from '../model/types';
 
 interface Settings { mode: 'silhouette' | 'colours'; threshold: number; auto: boolean; invert: boolean; flatten: boolean; fillHoles: boolean; colours: number; merge: boolean; clean: number; smooth: number; detail: number; speckMm: number; widthMm: number; res: number; showImg: boolean; brush: number }
-const S: Settings = { mode: 'silhouette', threshold: 128, auto: true, invert: false, flatten: false, fillHoles: false, colours: 4, merge: false, clean: 1, smooth: 2, detail: 6, speckMm: 1, widthMm: 100, res: 800, showImg: true, brush: 12 };
+const DEFAULTS: Settings = { mode: 'silhouette', threshold: 128, auto: true, invert: false, flatten: false, fillHoles: false, colours: 4, merge: false, clean: 1, smooth: 2, detail: 6, speckMm: 1, widthMm: 100, res: 800, showImg: true, brush: 12 };
+const S: Settings = { ...DEFAULTS };
 
 const esc = (s: string) => s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' } as any)[c]);
 export const tolFromDetail = (d: number) => 0.25 * Math.pow(1.35, 10 - d);
@@ -42,12 +43,14 @@ export async function openTrace(ed: Editor, file: Blob, name = (file as File).na
 
 function build(ed: Editor, im: Pic, name: string) {
   document.querySelector('#trace')?.remove();
+  Object.assign(S, { ...DEFAULTS, showImg: S.showImg, brush: S.brush });
   const root = document.createElement('div'); root.id = 'trace';
   root.innerHTML = `<div class="box" role="dialog" aria-modal="true" aria-labelledby="tTitle">
     <div class="head"><strong id="tTitle">Trace image · ${esc(name)}</strong><button class="x" id="tClose" aria-label="Close">✕</button></div>
     <div class="body">
       <div class="view"><canvas id="tCv" aria-label="Trace preview"></canvas><div class="vbar"><button class="btn" id="tErase" aria-pressed="false" title="Drag over the picture to remove flakes and background · Alt-drag restores · wheel = brush size">Eraser brush</button><span class="hint" id="tBrush"></span><button class="btn" id="tClear">Clear erasing</button><label class="chk"><input type="checkbox" id="tShow">Show picture</label></div></div>
       <div class="ctl">
+        <div class="row"><button class="btn" id="tUndo" title="Undo (Ctrl/Cmd+Z)">Undo</button><button class="btn" id="tRedo" title="Redo (Ctrl/Cmd+Y)">Redo</button><button class="btn" id="tReset" title="Back to the starting settings and clear erasing">Reset</button></div>
         <div class="segc" role="group" id="tMode"><button type="button" data-v="silhouette">Silhouette</button><button type="button" data-v="colours">Colours</button></div>
         <div id="tSil">
           <label class="sl">Threshold <input type="range" id="tTh" min="1" max="254"><output id="tThO"></output></label>
@@ -77,8 +80,34 @@ function build(ed: Editor, im: Pic, name: string) {
   const cv = $<HTMLCanvasElement>('#tCv'), ctx = cv.getContext('2d')!;
   let img: Img, erase: Uint8Array, res: TraceResult | null = null, keep: boolean[] | undefined, timer = 0, erasing = false, painting = false;
   const close = () => { root.remove(); window.removeEventListener('keydown', onKey, true); };
-  const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); close(); } };
+  const onKey = (e: KeyboardEvent) => {
+    if (e.key === 'Escape') { e.stopImmediatePropagation(); close(); return; }
+    const typing = (e.target as HTMLElement)?.matches?.('input[type=text],textarea');
+    if ((e.ctrlKey || e.metaKey) && !typing) {
+      const k = e.key.toLowerCase();
+      if (k === 'z' || k === 'y') { e.preventDefault(); e.stopImmediatePropagation(); (k === 'y' || e.shiftKey) ? redo() : undo(); }
+    }
+  };
   window.addEventListener('keydown', onKey, true);
+
+  // ---- undo / redo / reset (settings, kept colours and erasing) ----
+  type Snap = { s: Settings; keep?: boolean[]; erase: Uint8Array };
+  const hist: Snap[] = []; let hi = -1, commitT = 0;
+  const snap = (): Snap => ({ s: { ...S }, keep: keep?.slice(), erase });
+  function commit(now = false) {
+    clearTimeout(commitT);
+    const same = (a: Snap, b: Snap) => a.erase === b.erase && JSON.stringify([a.s, a.keep]) === JSON.stringify([b.s, b.keep]);
+    const go = () => { const n = snap(); if (hi >= 0 && same(hist[hi], n)) return; hist.splice(hi + 1); hist.push(n); if (hist.length > 40) hist.shift(); hi = hist.length - 1; histButtons(); };
+    if (now) go(); else commitT = window.setTimeout(go, 350);
+  }
+  function restore(h: Snap) {
+    const resChanged = h.s.res !== S.res; Object.assign(S, h.s); keep = h.keep?.slice();
+    if (resChanged) load(); erase = h.erase; sync(); run(); histButtons();
+  }
+  function undo() { clearTimeout(commitT); if (hi > 0) restore(hist[--hi]); }
+  function redo() { if (hi < hist.length - 1) restore(hist[++hi]); }
+  function histButtons() { ($('#tUndo') as HTMLButtonElement).disabled = hi <= 0; ($('#tRedo') as HTMLButtonElement).disabled = hi >= hist.length - 1; }
+  function reset() { const resChanged = S.res !== DEFAULTS.res; Object.assign(S, { ...DEFAULTS, showImg: S.showImg, brush: S.brush }); keep = undefined; if (resChanged) load(); erase = new Uint8Array(img.w * img.h); sync(); run(); commit(true); }
 
   function load() {
     const k = Math.min(1, S.res / Math.max(im.naturalWidth, im.naturalHeight)), w = Math.max(8, Math.round(im.naturalWidth * k)), h = Math.max(8, Math.round(im.naturalHeight * k));
@@ -98,7 +127,8 @@ function build(ed: Editor, im: Pic, name: string) {
       const t0 = performance.now(); res = trace(img, opts());
       if (S.auto && S.mode === 'silhouette') { S.threshold = Math.round(res.threshold); sync(); }
       const many = res.loops.length > 1500;
-      $('#tStat').innerHTML = `${res.loops.length} outline${res.loops.length === 1 ? '' : 's'} · ${res.points} points · ${Math.round(performance.now() - t0)} ms${many ? '<br><b>Very many pieces</b> — raise "Ignore specks", noise clean-up, or use the eraser.' : ''}`;
+      const why = whyEmpty(res, opts());
+      $('#tStat').innerHTML = `${res.loops.length} outline${res.loops.length === 1 ? '' : 's'} · ${res.points} points${S.mode === 'colours' ? ` · ${res.palette.length} colours found` : ''} · ${Math.round(performance.now() - t0)} ms${many ? '<br><b>Very many pieces</b> — raise "Ignore specks", noise clean-up, or use the eraser.' : ''}${why ? `<br><b class="warn">${esc(why)}</b>` : ''}`;
       renderPal(); draw();
     }, 90);
   }
@@ -132,9 +162,9 @@ function build(ed: Editor, im: Pic, name: string) {
     if (!erasing) return; const r = cv.getBoundingClientRect(), x = ev.clientX - r.left, y = ev.clientY - r.top;
     ctx.strokeStyle = '#e03131'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(x, y, S.brush * fit.k, 0, Math.PI * 2); ctx.stroke();
   }
-  cv.addEventListener('pointerdown', ev => { if (!erasing) return; painting = true; cv.setPointerCapture(ev.pointerId); paint(ev); });
+  cv.addEventListener('pointerdown', ev => { if (!erasing) return; painting = true; erase = erase.slice(); cv.setPointerCapture(ev.pointerId); paint(ev); });
   cv.addEventListener('pointermove', ev => { if (painting) paint(ev); else if (erasing) { draw(); brushRing(ev); } });
-  cv.addEventListener('pointerup', () => { if (painting) { painting = false; run(); } });
+  cv.addEventListener('pointerup', () => { if (painting) { painting = false; run(); commit(true); } });
   cv.addEventListener('wheel', ev => { if (!erasing) return; ev.preventDefault(); S.brush = Math.max(1, Math.min(200, Math.round(S.brush * (ev.deltaY < 0 ? 1.15 : 1 / 1.15)))); draw(); brushRing(ev); }, { passive: false });
 
   // ---- controls ----
@@ -142,7 +172,7 @@ function build(ed: Editor, im: Pic, name: string) {
     const pal = $('#tPal'); if (!res || S.mode !== 'colours') { pal.innerHTML = ''; return; }
     const kp = res.palette.map((_, j) => keep?.[j] ?? !res!.backgrounds.includes(j));
     pal.innerHTML = res.palette.map((c, j) => `<button type="button" data-j="${j}" aria-pressed="${kp[j]}" title="${kp[j] ? 'Kept — click to drop' : 'Dropped — click to keep'}${res!.backgrounds.includes(j) ? ' (background)' : ''}" style="--sw:rgb(${c.join(',')})"></button>`).join('');
-    pal.querySelectorAll<HTMLElement>('button').forEach(b => b.onclick = () => { const j = +b.dataset.j!; keep = kp.slice(); keep[j] = !keep[j]; run(); });
+    pal.querySelectorAll<HTMLElement>('button').forEach(b => b.onclick = () => { const j = +b.dataset.j!; keep = kp.slice(); keep[j] = !keep[j]; run(); commit(true); });
   }
   function sync() {
     root.querySelectorAll<HTMLElement>('#tMode button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.v === S.mode)));
@@ -157,19 +187,20 @@ function build(ed: Editor, im: Pic, name: string) {
     set('#tSpeck', S.speckMm); set('#tW', S.widthMm); $<HTMLSelectElement>('#tRes').value = String(S.res);
     $('#tH').textContent = `× ${fmt(S.widthMm * img.h / img.w, 1)} mm`;
   }
-  const bind = (id: string, f: (el: HTMLInputElement) => void, ev = 'input') => $<HTMLInputElement>(id).addEventListener(ev, e => { f(e.target as HTMLInputElement); sync(); run(); });
-  root.querySelectorAll<HTMLElement>('#tMode button').forEach(b => b.onclick = () => { S.mode = b.dataset.v as any; sync(); run(); });
+  const bind = (id: string, f: (el: HTMLInputElement) => void, ev = 'input') => $<HTMLInputElement>(id).addEventListener(ev, e => { const el = e.target as HTMLInputElement; f(el); if (el.type === 'text') el.blur(); sync(); run(); commit(ev === 'change'); });
+  root.querySelectorAll<HTMLElement>('#tMode button').forEach(b => b.onclick = () => { S.mode = b.dataset.v as any; sync(); run(); commit(true); });
   bind('#tTh', e => { S.threshold = +e.value; S.auto = false; });
   bind('#tAuto', e => { S.auto = e.checked; }, 'change'); bind('#tInv', e => { S.invert = e.checked; }, 'change');
   bind('#tFlat', e => { S.flatten = e.checked; }, 'change'); bind('#tFill', e => { S.fillHoles = e.checked; }, 'change'); bind('#tMerge', e => { S.merge = e.checked; }, 'change');
   bind('#tK', e => { S.colours = +e.value; keep = undefined; });
   bind('#tClean', e => { S.clean = +e.value; }); bind('#tDet', e => { S.detail = +e.value; }); bind('#tSm', e => { S.smooth = +e.value; });
   bind('#tSpeck', e => { const v = parseFloat(e.value); if (v >= 0) S.speckMm = v; }, 'change');
-  bind('#tW', e => { const v = parseFloat(e.value); if (v > 0) S.widthMm = v; }, 'change');
-  $<HTMLSelectElement>('#tRes').onchange = e => { S.res = +(e.target as HTMLSelectElement).value; load(); sync(); run(); };
+  bind('#tW', e => { const v = parseFloat(e.value); if (v > 0) { S.widthMm = Math.min(3000, Math.max(5, v)); if (v < 5) ed.toast('Smallest width is 5 mm'); } }, 'change');
+  $<HTMLSelectElement>('#tRes').onchange = e => { S.res = +(e.target as HTMLSelectElement).value; load(); sync(); run(); commit(true); };
   $<HTMLInputElement>('#tShow').onchange = e => { S.showImg = (e.target as HTMLInputElement).checked; draw(); };
   $('#tErase').onclick = () => { erasing = !erasing; $('#tErase').setAttribute('aria-pressed', String(erasing)); cv.style.cursor = erasing ? 'crosshair' : ''; };
-  $('#tClear').onclick = () => { erase.fill(0); run(); };
+  $('#tClear').onclick = () => { erase = new Uint8Array(img.w * img.h); run(); commit(true); };
+  $('#tUndo').onclick = undo; $('#tRedo').onclick = redo; $('#tReset').onclick = reset;
   $('#tClose').onclick = close; $('#tCancel').onclick = close;
   root.addEventListener('click', e => { if (e.target === root) close(); });
   $('#tPlace').onclick = () => {
@@ -182,5 +213,5 @@ function build(ed: Editor, im: Pic, name: string) {
     ed.toast(`Placed ${shapes.length} outline${shapes.length > 1 ? 's' : ''} (${fmt(S.widthMm, 1)} × ${fmt(H, 1)} mm)${shapes.length > 1 ? ' as a group' : ''}`);
   };
   new ResizeObserver(() => res && draw()).observe(cv.parentElement!);
-  load(); sync(); run();
+  load(); sync(); run(); commit(true);
 }

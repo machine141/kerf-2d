@@ -37,7 +37,7 @@ export interface TraceOpts {
   erase?: Uint8Array;
 }
 export interface Loop { pts: { x: number; y: number }[]; area: number; colour: number }
-export interface TraceResult { loops: Loop[]; palette: [number, number, number][]; background: number; backgrounds: number[]; threshold: number; points: number }
+export interface TraceResult { loops: Loop[]; palette: [number, number, number][]; background: number; backgrounds: number[]; threshold: number; points: number; diag: { found: number; largestPx: number; coverage: number; masks: number; keptColours: number } }
 
 // ---------- image preparation ----------
 export function toGrey(img: Img): Float32Array {
@@ -250,14 +250,30 @@ export function trace(img: Img, o: TraceOpts): TraceResult {
     if (o.merge) { const m = new Uint8Array(n); for (let i = 0; i < n; i++) m[i] = keep[lab[i]] ? 1 : 0; masks.push({ mask: erase(o.fillHoles ? fillHoles(m, w, h) : m), colour: -1 }); }
     else palette.forEach((_, j) => { if (!keep[j]) return; const m = new Uint8Array(n); let any = false; for (let i = 0; i < n; i++) if (lab[i] === j) { m[i] = 1; any = true; } if (any) masks.push({ mask: erase(m), colour: j }); });
   }
-  const loops: Loop[] = []; let points = 0;
+  const loops: Loop[] = []; let points = 0, found = 0, largest = 0, on = 0;
+  for (const { mask } of masks) for (let i = 0; i < n; i++) on += mask[i];
   for (const { mask, colour } of masks) for (const raw of traceMask(mask, w, h)) {
-    const area = loopArea(raw); if (Math.abs(area) < Math.max(1, o.speckPx)) continue;
+    const area = loopArea(raw); found++; largest = Math.max(largest, Math.abs(area));
+    if (Math.abs(area) < Math.max(1, o.speckPx)) continue;
     let p = midpoints(raw);
     if (o.smooth > 0) p = chaikin(p, Math.round(o.smooth));
     p = simplifyClosed(p, Math.max(0.05, o.tolPx));
     if (p.length < 3) continue;
     loops.push({ pts: p, area, colour }); points += p.length;
   }
-  return { loops, palette, background, backgrounds, threshold, points };
+  const keptColours = o.mode === 'colours' ? palette.filter((_, j) => o.keep?.[j] ?? !backgrounds.includes(j)).length : 1;
+  return { loops, palette, background, backgrounds, threshold, points, diag: { found, largestPx: largest, coverage: masks.length ? on / (n * (o.merge || o.mode === 'silhouette' ? 1 : masks.length)) : 0, masks: masks.length, keptColours } };
 }
+
+/** Plain-English reason when a trace finds nothing (null if outlines were found). */
+export function whyEmpty(r: TraceResult, o: TraceOpts): string | null {
+  if (r.loops.length) return null;
+  const d = r.diag;
+  if (o.mode === 'colours' && d.keptColours === 0) return 'All colours are dropped — click a colour swatch to keep it.';
+  if (o.erase && o.erase.every(v => v === 1)) return 'The whole picture has been erased — press Clear erasing.';
+  if (d.coverage < 0.0005) return o.mode === 'silhouette' ? (o.invert ? 'Nothing is lighter than the threshold — move Threshold left, or untick "Light shape on dark".' : 'Nothing is darker than the threshold — move Threshold right, or tick "Light shape on dark".') : 'The colours you kept are not in the picture.';
+  if (d.coverage > 0.9995) return 'The whole picture counts as the shape — move Threshold the other way, or change "Light shape on dark".';
+  if (d.found && d.largestPx < o.speckPx) return `All ${d.found} pieces are smaller than "Ignore specks" — lower it.`;
+  return 'Nothing found — press Reset to go back to the starting settings.';
+}
+
