@@ -55,6 +55,8 @@ export interface Tool {
   onKey?(ed: Editor, key: string, info: { shift: boolean; alt: boolean; ctrl: boolean }): boolean;
   /** a point was located (clicked with snapping, or typed) */
   located?(ed: Editor, p: Point): void;
+  /** right-click: return true if the tool used it (e.g. to freeze its preview) */
+  rightClick?(ed: Editor): boolean;
   /** Enter / right-click / double-click finish */
   finish?(ed: Editor): void;
   /** Esc: return true if the tool cancelled something internally */
@@ -84,8 +86,18 @@ export function pointTool(def: PointToolDef): Tool {
   const t: Tool = {
     id: def.id, label: def.label, key: def.key, icon: def.icon, group: def.group, draws: true, constrain45: def.constrain45,
     needsSelection: def.needsSelection, options: def.options,
-    prompt: ed => { const pr = typeof def.prompts === 'function' ? def.prompts(ed) : def.prompts; return pr[Math.min(ed.pts.length, pr.length - 1)]; },
+    prompt: ed => {
+      const pr = typeof def.prompts === 'function' ? def.prompts(ed) : def.prompts, base = pr[Math.min(ed.pts.length, pr.length - 1)];
+      if (ed.state.frozen) return 'Frozen — change the options above, then click or press Enter to place · right-click to unfreeze';
+      return base + (typeof def.need === 'number' && ed.pts.length ? ' · right-click freezes the preview so you can change options' : '');
+    },
+    /** Right-click while placing a shape freezes the preview where it is (options can then be changed); again unfreezes. */
+    rightClick(ed) {
+      if (typeof def.need !== 'number' || !ed.pts.length) return false;
+      ed.state.frozen = ed.state.frozen ? null : ed.cursorPoint(); ed.changed('prompt'); return true;
+    },
     down(ed, raw, info) {
+      if (ed.state.frozen) { const f = ed.state.frozen; ed.state.frozen = null; ed.locate(f); return; }
       const s = ed.snapAt(raw); ed.snapRes = s; const before = ed.pts.length;
       ed.locate(s.p);
       if (def.drag && before === 0 && ed.pts.length === 1) ed.state.dragStart = info.sp;
@@ -107,9 +119,11 @@ export function pointTool(def: PointToolDef): Tool {
         ed.pts = [];
         if (pts.length >= (def.minPoints ?? 2)) def.make(ed, pts, !!ed.state.close);
         ed.state.close = false; ed.changed('prompt');
-      } else if (ed.pts.length) { ed.pts = []; ed.changed('prompt'); }
+      } else if (ed.state.frozen) { const f = ed.state.frozen; ed.state.frozen = null; ed.locate(f); }
+      else if (ed.pts.length) { ed.pts = []; ed.changed('prompt'); }
     },
     cancel(ed) {
+      if (ed.state.frozen) { ed.state.frozen = null; ed.changed('prompt'); return true; }
       if (!ed.pts.length) return false;
       if (def.need === 'open' && ed.pts.length >= (def.minPoints ?? 2)) { t.finish!(ed); return true; }
       ed.pts = []; ed.changed('prompt'); return true;
@@ -119,7 +133,11 @@ export function pointTool(def: PointToolDef): Tool {
       return def.keyExtra?.(ed, key) ?? false;
     },
     dblclick(ed) { if (def.need === 'open' && ed.pts.length) { ed.pts.pop(); t.finish!(ed); } },
-    overlay(ed, o) { if (ed.pts.length && def.preview) def.preview(ed, ed.pts, ed.cursorPoint(), o); },
+    overlay(ed, o) {
+      if (!ed.pts.length || !def.preview) return;
+      const f: Point | null = ed.state.frozen; def.preview(ed, ed.pts, f || ed.cursorPoint(), o);
+      if (f) o.custom((ctx, ed2, C) => { const s = ed2.w2s(f); ctx.strokeStyle = C['--accent']; ctx.lineWidth = 2; ctx.setLineDash([]); ctx.beginPath(); ctx.rect(s.x - 6, s.y - 6, 12, 12); ctx.moveTo(s.x - 3, s.y - 6); ctx.lineTo(s.x - 3, s.y - 10); ctx.arc(s.x, s.y - 10, 3, Math.PI, 0); ctx.lineTo(s.x + 3, s.y - 6); ctx.stroke(); });
+    },
   };
   return t;
 }

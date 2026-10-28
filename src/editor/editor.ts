@@ -143,7 +143,7 @@ export class Editor {
   pointerDown(raw: Point, button: number, info: PointerInfo, spaceHeld = false) {
     this.mods = { shift: info.shift, alt: info.alt, ctrl: info.ctrl }; this.cur = raw;
     if (button === 1 || (button === 0 && spaceHeld)) { this.pan = { sp: info.sp, ox: this.view.ox, oy: this.view.oy }; return; }
-    if (button === 2) { this.tool.finish && this.pts.length ? this.tool.finish(this) : this.cancel(); return; }
+    if (button === 2) { if (this.tool.rightClick?.(this)) { this.changed('view'); return; } this.tool.finish && this.pts.length ? this.tool.finish(this) : this.cancel(); return; }
     if (button === 0) this.tool.down?.(this, raw, info);
     this.changed('view');
   }
