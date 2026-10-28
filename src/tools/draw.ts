@@ -5,6 +5,8 @@ import type { Editor } from '../editor/editor';
 import type { Shape } from '../model/types';
 import { ICONS } from './icons';
 import { arc3, tangentArc, endTangent } from '../geometry/arcs';
+import { dimValue } from '../geometry/dims';
+import { hasBulge } from '../geometry/path';
 
 const addShape = (ed: Editor, s: Shape) => { const e = ed.store.change(() => ed.store.add(s)); return e; };
 
@@ -115,13 +117,45 @@ export const arcTool: Tool = pointTool({
   },
 });
 
-export const dimTool: Tool = pointTool({
+const linearDim: Tool = pointTool({
   id: 'dim', label: 'Dimension', key: 'D', icon: ICONS.dim, group: 2, need: 3, constrain45: true,
   prompts: ['Locate first point to dimension', 'Locate second point', 'Locate the position of the dimension line'],
-  options: [{ key: 'dimMode', label: 'Type', type: 'select', choices: [['a', 'Aligned'], ['h', 'Horizontal'], ['v', 'Vertical']] }],
-  make(ed, p) { addShape(ed, { type: 'dim', mode: ed.opt.dimMode, p1: p[0], p2: p[1], off: p[2] } as Shape); },
+  make(ed, p) { addDim(ed, { type: 'dim', mode: ed.opt.dimMode, p1: p[0], p2: p[1], off: p[2] } as Shape); },
   preview(ed, p, cur, o) {
-    if (p.length === 1) { o.ghost({ type: 'line', a: p[0], b: cur } as Shape); o.label(`${fmt(dist(p[0], cur), ed.doc.dim.dec)} mm`); }
+    if (p.length === 1) { o.ghost({ type: 'line', a: p[0], b: cur } as Shape); o.label(dimValue(dist(p[0], cur), ed.doc.dim)); }
     else o.ghost({ type: 'dim', mode: ed.opt.dimMode, p1: p[0], p2: p[1], off: cur } as Shape);
   },
 });
+const addDim = (ed: Editor, s: Shape) => addShape(ed, { ...s, color: ed.doc.dim.color } as Shape);
+const radial = (ed: Editor) => ed.opt.dimMode === 'r' || ed.opt.dimMode === 'd';
+
+/** Circle, arc or curved path segment under the cursor: its centre, radius and the nearest point on it. */
+export function pickRound(ed: Editor, raw: Point): { c: Point; r: number; id: string } | null {
+  const hit = ed.pick(raw, 10, e => e.type === 'circle' || e.type === 'arc' || (e.type === 'poly' && hasBulge(e)));
+  if (!hit) return null;
+  if (hit.pr.t === 'arc') return { c: hit.pr.c, r: hit.pr.r, id: hit.e.id };
+  return null;
+}
+/** Dimension tool: aligned / horizontal / vertical between points, or radius / diameter of a circle or arc. */
+export const dimTool: Tool = {
+  ...linearDim,
+  options: [{ key: 'dimMode', label: 'Type', type: 'seg', choices: [['a', 'Aligned'], ['h', 'Horizontal'], ['v', 'Vertical'], ['r', 'Radius'], ['d', 'Diameter']] }],
+  prompt: ed => !radial(ed) ? linearDim.prompt(ed) : ed.state.round ? 'Move to place the label · click to place · Esc to cancel' : `Click a circle, arc or rounded corner to show its ${ed.opt.dimMode === 'd' ? 'diameter' : 'radius'}`,
+  activate(ed) { ed.state.round = null; },
+  down(ed, raw, info) {
+    if (!radial(ed)) return linearDim.down!(ed, raw, info);
+    if (!ed.state.round) { const r = pickRound(ed, raw); if (!r) { ed.toast('Click on a circle, an arc or a rounded corner'); return; } ed.state.round = r; ed.changed('prompt'); return; }
+    placeRound(ed, ed.snapAt(raw).p);
+  },
+  up(ed, raw, info) { if (!radial(ed)) linearDim.up!(ed, raw, info); },
+  located(ed, p) { if (!radial(ed)) return linearDim.located!(ed, p); if (ed.state.round) placeRound(ed, p); },
+  cancel(ed) { if (ed.state.round) { ed.state.round = null; ed.changed('prompt'); return true; } return linearDim.cancel!(ed); },
+  overlay(ed, o) {
+    if (!radial(ed)) return linearDim.overlay!(ed, o);
+    const R = ed.state.round;
+    if (!R) { const h = ed.hover && pickRound(ed, ed.cur); if (h) { o.highlight([h.id], 'source'); o.label(`${ed.opt.dimMode === 'd' ? 'Ø' : 'R'}${dimValue(ed.opt.dimMode === 'd' ? 2 * h.r : h.r, ed.doc.dim)}`); } return; }
+    o.ghost(roundDim(ed, R, ed.cursorPoint()));
+  },
+};
+const roundDim = (ed: Editor, R: { c: Point; r: number }, at: Point) => ({ type: 'dim', mode: ed.opt.dimMode, p1: R.c, p2: P(R.c.x + R.r, R.c.y), off: at }) as Shape;
+function placeRound(ed: Editor, at: Point) { addDim(ed, roundDim(ed, ed.state.round, at)); ed.state.round = null; ed.changed('prompt'); }

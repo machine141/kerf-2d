@@ -12,7 +12,7 @@
 :root{
   --desk:#e4e8e5; --panel:#f6f7f5; --panel-2:#eceeeb; --line:#cfd6d1; --fg:#1b2420; --muted:#5a6862;
   --accent:#0d6b5e; --accent-fg:#ffffff; --sheet:#ffffff; --grid:#cad4cf; --grid-major:#aebbb4;
-  --ink:#15191c; --c-red:#e03131; --c-blue:#1c4fd8; --c-green:#2b8a3e; --c-magenta:#ae3ec9; --c-orange:#d9480f;
+  --ink:#15191c; --c-red:#e03131; --c-blue:#1c4fd8; --c-green:#2b8a3e; --c-magenta:#ae3ec9; --c-orange:#d9480f; --c-grey:#868e96;
   --sel:#d6336c; --source:#7048e8; --snap:#e67700; --ok:#2b8a3e; --bad:#c92a2a; --shadow:rgba(20,30,25,.14);
   --node-start:#2b8a3e; --node-end:#c92a2a; --node:#e67700;
   --f-ui:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
@@ -22,13 +22,13 @@
 @media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
   --desk:#131819; --panel:#1b2123; --panel-2:#222a2c; --line:#2f393b; --fg:#e2e8e4; --muted:#94a29b;
   --accent:#3fbfa6; --accent-fg:#0b1513; --sheet:#1f2729; --grid:#2f3b3b; --grid-major:#41504f;
-  --ink:#e9eeeb; --c-red:#ff6b6b; --c-blue:#7aa5ff; --c-green:#69db7c; --c-magenta:#e599f7; --c-orange:#ffa94d;
+  --ink:#e9eeeb; --c-red:#ff6b6b; --c-blue:#7aa5ff; --c-green:#69db7c; --c-magenta:#e599f7; --c-orange:#ffa94d; --c-grey:#adb5bd;
   --sel:#f783ac; --source:#b197fc; --snap:#ffc078; --ok:#69db7c; --bad:#ff8787; --shadow:rgba(0,0,0,.45);
   --node-start:#69db7c; --node-end:#ff8787; --node:#ffc078; color-scheme:dark}}
 :root[data-theme="dark"]{
   --desk:#131819; --panel:#1b2123; --panel-2:#222a2c; --line:#2f393b; --fg:#e2e8e4; --muted:#94a29b;
   --accent:#3fbfa6; --accent-fg:#0b1513; --sheet:#1f2729; --grid:#2f3b3b; --grid-major:#41504f;
-  --ink:#e9eeeb; --c-red:#ff6b6b; --c-blue:#7aa5ff; --c-green:#69db7c; --c-magenta:#e599f7; --c-orange:#ffa94d;
+  --ink:#e9eeeb; --c-red:#ff6b6b; --c-blue:#7aa5ff; --c-green:#69db7c; --c-magenta:#e599f7; --c-orange:#ffa94d; --c-grey:#adb5bd;
   --sel:#f783ac; --source:#b197fc; --snap:#ffc078; --ok:#69db7c; --bad:#ff8787; --shadow:rgba(0,0,0,.45);
   --node-start:#69db7c; --node-end:#ff8787; --node:#ffc078; color-scheme:dark}
 [hidden]{display:none!important}
@@ -56,6 +56,8 @@ header{grid-area:head;display:flex;align-items:center;gap:12px;padding-block:8px
 #tools{grid-area:tools;display:flex;flex-direction:column;gap:2px;padding:8px 6px 8px 0;overflow:auto}
 .tool{width:44px;height:40px;border:1px solid transparent;border-radius:6px;background:transparent;display:grid;place-items:center;position:relative;color:var(--fg);flex:none}
 .tool:hover{background:var(--panel-2)}
+.flash{animation:kflash .4s ease-out}
+@keyframes kflash{0%{background:var(--accent);color:var(--sheet);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 35%,transparent)}100%{}}
 .tool[aria-pressed="true"]{background:var(--panel);border-color:var(--accent);color:var(--accent)}
 .tool svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
 .tool kbd{position:absolute;right:3px;bottom:1px;font-family:var(--f-mono);font-size:9px;color:var(--muted)}
@@ -140,7 +142,7 @@ table.res td:last-child{text-align:right;white-space:nowrap}
 </head>
 <body>
 <header>
-  <div class="brand"><b>Kerf 2D</b><span>precision drafting · v0.5.2</span></div>
+  <div class="brand"><b>Kerf 2D</b><span>precision drafting · v0.5.3</span></div>
   <input id="docName" aria-label="Drawing name" value="Glasses front">
   <div class="actions">
     <button class="btn" id="bNew">New</button>

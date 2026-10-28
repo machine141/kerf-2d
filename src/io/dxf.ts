@@ -11,7 +11,7 @@ import { hasBulge, flattenPath } from '../geometry/path';
 import { COLORS, type Doc, type Shape } from '../model/types';
 
 const nf = (v: number) => fmt(clean(v), 6);
-export interface DxfOptions { splitArcs?: boolean; includeHidden?: boolean; curveTol?: number }
+export interface DxfOptions { splitArcs?: boolean; includeHidden?: boolean; curveTol?: number; skipDims?: boolean }
 
 export function exportDXF(doc: Doc, opt: DxfOptions = {}): string {
   const { w, h } = doc.page, o: string[] = [], g = (c: number, v: string | number) => o.push(String(c), String(v));
@@ -29,7 +29,7 @@ export function exportDXF(doc: Doc, opt: DxfOptions = {}): string {
   g(0, 'ENDTAB'); g(0, 'ENDSEC');
   g(0, 'SECTION'); g(2, 'ENTITIES');
   for (const e of doc.ents) {
-    if (!include.has(e.layer)) continue;
+    if (!include.has(e.layer) || (opt.skipDims && e.type === 'dim')) continue;
     const head = (t: string) => { g(0, t); g(8, layerName(e.layer)); g(62, COLORS[e.color]?.aci ?? 7); };
     const line = (a: Point, b: Point) => { head('LINE'); g(10, nf(a.x)); g(20, nf(a.y)); g(30, 0); g(11, nf(b.x)); g(21, nf(b.y)); g(31, 0); };
     const poly = (pts: Point[], closed: boolean, bulge?: number[]) => {
@@ -44,7 +44,7 @@ export function exportDXF(doc: Doc, opt: DxfOptions = {}): string {
     else if (e.type === 'arc') { if (opt.splitArcs) poly(flatten(e, tol).pts, false); else { head('ARC'); g(10, nf(e.c.x)); g(20, nf(e.c.y)); g(30, 0); g(40, nf(e.r)); g(50, nf(normA(e.a0) / DEG)); g(51, nf(normA(e.a1) / DEG)); } }
     else if (e.type === 'dim') {
       const gg = dimGeom(e, doc.dim); gg.lines.forEach(([a, b]) => line(a, b));
-      head('TEXT'); g(10, nf(gg.text.p.x)); g(20, nf(gg.text.p.y)); g(30, 0); g(40, nf(gg.text.h)); g(1, gg.text.str); g(50, nf(gg.text.ang / DEG)); g(72, 1); g(11, nf(gg.text.p.x)); g(21, nf(gg.text.p.y)); g(31, 0);
+      head('TEXT'); g(10, nf(gg.text.p.x)); g(20, nf(gg.text.p.y)); g(30, 0); g(40, nf(gg.text.h)); g(1, gg.text.str.replace(/Ø/g, '%%c')); g(50, nf(gg.text.ang / DEG)); g(72, 1); g(11, nf(gg.text.p.x)); g(21, nf(gg.text.p.y)); g(31, 0);
     }
   }
   g(0, 'ENDSEC'); g(0, 'EOF');

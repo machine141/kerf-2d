@@ -213,6 +213,12 @@ export function runSelfTest(): { results: TestResult[]; doc: string | null } {
     const bf: any = last(), bx = 640 - Math.sqrt(140), rl2: any = byId(rl.id), ra2: any = byId(ra.id);
     ok('Fillet where a line runs onto an arc', bf.type === 'arc' && Math.abs(bf.r - 2) < 1e-9 && Math.abs(bf.c.x - bx) < 1e-9 && Math.abs(bf.c.y - 62) < 1e-9 && Math.abs(rl2.b.x - bx) < 1e-9 && ra2.type === 'arc' && Math.abs(ra2.r - 10) < 1e-9,
       `R2 fillet centred (${fmt(bf.c.x, 6)}, ${fmt(bf.c.y, 6)}) tangent to the road and to the R10 bump`);
+    // 12a3 · radius / diameter dimensions
+    ed.store.change(() => { ed.store.add({ type: 'circle', c: P(620, 250), r: 6 } as Shape); });
+    ed.opt.dimMode = 'd'; ed.setTool('dim'); const pi0 = { sp: P(0, 0), shift: false, alt: false, ctrl: false };
+    ed.tool.down!(ed, P(626, 250), pi0); ed.tool.down!(ed, P(640, 265), pi0); const rdm: any = last(); ed.opt.dimMode = 'a'; ed.setTool('select');
+    const ddg = rdm.type === 'dim' ? ed.dimGeom(rdm) : null;
+    ok('Diameter dimension of a hole', !!ddg && ddg.val === 12 && ddg.text.str === 'Ø12 mm' && rdm.color === d.dim.color, ddg ? `click the circle, place the label → "${ddg.text.str}" in ${rdm.color}` : 'no dimension made');
     // 12b · fixes: trim keeps closed shapes, Make Path closes tiny gaps
     ed.setTool('rect'); typed(['abs', 620, 300], ['rel', 40, 30]); const gl: any = last(); ed.setTool('select');
     ed.opt.arcMode = '3pt'; ed.setTool('arc'); typed(['abs', 660, 320], ['abs', 680, 320], ['abs', 670, 325]); ed.opt.arcMode = 'centre'; ed.setTool('select');
@@ -248,15 +254,15 @@ export function runSelfTest(): { results: TestResult[]; doc: string | null } {
     // 12 · file round trips
     d.layers[1].visible = false;
     const geo = ed.doc.ents.filter(e => e.type !== 'dim'), geoNoEll = geo.filter(e => e.type !== 'ellipse');
-    const dxf = exportDXF(ed.doc), all = importDXF(dxf), fromDxf = all.filter((_, i) => geo[i]?.type !== 'ellipse'), dd = maxDev(geoNoEll, fromDxf);
+    const dxf = exportDXF(ed.doc, { skipDims: true }), all = importDXF(dxf), fromDxf = all.filter((_, i) => geo[i]?.type !== 'ellipse'), dd = maxDev(geoNoEll, fromDxf);
     ok('DXF export → re-import', dd <= 0.001, `${fromDxf.length}/${geoNoEll.length} entities, max deviation ${dd === Infinity ? 'mismatch' : dd.toExponential(2)} mm`);
     const ellDxf: any[] = all.filter((_, i) => geo[i]?.type === 'ellipse'), ellSrc: any[] = geo.filter(e => e.type === 'ellipse'); let ellErr = 0;
     ellDxf.forEach((pe, i) => { const e = ellSrc[i]; for (const p of pe.pts) { const dd2 = rotP(sub(p, e.c), P(0, 0), -e.rot); ellErr = Math.max(ellErr, Math.abs(Math.hypot(dd2.x / e.rx, dd2.y / e.ry) - 1) * Math.max(e.rx, e.ry)); } });
     ok('Ellipses export to DXF R12 as fine polylines', ellDxf.length === ellSrc.length && ellErr < 0.001, `${ellDxf.length} ellipse(s), vertices on the curve within ${ellErr.toExponential(1)} mm`);
-    const split = importDXF(exportDXF(ed.doc, { splitArcs: true, curveTol: 0.01 }));
+    const split = importDXF(exportDXF(ed.doc, { splitArcs: true, curveTol: 0.01, skipDims: true }));
     ok('DXF option: split arcs into lines', !split.some(e => e.type === 'arc' || e.type === 'circle') && split.length === geo.length, `${split.filter(e => e.type === 'poly').length} curves written as polylines (0.01 mm tolerance)`);
     ok('DXF declares millimetres', /\$INSUNITS\r\n70\r\n4\r\n/.test(dxf) && /AC1009/.test(dxf), 'R12 (AC1009), $INSUNITS = 4 (mm)');
-    const svg = exportSVG(ed.doc), fromSvg = importSVG(svg), ds = maxDev(geo, fromSvg);
+    const svg = exportSVG(ed.doc, { skipDims: true }), fromSvg = importSVG(svg), ds = maxDev(geo, fromSvg);
     ok('SVG export → re-import (incl. ellipses)', ds <= 0.001, `${fromSvg.length}/${geo.length} entities, max deviation ${ds === Infinity ? 'mismatch' : ds.toExponential(2)} mm`);
     ok('SVG physical size', /width="600mm" height="400mm" viewBox="0 0 600 400"/.test(svg), 'width 600mm, height 400mm, 1 unit = 1 mm');
     d.layers[1].visible = true;

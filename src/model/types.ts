@@ -1,7 +1,7 @@
 import type { Point } from '../geometry/vec';
 
 /** Colour keys double as laser conventions (red = cut, blue = engrave). */
-export type ColorKey = 'ink' | 'red' | 'blue' | 'green' | 'magenta' | 'orange';
+export type ColorKey = 'ink' | 'red' | 'blue' | 'green' | 'magenta' | 'orange' | 'grey';
 
 /** group: stack of group ids, outermost last (selecting one member selects the whole outer group). */
 export interface EntBase { id: string; layer: string; color: ColorKey; w: number; group?: string[] }
@@ -12,7 +12,8 @@ export interface CircleEnt extends EntBase { type: 'circle'; c: Point; r: number
 export interface EllipseEnt extends EntBase { type: 'ellipse'; c: Point; rx: number; ry: number; rot: number }
 /** Arc runs anticlockwise from a0 to a1 (radians). */
 export interface ArcEnt extends EntBase { type: 'arc'; c: Point; r: number; a0: number; a1: number }
-export interface DimEnt extends EntBase { type: 'dim'; mode: 'a' | 'h' | 'v'; p1: Point; p2: Point; off: Point; text?: string }
+export interface DimEnt extends EntBase { type: 'dim'; mode: 'a' | 'h' | 'v' | 'r' | 'd'; p1: Point; p2: Point; off: Point; text?: string }
+/* Radius ('r') / diameter ('d') dimensions: p1 = centre, p2 = a point on the circle, off = label position. */
 
 export type Entity = LineEnt | PolyEnt | CircleEnt | EllipseEnt | ArcEnt | DimEnt;
 /** An entity before it has been given an id/layer/colour. */
@@ -32,7 +33,7 @@ export interface Aids {
   attach: { on: boolean; box: number; end: boolean; mid: boolean; centre: boolean; quad: boolean; inter: boolean; nearest: boolean; perp: boolean; tangent: boolean };
 }
 
-export interface DimStyle { dec: number; textH: number; arrow: number }
+export interface DimStyle { dec: number; textH: number; arrow: number; color: ColorKey; unit: 'mm' | 'in' | 'none' }
 
 export interface Doc {
   v: number;
@@ -55,6 +56,7 @@ export const COLORS: Record<ColorKey, { label: string; hex: string; aci: number;
   green: { label: 'Green', hex: '#00FF00', aci: 3, tok: '--c-green' },
   magenta: { label: 'Magenta', hex: '#FF00FF', aci: 6, tok: '--c-magenta' },
   orange: { label: 'Orange', hex: '#FF8000', aci: 30, tok: '--c-orange' },
+  grey: { label: 'Grey · dimensions', hex: '#808080', aci: 8, tok: '--c-grey' },
 };
 export const WIDTHS = [0.01, 0.1, 0.25, 0.35, 0.5, 0.75, 1];
 export const PAGES: Record<string, [number, number, string]> = {
@@ -67,11 +69,11 @@ export function newDoc(): Doc {
     v: 3, name: 'Untitled', units: 'mm', page: { w: 297, h: 210, preset: 'A4L' },
     aids: {
       grid: { show: true, spacing: 10 }, track: true, gridLock: false, stepLock: false, step: 1, radial: { on: false, start: 0, step: 45 },
-      attach: { on: true, box: 12, end: true, mid: true, centre: true, quad: false, inter: true, nearest: false, perp: false, tangent: false },
+      attach: { on: true, box: 12, end: true, mid: true, centre: true, quad: false, inter: true, nearest: true, perp: false, tangent: false },
     },
-    dim: { dec: 2, textH: 3.5, arrow: 2.5 },
+    dim: { dec: 2, textH: 3.5, arrow: 2.5, color: 'grey', unit: 'mm' },
     layers: [{ id: 'L1', name: 'Cut', visible: true, active: true }], current: 'L1',
-    attrs: { color: 'red', w: 0.1 }, seq: 1, ents: [],
+    attrs: { color: 'ink', w: 0.1 }, seq: 1, ents: [],
   };
 }
 

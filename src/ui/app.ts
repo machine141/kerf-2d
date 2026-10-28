@@ -20,7 +20,7 @@ const esc = (s: string) => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<
 export function startUI(ed: Editor) {
   const cv = $<HTMLCanvasElement>('#cv'), R = new Renderer(cv, ed);
   const prefs = loadPrefs(); if (prefs.joinTol != null) ed.opt.joinTol = prefs.joinTol;
-  const ui = { ptsOpen: false, tab: 'props', spaceDown: false, lastTest: null as null | { results: TestResult[]; doc: string | null }, exportOpts: { splitArcs: false, includeHidden: false, curveTol: 0.01 } as DxfOptions };
+  const ui = { ptsOpen: false, tab: 'props', spaceDown: false, lastTest: null as null | { results: TestResult[]; doc: string | null }, exportOpts: { splitArcs: false, includeHidden: false, curveTol: 0.01, skipDims: true } as DxfOptions };
   let DL: any = null;
   (async () => { try { DL = (window as any).claude?.use ? await (window as any).claude.use('downloads') : null; } catch { DL = null; } })();
 
@@ -129,7 +129,13 @@ export function startUI(ed: Editor) {
     ['radial', 'RADIAL', () => ed.doc.aids.radial.on, () => ed.doc.aids.radial.on = !ed.doc.aids.radial.on, 'F8'],
     ['track', 'GUIDES', () => ed.doc.aids.track, () => ed.doc.aids.track = !ed.doc.aids.track, 'F10'],
   ];
-  const toggle = (k: string) => { TOGGLES.find(t => t[0] === k)?.[3](); ed.changed('aids'); };
+  const toggle = (k: string) => { TOGGLES.find(t => t[0] === k)?.[3](); ed.changed('aids'); flash(`#toggles [data-k="${k}"]`); };
+  /** Briefly light up a button so a keyboard shortcut is visibly acknowledged. */
+  function flash(sel: string) {
+    setTimeout(() => { const el = document.querySelector<HTMLElement>(sel); if (!el) return; el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash'); setTimeout(() => el.classList.remove('flash'), 400); }, 0);
+  }
+  const undo = () => { if (!ed.store.canUndo) ed.toast('Nothing to undo'); else { ed.store.undo(); ed.toast('Undo'); } flash('#bUndo'); };
+  const redo = () => { if (!ed.store.canRedo) ed.toast('Nothing to redo'); else { ed.store.redo(); ed.toast('Redo'); } flash('#bRedo'); };
   function renderToggles() { $('#toggles').innerHTML = TOGGLES.map(([k, l, g, , f]) => `<button class="tg" data-k="${k}" aria-pressed="${g()}" title="${l} (${f})">${l} <span class="fk">${f}</span></button>`).join(''); $('#toggles').querySelectorAll<HTMLElement>('.tg').forEach(b => b.onclick = () => toggle(b.dataset.k!)); }
   function updatePrompt() { $('#prompt').innerHTML = `<b>${esc(ed.tool.label)}</b>${esc(ed.tool.prompt(ed))}`; }
   function updateReadout() { const r = ed.readout(); $('#readout').innerHTML = `<span>Abs <b>${fmt(r.p.x, 3)}, ${fmt(r.p.y, 3)}</b></span><span>Rel <b>${fmt(r.r.x, 3)}, ${fmt(r.r.y, 3)}</b></span><span>Dist <b>${fmt(r.dist, 3)}</b></span><span>Angle <b>${fmt(r.ang, 2)}°</b></span>`; }
@@ -157,10 +163,10 @@ export function startUI(ed: Editor) {
       const c = k.toLowerCase();
       const bop = ev.altKey ? ({ KeyU: 'union', KeyS: 'subtract', KeyI: 'intersect' } as Record<string, BoolOp>)[ev.code] : undefined;
       if (bop) { ev.preventDefault(); ed.booleanSel(bop); return; }
-      if (c === 'z') { ev.preventDefault(); ev.shiftKey ? ed.store.redo() : ed.store.undo(); }
-      else if (c === 'y' || c === 'r') { ev.preventDefault(); ed.store.redo(); }
+      if (c === 'z') { ev.preventDefault(); ev.shiftKey ? redo() : undo(); }
+      else if (c === 'y' || c === 'r') { ev.preventDefault(); redo(); }
       else if (c === 'a') { ev.preventDefault(); ed.selectAll(); }
-      else if (c === 's') { ev.preventDefault(); saveNative(); }
+      else if (c === 's') { ev.preventDefault(); saveNative(); flash('#bSave'); }
       else if (c === 'e') { ev.preventDefault(); ed.explodeSel(); }
       else if (c === 'g') { ev.preventDefault(); ed.groupSel(); }
       else if (c === 'u') { ev.preventDefault(); ed.ungroupSel(); }
@@ -177,10 +183,10 @@ export function startUI(ed: Editor) {
     if (k === 'Escape') { ed.cancel(); return; }
     if (k === 'Enter') { ed.finish(); return; }
     if (k === 'Delete' || k === 'Backspace') { ed.deleteSel(); return; }
-    if (k.toUpperCase() === 'F' && !ev.altKey) { ed.fit(); return; }
+    if (k.toUpperCase() === 'F' && !ev.altKey) { ed.fit(); flash('#bFit'); return; }
     if (k.toUpperCase() === 'G') { toggle('gridLock'); return; }
     if (k.toUpperCase() === 'S') { toggle('stepLock'); return; }
-    const t = Object.values(ed.tools).find(x => x.key === k.toUpperCase()); if (t) ed.setTool(t.id);
+    const t = Object.values(ed.tools).find(x => x.key === k.toUpperCase()); if (t) { ed.setTool(t.id); flash(`#tools [data-t="${t.id}"]`); }
   });
   window.addEventListener('keyup', ev => { if (ev.key === ' ') ui.spaceDown = false; if (ev.key === 'Shift' || ev.key === 'Alt') { ed.mods = { ...ed.mods, shift: ev.shiftKey, alt: ev.altKey }; R.request(); } });
   function resetRel() { ed.rel = ed.cursorPoint(); updateReadout(); ed.toast('Relative origin reset'); }
@@ -201,11 +207,11 @@ export function startUI(ed: Editor) {
     const build = () => kind === 'svg' ? exportSVG(ed.doc, ui.exportOpts) : exportDXF(ed.doc, ui.exportOpts);
     const name = base() + '.' + kind, refresh = () => { const t = build(); $<HTMLTextAreaElement>('#mText').value = t; $('#mSave').onclick = () => saveFile(name, t); $('#mCopy').onclick = async () => { try { await navigator.clipboard.writeText(t); ed.toast('Copied'); } catch { $<HTMLTextAreaElement>('#mText').select(); ed.toast('Text selected — press Ctrl+C'); } }; };
     $('#mTitle').textContent = kind === 'svg' ? 'Export SVG (mm)' : 'Export DXF (R12, mm)';
-    const n = ed.doc.ents.filter(e => ed.store.visible(e) || ui.exportOpts.includeHidden).length;
+    const n = ed.doc.ents.filter(e => (ed.store.visible(e) || ui.exportOpts.includeHidden) && !(ui.exportOpts.skipDims && e.type === 'dim')).length;
     $('#mHint').textContent = `${ed.doc.page.w} × ${ed.doc.page.h} mm · ${n} objects` + (kind === 'dxf' && DL ? ' · saved as a .zip containing the .dxf' : '');
-    $('#mOpts').innerHTML = `<label class="chk"><input type="checkbox" id="xHidden" ${ui.exportOpts.includeHidden ? 'checked' : ''}> Include hidden layers</label>` +
+    $('#mOpts').innerHTML = `<label class="chk"><input type="checkbox" id="xHidden" ${ui.exportOpts.includeHidden ? 'checked' : ''}> Include hidden layers</label><label class="chk"><input type="checkbox" id="xDims" ${ui.exportOpts.skipDims ? '' : 'checked'}> Include dimensions</label>` +
       (kind === 'dxf' ? `<label class="chk"><input type="checkbox" id="xSplit" ${ui.exportOpts.splitArcs ? 'checked' : ''}> Split arcs &amp; circles into lines</label><label class="chk">Curve tolerance <input type="text" id="xTol" value="${ui.exportOpts.curveTol}" style="width:60px" class="mono"> mm</label>` : '');
-    const rebind = () => { ui.exportOpts.includeHidden = $<HTMLInputElement>('#xHidden').checked; if (kind === 'dxf') { ui.exportOpts.splitArcs = $<HTMLInputElement>('#xSplit').checked; const t = parseLength($<HTMLInputElement>('#xTol').value); if (t > 0) ui.exportOpts.curveTol = t; } refresh(); };
+    const rebind = () => { ui.exportOpts.includeHidden = $<HTMLInputElement>('#xHidden').checked; ui.exportOpts.skipDims = !$<HTMLInputElement>('#xDims').checked; if (kind === 'dxf') { ui.exportOpts.splitArcs = $<HTMLInputElement>('#xSplit').checked; const t = parseLength($<HTMLInputElement>('#xTol').value); if (t > 0) ui.exportOpts.curveTol = t; } refresh(); };
     $('#mOpts').querySelectorAll('input').forEach(i => i.addEventListener('change', rebind));
     refresh(); $('#modal').hidden = false;
   }
@@ -231,7 +237,7 @@ export function startUI(ed: Editor) {
     ed.toast(`Imported ${ents.length} objects from ${src}`);
   }
   $('#bNew').onclick = () => { const d = newDoc(); d.page = { ...ed.doc.page }; d.aids = structuredClone(ed.doc.aids); ed.sel.clear(); ed.store.load(d); ($('#docName') as HTMLInputElement).value = d.name; ed.fit(); };
-  $('#bUndo').onclick = () => ed.store.undo(); $('#bRedo').onclick = () => ed.store.redo(); $('#bFit').onclick = () => ed.fit();
+  $('#bUndo').onclick = undo; $('#bRedo').onclick = redo; $('#bFit').onclick = () => ed.fit();
   ($('#docName') as HTMLInputElement).onchange = ev => { ed.doc.name = (ev.target as HTMLInputElement).value; };
   function syncButtons() { ($('#bUndo') as HTMLButtonElement).disabled = !ed.store.canUndo; ($('#bRedo') as HTMLButtonElement).disabled = !ed.store.canRedo; }
 
@@ -338,11 +344,17 @@ export function startUI(ed: Editor) {
         <label for="sRp">Radial step °</label><input type="text" id="sRp" value="${A.radial.step}"></div>
         <h3>Attach (snap to)</h3><div class="row">${[['end', 'Endpoints'], ['mid', 'Midpoints'], ['centre', 'Centres'], ['quad', 'Quadrants'], ['inter', 'Intersections'], ['nearest', 'Nearest'], ['perp', 'Perpendicular'], ['tangent', 'Tangent']].map(([k, l]) => `<label class="chk"><input type="checkbox" data-a="${k}" ${(at as any)[k] ? 'checked' : ''}>${l}</label>`).join('')}</div>
         <div class="grid2"><label for="sBox">Target box px</label><input type="text" id="sBox" value="${at.box}"></div>
-        <h3>Dimensions</h3><div class="grid2"><label for="sDd">Decimals</label><input type="text" id="sDd" value="${ed.doc.dim.dec}"><label for="sDh">Text height mm</label><input type="text" id="sDh" value="${ed.doc.dim.textH}"></div>
+        <h3>Dimensions</h3><div class="grid2"><label for="sDd">Decimals</label><input type="text" id="sDd" value="${ed.doc.dim.dec}"><label for="sDh">Text height mm</label><input type="text" id="sDh" value="${ed.doc.dim.textH}">
+        <label for="sDu">Units shown</label><select id="sDu"><option value="mm">mm</option><option value="in">inches</option><option value="none">none</option></select>
+        <label for="sDc">Colour</label><select id="sDc">${Object.entries(COLORS).map(([k, c]) => `<option value="${k}">${c.label}</option>`).join('')}</select></div>
+        <p class="hint">New dimensions use this colour. Dimensions are left out of SVG/DXF exports unless you tick "Include dimensions", so they are never cut.</p>
         <h3>Accuracy</h3><div class="grid2"><label for="sTol">Curve tolerance</label><input type="text" id="sTol" value="${geomSettings.flatTol}"><label for="sJt">Close gaps up to mm</label><input type="text" id="sJt" value="${ed.opt.joinTol}"><label for="sDp">Decimals shown</label><input type="text" id="sDp" value="${dp()}"></div>
         <h3>Mouse &amp; trackpad</h3><div class="row"><label class="chk"><input type="radio" name="wh" value="zoom" ${prefs.wheelPans ? '' : 'checked'}>Wheel zooms at pointer</label><label class="chk"><input type="radio" name="wh" value="pan" ${prefs.wheelPans ? 'checked' : ''}>Two-finger scroll pans (pinch zooms)</label></div>
         <p class="hint">Decimals shown: sizes are kept exactly; this only rounds what you see (hover a box for the exact value). Close gaps: Make Path and Trim treat ends this close as touching. Curve tolerance is how closely contours follow curves (mm). Smaller is more accurate but makes bigger files. These settings, except tolerance, are saved with the drawing.</p>`;
       ($('#sPre') as HTMLSelectElement).value = pg.preset || 'CUSTOM';
+      const du = $<HTMLSelectElement>('#sDu'), dc = $<HTMLSelectElement>('#sDc'); du.value = ed.doc.dim.unit; dc.value = ed.doc.dim.color;
+      du.onchange = () => { ed.doc.dim.unit = du.value as any; ed.changed('view'); };
+      dc.onchange = () => { const c = dc.value as ColorKey; ed.doc.dim.color = c; ed.store.change(() => { for (const e of ed.doc.ents) if (e.type === 'dim') e.color = c; }); };
       const num = (id: string, f: (v: number) => void, unit = true) => { $(`#${id}`).onchange = (ev: Event) => { const t2 = (ev.target as HTMLInputElement).value, v = unit ? parseLength(t2) : parseFloat(t2); if (isFinite(v)) { f(v); ed.changed('view'); } }; };
       ($('#sPre') as HTMLSelectElement).onchange = ev => { const k = (ev.target as HTMLSelectElement).value, v = PAGES[k]; pg.preset = k; if (v[0]) { pg.w = v[0]; pg.h = v[1]; } renderPane(); ed.fit(); };
       num('sW', v => { pg.w = Math.max(1, v); pg.preset = 'CUSTOM'; ed.fit(); }); num('sH', v => { pg.h = Math.max(1, v); pg.preset = 'CUSTOM'; ed.fit(); });

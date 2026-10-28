@@ -55,7 +55,7 @@ export function nodeHandles(ed: Editor, e: Entity | Shape): NodeHandle[] {
   else if (e.type === 'circle') H.push({ k: 'c', p: e.c }, { k: 'r', p: polar(e.c, e.r, 0) });
   else if (e.type === 'ellipse') H.push({ k: 'c', p: e.c }, { k: 'rx', p: ellPt(e, 0) }, { k: 'ry', p: ellPt(e, Math.PI / 2) });
   else if (e.type === 'arc') H.push({ k: 'c', p: e.c }, { k: 'a0', p: polar(e.c, e.r, e.a0), role: 'start' }, { k: 'a1', p: polar(e.c, e.r, e.a1), role: 'end' }, { k: 'r', p: polar(e.c, e.r, e.a0 + normA(e.a1 - e.a0) / 2) });
-  else if (e.type === 'dim') H.push({ k: 'p1', p: e.p1 }, { k: 'p2', p: e.p2 }, { k: 'off', p: ed.dimGeom(e as any).text.p });
+  else if (e.type === 'dim') H.push({ k: 'p1', p: e.p1 }, { k: 'p2', p: e.p2 }, { k: 'off', p: e.mode === 'r' || e.mode === 'd' ? e.off : ed.dimGeom(e as any).text.p });
   return H;
 }
 export function nodeApply(e: Entity | Shape, h: NodeHandle, p: Point): Shape {

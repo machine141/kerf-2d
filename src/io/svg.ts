@@ -8,7 +8,7 @@ const nf = (v: number) => fmt(clean(v), 6);
 const esc = (s: string) => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' } as any)[c]);
 const slug = (s: string) => (s.replace(/[^A-Za-z0-9_-]+/g, '_') || 'layer');
 
-export interface SvgOptions { includeHidden?: boolean }
+export interface SvgOptions { includeHidden?: boolean; skipDims?: boolean }
 
 export function exportSVG(doc: Doc, opt: SvgOptions = {}): string {
   const { w, h } = doc.page, Y = (y: number) => nf(h - y), out: string[] = [];
@@ -17,7 +17,7 @@ export function exportSVG(doc: Doc, opt: SvgOptions = {}): string {
     `<!-- ${esc(doc.name)} · 1 user unit = 1 mm -->`);
   for (const L of doc.layers) {
     if (!L.visible && !opt.includeHidden) continue;
-    const ents = doc.ents.filter(e => e.layer === L.id); if (!ents.length) continue;
+    const ents = doc.ents.filter(e => e.layer === L.id && !(opt.skipDims && e.type === 'dim')); if (!ents.length) continue;
     out.push(`<g id="${esc(slug(L.name))}" inkscape:groupmode="layer" inkscape:label="${esc(L.name)}" fill="none" stroke-linecap="round" stroke-linejoin="round"${L.visible ? '' : ' style="display:none"'}>`);
     for (const e of ents) {
       const st = `stroke="${COLORS[e.color]?.hex || '#000000'}" stroke-width="${nf(e.w)}"`;
