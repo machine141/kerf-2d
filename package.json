@@ -1,0 +1,24 @@
+{
+  "name": "kerf-2d",
+  "version": "0.3.0",
+  "private": true,
+  "type": "module",
+  "description": "Kerf 2D — lightweight browser-based precision 2D CAD for design & technology (laser cutting).",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "build:artifact": "vite build && node scripts/artifact.mjs"
+  },
+  "dependencies": {
+    "clipper-lib": "^6.4.2"
+  },
+  "devDependencies": {
+    "happy-dom": "^21.0.4",
+    "typescript": "5.9",
+    "vite": "^8.3.5",
+    "vite-plugin-singlefile": "^2.3.4",
+    "vitest": "^5.0.5"
+  }
+}

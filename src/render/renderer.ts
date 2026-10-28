@@ -1,0 +1,107 @@
+/** Canvas renderer: sheet, grid, entities, tool overlay, snap marker and cursor. */
+import { type Point, P, TAU } from '../geometry/vec';
+import type { Editor } from '../editor/editor';
+import type { Overlay, GhostStyle } from '../editor/tool';
+import { COLORS, type Entity, type Shape } from '../model/types';
+
+const TOKENS = ['--desk', '--sheet', '--grid', '--grid-major', '--ink', '--sel', '--snap', '--muted', '--accent', '--shadow', '--node-start', '--node-end', '--node', '--source', ...Object.values(COLORS).map(c => c.tok)];
+const SNAP_NAMES: Record<string, string> = { end: 'Endpoint', mid: 'Midpoint', centre: 'Centre', quad: 'Quadrant', inter: 'Intersection', nearest: 'Nearest', perp: 'Perpendicular', tangent: 'Tangent' };
+
+export class Renderer {
+  colors: Record<string, string> = {};
+  font = 'sans-serif';
+  private queued = false;
+  ctx: CanvasRenderingContext2D;
+  constructor(public canvas: HTMLCanvasElement, public ed: Editor) {
+    this.ctx = canvas.getContext('2d')!;
+    this.readColors();
+  }
+  readColors() {
+    const cs = getComputedStyle(document.documentElement);
+    for (const t of TOKENS) this.colors[t] = cs.getPropertyValue(t).trim() || '#888';
+    this.font = getComputedStyle(document.body).fontFamily || 'sans-serif';
+  }
+  resize() {
+    const r = this.canvas.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
+    this.canvas.width = Math.round(r.width * dpr); this.canvas.height = Math.round(r.height * dpr);
+    this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    this.ed.setSize(r.width, r.height);
+  }
+  request() { if (this.queued) return; this.queued = true; requestAnimationFrame(() => { this.queued = false; this.draw(); }); }
+
+  private path(e: Shape) {
+    const ctx = this.ctx, ed = this.ed, k = ed.view.k; ctx.beginPath();
+    if (e.type === 'line') { const A = ed.w2s(e.a), B = ed.w2s(e.b); ctx.moveTo(A.x, A.y); ctx.lineTo(B.x, B.y); }
+    else if (e.type === 'poly') { e.pts.forEach((p, i) => { const s = ed.w2s(p); i ? ctx.lineTo(s.x, s.y) : ctx.moveTo(s.x, s.y); }); if (e.closed) ctx.closePath(); }
+    else if (e.type === 'circle') { const c = ed.w2s(e.c); ctx.arc(c.x, c.y, e.r * k, 0, TAU); }
+    else if (e.type === 'ellipse') { const c = ed.w2s(e.c); ctx.ellipse(c.x, c.y, e.rx * k, e.ry * k, -e.rot, 0, TAU); }
+    else if (e.type === 'arc') { const c = ed.w2s(e.c); ctx.arc(c.x, c.y, e.r * k, -e.a0, -e.a1, true); }
+  }
+  stroke(e: Shape, color: string, lw: number, dash?: number[]) {
+    const ctx = this.ctx, ed = this.ed; ctx.strokeStyle = color; ctx.lineWidth = lw; ctx.setLineDash(dash || []);
+    if (e.type === 'dim') {
+      const g = ed.dimGeom(e as any); ctx.beginPath();
+      for (const [a, b] of g.lines) { const A = ed.w2s(a), B = ed.w2s(b); ctx.moveTo(A.x, A.y); ctx.lineTo(B.x, B.y); } ctx.stroke();
+      const tp = ed.w2s(g.text.p); ctx.save(); ctx.translate(tp.x, tp.y); ctx.rotate(-g.text.ang); ctx.fillStyle = color;
+      ctx.font = `${Math.max(7, g.text.h * ed.view.k)}px ${this.font}`; ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic'; ctx.fillText(g.text.str, 0, 0); ctx.restore(); return;
+    }
+    this.path(e); ctx.stroke();
+  }
+  label(txt: string, at: Point, color?: string) {
+    const ctx = this.ctx, s = this.ed.w2s(at); ctx.font = `12px ${this.font}`; const tw = ctx.measureText(txt).width;
+    ctx.fillStyle = this.colors['--sheet']; ctx.globalAlpha = .92; ctx.fillRect(s.x + 14, s.y + 10, tw + 10, 18); ctx.globalAlpha = 1;
+    ctx.fillStyle = color || this.colors['--accent']; ctx.textAlign = 'left'; ctx.fillText(txt, s.x + 19, s.y + 23);
+  }
+
+  draw() {
+    const ed = this.ed, ctx = this.ctx, C = this.colors, { w, h } = ed.doc.page, k = ed.view.k, A = ed.doc.aids, W = ed.view.W, H = ed.view.H;
+    // collect overlay from the active tool
+    const ghosts: { s: Shape; style: GhostStyle }[] = [], hidden = new Set<string>(), hi = new Map<string, string>(), labels: { t: string; at: Point }[] = [], customs: ((c: CanvasRenderingContext2D, e: Editor, col: Record<string, string>) => void)[] = [];
+    const o: Overlay = {
+      ghost: (s, style = 'preview') => ghosts.push({ s, style }), hide: ids => { for (const i of ids) hidden.add(i); },
+      highlight: (ids, style = 'selected') => { for (const i of ids) hi.set(i, style); }, label: (t, at) => labels.push({ t, at: at || ed.cursorPoint() }), custom: fn => customs.push(fn),
+    };
+    ed.tool.overlay?.(ed, o);
+
+    ctx.setLineDash([]); ctx.fillStyle = C['--desk']; ctx.fillRect(0, 0, W, H);
+    const tl = ed.w2s(P(0, h));
+    ctx.save(); ctx.shadowColor = C['--shadow']; ctx.shadowBlur = 14; ctx.shadowOffsetY = 2; ctx.fillStyle = C['--sheet']; ctx.fillRect(tl.x, tl.y, w * k, h * k); ctx.restore();
+    if (A.grid.show) {
+      let g = A.grid.spacing; while (g * k < 6) g *= 2;
+      ctx.save(); ctx.beginPath(); ctx.rect(tl.x, tl.y, w * k, h * k); ctx.clip(); ctx.lineWidth = 1;
+      for (let x = 0; x <= w + 1e-9; x += g) { const s = ed.w2s(P(x, 0)); ctx.strokeStyle = Math.round(x / g) % 5 === 0 ? C['--grid-major'] : C['--grid']; ctx.beginPath(); ctx.moveTo(Math.round(s.x) + .5, tl.y); ctx.lineTo(Math.round(s.x) + .5, tl.y + h * k); ctx.stroke(); }
+      for (let y = 0; y <= h + 1e-9; y += g) { const s = ed.w2s(P(0, y)); ctx.strokeStyle = Math.round(y / g) % 5 === 0 ? C['--grid-major'] : C['--grid']; ctx.beginPath(); ctx.moveTo(tl.x, Math.round(s.y) + .5); ctx.lineTo(tl.x + w * k, Math.round(s.y) + .5); ctx.stroke(); }
+      ctx.restore();
+    }
+    const or = ed.w2s(P(0, 0)); ctx.strokeStyle = C['--accent']; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(or.x, or.y); ctx.lineTo(or.x + 18, or.y); ctx.moveTo(or.x, or.y); ctx.lineTo(or.x, or.y - 18); ctx.stroke();
+
+    for (const e of ed.doc.ents as Entity[]) {
+      if (!ed.store.visible(e) || hidden.has(e.id)) continue;
+      const st = hi.get(e.id), col = st === 'selected' ? C['--sel'] : st === 'source' ? C['--source'] : (C[COLORS[e.color]?.tok] || C['--ink']);
+      this.stroke(e as Shape, col, Math.max(1.1, e.w * k) + (st ? 1 : 0), st ? [6, 3] : undefined);
+    }
+    for (const g of ghosts) this.stroke(g.s, g.style === 'selected' ? C['--sel'] : g.style === 'source' ? C['--source'] : C['--accent'], g.style === 'selected' ? 1.5 : 1.3, g.style === 'selected' ? undefined : [5, 4]);
+    for (const fn of customs) { ctx.save(); fn(ctx, ed, C); ctx.restore(); }
+    for (const l of labels) this.label(l.t, l.at);
+
+    // snap marker
+    const cur = ed.cursorPoint(), sp = ed.w2s(cur), sk = ed.snapRes?.k;
+    if (sk && SNAP_NAMES[sk]) {
+      ctx.strokeStyle = C['--snap']; ctx.lineWidth = 2; ctx.setLineDash([]); ctx.beginPath(); const r = 6;
+      if (sk === 'end') ctx.rect(sp.x - r, sp.y - r, 2 * r, 2 * r);
+      else if (sk === 'mid') { ctx.moveTo(sp.x, sp.y - r); ctx.lineTo(sp.x + r, sp.y + r); ctx.lineTo(sp.x - r, sp.y + r); ctx.closePath(); }
+      else if (sk === 'centre') ctx.arc(sp.x, sp.y, r, 0, TAU);
+      else if (sk === 'quad') { ctx.moveTo(sp.x, sp.y - r); ctx.lineTo(sp.x + r, sp.y); ctx.lineTo(sp.x, sp.y + r); ctx.lineTo(sp.x - r, sp.y); ctx.closePath(); }
+      else if (sk === 'perp') { ctx.moveTo(sp.x - r, sp.y + r); ctx.lineTo(sp.x + r, sp.y + r); ctx.moveTo(sp.x - r + 2, sp.y + r); ctx.lineTo(sp.x - r + 2, sp.y - r); }
+      else if (sk === 'tangent') { ctx.arc(sp.x, sp.y, r - 1, 0, TAU); ctx.moveTo(sp.x - r - 3, sp.y - r + 1); ctx.lineTo(sp.x + r + 3, sp.y - r + 1); }
+      else if (sk === 'nearest') { ctx.moveTo(sp.x - r, sp.y - r); ctx.lineTo(sp.x + r, sp.y + r); ctx.lineTo(sp.x - r, sp.y + r); ctx.lineTo(sp.x + r, sp.y - r); ctx.closePath(); }
+      else { ctx.moveTo(sp.x - r, sp.y - r); ctx.lineTo(sp.x + r, sp.y + r); ctx.moveTo(sp.x + r, sp.y - r); ctx.lineTo(sp.x - r, sp.y + r); }
+      ctx.stroke(); ctx.font = `11px ${this.font}`; ctx.fillStyle = C['--snap']; ctx.textAlign = 'left'; ctx.fillText(SNAP_NAMES[sk], sp.x + 10, sp.y - 10);
+    }
+    if (ed.hover && ed.tool.id !== 'select') {
+      ctx.setLineDash([]); ctx.strokeStyle = C['--muted']; ctx.lineWidth = 1; ctx.beginPath();
+      ctx.moveTo(sp.x - 14, sp.y + .5); ctx.lineTo(sp.x + 14, sp.y + .5); ctx.moveTo(sp.x + .5, sp.y - 14); ctx.lineTo(sp.x + .5, sp.y + 14); ctx.stroke();
+      if (A.attach.on && ed.tool.draws) { const b = A.attach.box; ctx.strokeRect(sp.x - b / 2 + .5, sp.y - b / 2 + .5, b, b); }
+    }
+  }
+}
