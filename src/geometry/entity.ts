@@ -6,6 +6,7 @@
 import { type Point, P, add, sub, mul, dot, dist, normA, angOf, polar, angIn, TAU, EPS } from './vec';
 import type { Entity, Shape, EllipseEnt } from '../model/types';
 import { flattenPath, hasBulge, segsOf, segPrim, segPoint } from './path';
+import { flattenSpline } from './spline';
 
 /** Chord tolerance used when curves must become polylines (mm). */
 export const geomSettings = { flatTol: 0.0005 };
@@ -34,6 +35,10 @@ export function flatten(e: Shape, tol = geomSettings.flatTol): { pts: Point[]; c
     const k2 = JSON.stringify([e.pts, e.bulge, e.closed, tol]), h2 = flatCache.get(e); if (h2 && h2.key === k2) return h2.v;
     const v2 = { pts: flattenPath(e, tol), closed: !!e.closed }; flatCache.set(e, { key: k2, v: v2 }); return v2;
   }
+  if (e.type === 'spline') {
+    const k3 = JSON.stringify([e.pts, e.h, e.closed, tol]), h3 = flatCache.get(e); if (h3 && h3.key === k3) return h3.v;
+    const v3 = { pts: flattenSpline(e, Math.max(tol, 0.0005)), closed: !!e.closed }; flatCache.set(e, { key: k3, v: v3 }); return v3;
+  }
   const key = JSON.stringify([e.type, (e as any).c, (e as any).r, (e as any).rx, (e as any).ry, (e as any).rot, (e as any).a0, (e as any).a1, tol]);
   const hit = flatCache.get(e); if (hit && hit.key === key) return hit.v;
   let v: { pts: Point[]; closed: boolean };
@@ -50,6 +55,7 @@ export function prims(e: Shape): Prim[] {
     case 'line': return [{ t: 'seg', a: e.a, b: e.b }];
     case 'poly': if (hasBulge(e)) return segsOf(e).map(segPrim) as Prim[];
     // falls through
+    case 'spline':
     case 'ellipse': {
       const f = flatten(e), r: Prim[] = [], n = f.pts.length;
       for (let i = 0; i < n - 1; i++) r.push({ t: 'seg', a: f.pts[i], b: f.pts[i + 1] });
@@ -107,6 +113,7 @@ export function keypoints(e: Shape): { p: Point; k: SnapKind }[] {
     else if (!e.closed) k.push({ p: e.pts[0], k: 'end' }, { p: e.pts[e.pts.length - 1], k: 'end' });
   }
   else if (e.type === 'circle') { k.push({ p: e.c, k: 'centre' }); for (let i = 0; i < 4; i++) k.push({ p: polar(e.c, e.r, i * Math.PI / 2), k: 'quad' }); }
+  else if (e.type === 'spline') { if (e.pts.length <= 64) e.pts.forEach(p => k.push({ p, k: 'end' })); }
   else if (e.type === 'ellipse') { k.push({ p: e.c, k: 'centre' }); for (let i = 0; i < 4; i++) k.push({ p: ellPt(e, i * Math.PI / 2), k: 'quad' }); }
   else if (e.type === 'arc') {
     k.push({ p: polar(e.c, e.r, e.a0), k: 'end' }, { p: polar(e.c, e.r, e.a1), k: 'end' }, { p: polar(e.c, e.r, e.a0 + normA(e.a1 - e.a0) / 2), k: 'mid' }, { p: e.c, k: 'centre' });
@@ -128,6 +135,7 @@ export function bbox(e: Shape, dimLines?: (e: Shape) => { lines: [Point, Point][
       if (sg.kind === 'arc') { const pr = segPrim(sg) as { a0: number; a1: number }; for (let i = 0; i < 4; i++) { const a = i * Math.PI / 2; if (angIn(a, pr.a0, pr.a1)) pts.push(polar(sg.c, sg.r, a)); } }
     }
   }
+  else if (e.type === 'spline') pts = flatten(e, 0.01).pts;
   else if (e.type === 'arc') { pts = [polar(e.c, e.r, e.a0), polar(e.c, e.r, e.a1)]; for (let i = 0; i < 4; i++) { const a = i * Math.PI / 2; if (angIn(a, e.a0, e.a1)) pts.push(polar(e.c, e.r, a)); } }
   else if (e.type === 'dim') { if (dimLines) { const g = dimLines(e); g.lines.forEach(l => pts.push(l[0], l[1])); pts.push(g.text.p); } else pts = [e.p1, e.p2, e.off]; }
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
@@ -145,7 +153,7 @@ export const boxCentre = (b: Box) => P((b.x0 + b.x1) / 2, (b.y0 + b.y1) / 2);
 export function endsOf(e: Shape): [Point, Point] | null {
   if (e.type === 'line') return [e.a, e.b];
   if (e.type === 'arc') return [polar(e.c, e.r, e.a0), polar(e.c, e.r, e.a1)];
-  if (e.type === 'poly' && !e.closed) return [e.pts[0], e.pts[e.pts.length - 1]];
+  if ((e.type === 'poly' || e.type === 'spline') && !e.closed) return [e.pts[0], e.pts[e.pts.length - 1]];
   return null;
 }
 

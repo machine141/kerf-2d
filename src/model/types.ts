@@ -15,7 +15,9 @@ export interface ArcEnt extends EntBase { type: 'arc'; c: Point; r: number; a0: 
 export interface DimEnt extends EntBase { type: 'dim'; mode: 'a' | 'h' | 'v' | 'r' | 'd'; p1: Point; p2: Point; off: Point; text?: string }
 /* Radius ('r') / diameter ('d') dimensions: p1 = centre, p2 = a point on the circle, off = label position. */
 
-export type Entity = LineEnt | PolyEnt | CircleEnt | EllipseEnt | ArcEnt | DimEnt;
+/** Smooth curve: anchors with in/out handles (cubic Bézier segments). */
+export interface SplineEnt extends EntBase { type: 'spline'; pts: Point[]; h: [Point, Point][]; closed: boolean }
+export type Entity = LineEnt | PolyEnt | CircleEnt | EllipseEnt | ArcEnt | SplineEnt | DimEnt;
 /** An entity before it has been given an id/layer/colour. */
 export type Shape = DistributiveOmit<Entity, keyof EntBase> & Partial<EntBase>;
 type DistributiveOmit<T, K extends keyof any> = T extends any ? Omit<T, K> : never;

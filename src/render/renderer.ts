@@ -1,4 +1,5 @@
 /** Canvas renderer: sheet, grid, entities, tool overlay, snap marker and cursor. */
+import { splineSegs } from '../geometry/spline';
 import { type Point, P, TAU } from '../geometry/vec';
 import type { Editor } from '../editor/editor';
 import type { Overlay, GhostStyle } from '../editor/tool';
@@ -7,7 +8,7 @@ import { hasBulge, segsOf } from '../geometry/path';
 import { keypoints } from '../geometry/entity';
 
 const TOKENS = ['--desk', '--sheet', '--grid', '--grid-major', '--ink', '--sel', '--snap', '--muted', '--accent', '--shadow', '--node-start', '--node-end', '--node', '--source', ...Object.values(COLORS).map(c => c.tok)];
-const SNAP_NAMES: Record<string, string> = { end: 'Endpoint', mid: 'Midpoint', centre: 'Centre', quad: 'Quadrant', inter: 'Intersection', nearest: 'Nearest', perp: 'Perpendicular', tangent: 'Tangent' };
+const SNAP_NAMES: Record<string, string> = { end: 'Endpoint', mid: 'Midpoint', centre: 'Centre', quad: 'Quadrant', inter: 'Intersection', nearest: 'Nearest', perp: 'Perpendicular', tangent: 'Tangent', close: 'Close shape' };
 
 export class Renderer {
   colors: Record<string, string> = {};
@@ -44,6 +45,7 @@ export class Renderer {
     }
     else if (e.type === 'poly') { e.pts.forEach((p, i) => { const s = ed.w2s(p); i ? ctx.lineTo(s.x, s.y) : ctx.moveTo(s.x, s.y); }); if (e.closed) ctx.closePath(); }
     else if (e.type === 'circle') { const c = ed.w2s(e.c); ctx.arc(c.x, c.y, e.r * k, 0, TAU); }
+    else if (e.type === 'spline') { const segs = splineSegs(e); if (segs.length) { const a = ed.w2s(segs[0][0]); ctx.moveTo(a.x, a.y); for (const b of segs) { const p1 = ed.w2s(b[1]), p2 = ed.w2s(b[2]), p3 = ed.w2s(b[3]); ctx.bezierCurveTo(p1.x, p1.y, p2.x, p2.y, p3.x, p3.y); } if (e.closed) ctx.closePath(); } }
     else if (e.type === 'ellipse') { const c = ed.w2s(e.c); ctx.ellipse(c.x, c.y, e.rx * k, e.ry * k, -e.rot, 0, TAU); }
     else if (e.type === 'arc') { const c = ed.w2s(e.c); ctx.arc(c.x, c.y, e.r * k, -e.a0, -e.a1, true); }
   }
@@ -123,6 +125,7 @@ export class Renderer {
       if (sk === 'end') ctx.rect(sp.x - r, sp.y - r, 2 * r, 2 * r);
       else if (sk === 'mid') { ctx.moveTo(sp.x, sp.y - r); ctx.lineTo(sp.x + r, sp.y + r); ctx.lineTo(sp.x - r, sp.y + r); ctx.closePath(); }
       else if (sk === 'centre') ctx.arc(sp.x, sp.y, r, 0, TAU);
+      else if (sk === 'close') { ctx.strokeStyle = C['--ok']; ctx.lineWidth = 2.5; ctx.arc(sp.x, sp.y, r + 3, 0, TAU); ctx.moveTo(sp.x + 3.5, sp.y); ctx.arc(sp.x, sp.y, 3.5, 0, TAU); }
       else if (sk === 'quad') { ctx.moveTo(sp.x, sp.y - r); ctx.lineTo(sp.x + r, sp.y); ctx.lineTo(sp.x, sp.y + r); ctx.lineTo(sp.x - r, sp.y); ctx.closePath(); }
       else if (sk === 'perp') { ctx.moveTo(sp.x - r, sp.y + r); ctx.lineTo(sp.x + r, sp.y + r); ctx.moveTo(sp.x - r + 2, sp.y + r); ctx.lineTo(sp.x - r + 2, sp.y - r); }
       else if (sk === 'tangent') { ctx.arc(sp.x, sp.y, r - 1, 0, TAU); ctx.moveTo(sp.x - r - 3, sp.y - r + 1); ctx.lineTo(sp.x + r + 3, sp.y - r + 1); }

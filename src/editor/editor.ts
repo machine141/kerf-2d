@@ -3,7 +3,7 @@
  * input routing. It has no DOM dependencies, so it runs headless in tests.
  */
 import { type Point, P, add, sub, angOf, len, DEG, cp, normA, dist, fmt } from '../geometry/vec';
-import { prims, bbox as shapeBox, unionBox, boxCentre, type Box, type Prim } from '../geometry/entity';
+import { prims, flatten, bbox as shapeBox, unionBox, boxCentre, type Box, type Prim } from '../geometry/entity';
 import { affEnt, affMove, affScale, type Affine } from '../geometry/affine';
 import { dimGeom } from '../geometry/dims';
 import { joinPieces, arcBulge, type Piece } from '../geometry/path';
@@ -18,7 +18,7 @@ export type CoordMode = 'abs' | 'rel' | 'pol';
 export type ChangeKind = 'doc' | 'sel' | 'tool' | 'prompt' | 'view' | 'aids' | 'opts';
 
 export const DEFAULT_OPTS: Record<string, any> = {
-  rectFrom: 'corner', circFrom: 'centre', arcMode: '3pt', filletMode: 'fillet', filletR: 5, filletFollow: false, fixedR: '', dimMode: 'a', rotAngle: 60, rotCopies: 5, moveCopy: false, mirKeep: false, mirStep: 15, arrType: 'grid', arrCols: 4, arrRows: 1, arrDx: 20, arrDy: 20, arrFollow: true, arrCount: 6, arrAngle: 360, arrRotate: true, gridScale: 0, gridSym: '1', circScale: 0, circSym: '1',
+  rectFrom: 'corner', circFrom: 'centre', arcMode: '3pt', filletMode: 'fillet', filletR: 5, filletFollow: false, fixedR: '', dimMode: 'a', rotAngle: 60, rotCopies: 5, moveCopy: false, mirKeep: false, polySides: 6, polyMeasure: 'corner', polyStar: false, polyInner: 50, splineClosed: false, mirStep: 15, arrType: 'grid', arrCols: 4, arrRows: 1, arrDx: 20, arrDy: 20, arrFollow: true, arrCount: 6, arrAngle: 360, arrRotate: true, gridScale: 0, gridSym: '1', gridClose: true, gridFill: true, circScale: 0, circSym: '1', circClose: true, circFill: true,
   offMode: 'shape', offSide: 'auto', offD: 5, offRound: '1', offCount: 1, offFollow: false, trimMode: 'whole', joinTol: 0.05, pickPx: 14, eraseR: 15, eraseSmall: true, eraseMax: 5, ringD: 10, ringHole: 5, ringOverlap: 2, lockAspect: false,
 };
 
@@ -81,6 +81,8 @@ export class Editor {
   }
 
   snapAt(raw: Point, o: { exclude?: Set<string>; drawing?: boolean } = {}): SnapResult {
+    // closing a shape: the first point of the line / spline being drawn pulls the cursor in
+    if (this.tool.closes && this.pts.length >= 2 && dist(raw, this.pts[0]) <= Math.max(14, +this.opt.pickPx || 14) / this.view.k) return { p: this.pts[0], k: 'close' };
     return snapPoint(raw, {
       ents: this.doc.ents, visible: this.store.visible, aids: this.doc.aids, k: this.view.k,
       last: this.pts[this.pts.length - 1], constrain45: this.mods.shift && !!this.tool.constrain45,
@@ -187,7 +189,7 @@ export class Editor {
     const sel = this.selected(); if (!sel.length) return;
     if (sel.some(e => e.group?.length)) { this.ungroupSel(); return; }
     const out: string[] = [];
-    this.store.change(() => { for (const e of sel) if (e.type === 'poly') out.push(...this.store.splice(e.id, explodePath(e)).map(x => x.id)); else out.push(e.id); });
+    this.store.change(() => { for (const e of sel) if (e.type === 'poly') out.push(...this.store.splice(e.id, explodePath(e)).map(x => x.id)); else if (e.type === 'spline') { const f = flatten(e as Shape, 0.01); out.push(...this.store.splice(e.id, [{ type: 'poly', closed: f.closed, pts: f.pts.map(cp) } as Shape]).map(x => x.id)); } else out.push(e.id); });
     this.sel = new Set(out); this.changed('sel');
   }
   /** Outermost group id of an entity. */

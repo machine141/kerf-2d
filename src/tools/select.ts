@@ -5,6 +5,7 @@
 import { type Point, P, add, sub, mul, dot, dist, angOf, normA, polar, clean, cp, fmt, DEG, TAU } from '../geometry/vec';
 import { ellPt, prims, boxCentre, type Box } from '../geometry/entity';
 import { segsOf, segPoint } from '../geometry/path';
+import { splineSegs, bez, mirrorHandle, splitSplineAt } from '../geometry/spline';
 import { affEnt, affMove, affRot, affScale, type Affine } from '../geometry/affine';
 import type { Tool, PointerInfo } from '../editor/tool';
 import type { Editor } from '../editor/editor';
@@ -12,7 +13,7 @@ import type { Entity, Shape } from '../model/types';
 import { ICONS } from './icons';
 
 export interface Handle { k: 'scale' | 'rot' | 'flipV' | 'flipH' | 'copy' | 'move'; fx?: number; fy?: number; x: number; y: number; b: Box }
-export interface NodeHandle { k: 'v' | 'add' | 'c' | 'r' | 'rx' | 'ry' | 'a0' | 'a1' | 'p1' | 'p2' | 'off'; i?: number; p: Point; role?: 'start' | 'end' | 'mid' }
+export interface NodeHandle { k: 'v' | 'add' | 'c' | 'r' | 'rx' | 'ry' | 'a0' | 'a1' | 'p1' | 'p2' | 'off' | 'hin' | 'hout'; i?: number; p: Point; role?: 'start' | 'end' | 'mid' }
 
 export function handles(ed: Editor): Handle[] {
   if (ed.tool.id !== 'select' || !ed.sel.size || ed.state.node) return [];
@@ -76,14 +77,30 @@ export function nodeHandles(ed: Editor, e: Entity | Shape): NodeHandle[] {
     e.pts.forEach((p, i) => H.push({ k: 'v', i, p, role: i === 0 ? 'start' : (i === e.pts.length - 1 && !e.closed) ? 'end' : 'mid' }));
     if (e.pts.length <= 400) segsOf(e).forEach((s, i) => s.kind === 'seg' && H.push({ k: 'add', i, p: segPoint(s, .5) }));
   }
+  else if (e.type === 'spline') {
+    const n = e.pts.length;
+    e.pts.forEach((p, i) => {
+      if (e.closed || i > 0) H.push({ k: 'hin', i, p: e.h[i][0] });
+      if (e.closed || i < n - 1) H.push({ k: 'hout', i, p: e.h[i][1] });
+      H.push({ k: 'v', i, p, role: i === 0 ? 'start' : (i === n - 1 && !e.closed) ? 'end' : 'mid' });
+    });
+    splineSegs(e).forEach((b, i) => H.push({ k: 'add', i, p: bez(b, .5) }));
+  }
   else if (e.type === 'circle') H.push({ k: 'c', p: e.c }, { k: 'r', p: polar(e.c, e.r, 0) });
   else if (e.type === 'ellipse') H.push({ k: 'c', p: e.c }, { k: 'rx', p: ellPt(e, 0) }, { k: 'ry', p: ellPt(e, Math.PI / 2) });
   else if (e.type === 'arc') H.push({ k: 'c', p: e.c }, { k: 'a0', p: polar(e.c, e.r, e.a0), role: 'start' }, { k: 'a1', p: polar(e.c, e.r, e.a1), role: 'end' }, { k: 'r', p: polar(e.c, e.r, e.a0 + normA(e.a1 - e.a0) / 2) });
   else if (e.type === 'dim') H.push({ k: 'p1', p: e.p1 }, { k: 'p2', p: e.p2 }, { k: 'off', p: e.mode === 'r' || e.mode === 'd' ? e.off : ed.dimGeom(e as any).text.p });
   return H;
 }
-export function nodeApply(e: Entity | Shape, h: NodeHandle, p: Point): Shape {
+export function nodeApply(e: Entity | Shape, h: NodeHandle, p: Point, mods?: { alt: boolean }): Shape {
   const n: any = structuredClone(e); p = cp(p);
+  if (e.type === 'spline') {
+    const i = h.i!;
+    if (h.k === 'v') { const d = sub(p, e.pts[i]); n.pts[i] = p; n.h[i] = [add(e.h[i][0], d), add(e.h[i][1], d)]; }
+    else if (h.k === 'hin') { n.h[i][0] = p; if (!mods?.alt) n.h[i][1] = mirrorHandle(e.pts[i], p, e.h[i][1]); }
+    else if (h.k === 'hout') { n.h[i][1] = p; if (!mods?.alt) n.h[i][0] = mirrorHandle(e.pts[i], p, e.h[i][0]); }
+    return n;
+  }
   if (e.type === 'line') n[h.i ? 'b' : 'a'] = p;
   else if (e.type === 'poly') n.pts[h.i!] = p;
   else if (h.k === 'c') return affEnt(e as Shape, affMove(sub(p, (e as any).c)));
@@ -110,7 +127,8 @@ export const selectTool: Tool = {
     if (S.node) {
       const e = ed.store.byId(S.node.id) as Entity | undefined, h = hitNode(ed, info.sp);
       if (h && e) {
-        if (h.k === 'add' && e.type === 'poly') { ed.store.checkpoint(); e.pts.splice(h.i! + 1, 0, cp(h.p)); if (e.bulge) e.bulge.splice(h.i! + 1, 0, 0); S.ndrag = { h: { k: 'v', i: h.i! + 1, p: h.p }, id: e.id, preview: null, pushed: true }; S.node.sel = h.i! + 1; }
+        if (h.k === 'add' && e.type === 'spline') { ed.store.checkpoint(); const ns = splitSplineAt(e, h.i!); e.pts = ns.pts; e.h = ns.h; S.ndrag = { h: { k: 'v', i: h.i! + 1, p: h.p }, id: e.id, preview: null, pushed: true }; S.node.sel = h.i! + 1; }
+        else if (h.k === 'add' && e.type === 'poly') { ed.store.checkpoint(); e.pts.splice(h.i! + 1, 0, cp(h.p)); if (e.bulge) e.bulge.splice(h.i! + 1, 0, 0); S.ndrag = { h: { k: 'v', i: h.i! + 1, p: h.p }, id: e.id, preview: null, pushed: true }; S.node.sel = h.i! + 1; }
         else { S.ndrag = { h, id: e.id, preview: null }; if (h.k === 'v') S.node.sel = h.i; }
         return;
       }
@@ -140,7 +158,7 @@ export const selectTool: Tool = {
   move(ed, raw, info) {
     const S = ed.state;
     if (S.box) { S.box.b = raw; ed.snapRes = null; }
-    else if (S.ndrag) { const e = ed.store.byId(S.ndrag.id)!; ed.snapRes = ed.snapAt(raw, { exclude: new Set([e.id]), drawing: true }); S.ndrag.preview = nodeApply(e, S.ndrag.h, ed.snapRes.p); }
+    else if (S.ndrag) { const e = ed.store.byId(S.ndrag.id)!; ed.snapRes = ed.snapAt(raw, { exclude: new Set([e.id]), drawing: true }); S.ndrag.preview = nodeApply(e, S.ndrag.h, ed.snapRes.p, ed.mods); }
     else if (S.hdrag) { ed.snapRes = S.hdrag.h.k === 'rot' ? null : ed.snapAt(raw, { exclude: ed.sel, drawing: true }); S.hdrag.tx = handleTransform(ed, S.hdrag.h, S.hdrag.start, raw, info); }
     else if (S.drag) {
       ed.snapRes = ed.snapAt(raw, { exclude: ed.sel, drawing: true }); let d = sub(ed.snapRes.p, S.drag.from); S.drag.guides = [];
@@ -174,6 +192,7 @@ export const selectTool: Tool = {
     if (key === 'Enter' && ed.sel.size === 1 && !S.node) { enterNodeEdit(ed, ed.selected()[0]); return true; }
     if ((key === 'Delete' || key === 'Backspace') && S.node && S.node.sel != null) {
       const e = ed.store.byId(S.node.id);
+      if (e && e.type === 'spline') { const min = e.closed ? 3 : 2; if (e.pts.length <= min) { ed.toast(`A curve needs at least ${min} points`); return true; } const i = S.node.sel; ed.store.change(() => { e.pts.splice(i, 1); e.h.splice(i, 1); }); S.node.sel = null; return true; }
       if (e && e.type === 'poly') { const min = e.closed ? 3 : 2; if (e.pts.length <= min) { ed.toast(`A path needs at least ${min} points`); return true; } const i = S.node.sel; ed.store.change(() => { e.pts.splice(i, 1); if (e.bulge) { e.bulge.splice(i, 1); if (i > 0) e.bulge[i - 1] = 0; else if (e.closed) e.bulge[e.bulge.length - 1] = 0; } }); S.node.sel = null; return true; }
     }
     return false;
@@ -204,11 +223,13 @@ export const selectTool: Tool = {
     if (S.node) {
       const e = ed.store.byId(S.node.id); if (!e) return; const ee = S.ndrag?.preview || e;
       o.custom((ctx, ed2, C) => {
+        if (ee.type === 'spline') { ctx.strokeStyle = C['--muted']; ctx.lineWidth = 1; ctx.setLineDash([]); ctx.beginPath(); ee.pts.forEach((p: Point, i: number) => { const a = ed2.w2s(p); for (const q of ee.h[i]) { const b = ed2.w2s(q); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); } }); ctx.stroke(); }
         for (const h of nodeHandles(ed2, ee)) {
           const s = ed2.w2s(h.p); ctx.lineWidth = 1.5; ctx.beginPath();
           if (h.k === 'add') { ctx.strokeStyle = C['--muted']; ctx.moveTo(s.x - 4, s.y); ctx.lineTo(s.x + 4, s.y); ctx.moveTo(s.x, s.y - 4); ctx.lineTo(s.x, s.y + 4); ctx.stroke(); continue; }
           const col = h.role === 'start' ? C['--node-start'] : h.role === 'end' ? C['--node-end'] : (h.k === 'v' ? C['--node'] : C['--accent']);
           ctx.fillStyle = (S.node.sel === h.i && h.k === 'v') ? col : C['--sheet']; ctx.strokeStyle = col;
+          if (h.k === 'hin' || h.k === 'hout') { ctx.fillStyle = C['--accent']; ctx.rect(s.x - 3.5, s.y - 3.5, 7, 7); ctx.fill(); continue; }
           if (['v', 'a0', 'a1', 'p1', 'p2'].includes(h.k)) ctx.arc(s.x, s.y, 5, 0, TAU);
           else if (h.k === 'c') ctx.rect(s.x - 5, s.y - 5, 10, 10);
           else { ctx.moveTo(s.x, s.y - 6); ctx.lineTo(s.x + 6, s.y); ctx.lineTo(s.x, s.y + 6); ctx.lineTo(s.x - 6, s.y); ctx.closePath(); }

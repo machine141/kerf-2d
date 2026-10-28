@@ -5,6 +5,7 @@ import { affMove, affScale, affRot } from '../geometry/affine';
 import { geomSettings } from '../geometry/entity';
 import type { BoolOp } from '../geometry/boolean';
 import { openTrace } from './trace';
+import { openElements } from './elements';
 import { DEFAULT_OPTS, type Editor, type CoordMode } from '../editor/editor';
 import type { OptionSpec, PointerInfo } from '../editor/tool';
 import { Renderer } from '../render/renderer';
@@ -82,6 +83,13 @@ export function startUI(ed: Editor) {
     nav.innerHTML = html; nav.querySelectorAll<HTMLElement>('.tool').forEach(b => b.onclick = () => ed.setTool(b.dataset.t!));
   }
   // ---------- option strip (generated from tool.options) ----------
+  /** Re-render the options strip if some options depend on others (keeps the focused box focused). */
+  function refreshOptions() {
+    if (!(ed.tool.options || []).some(o => o.show)) return;
+    const k = (document.activeElement as HTMLElement | null)?.dataset?.opt;
+    renderOptions();
+    if (k) { const el = document.querySelector<HTMLInputElement>(`#toolOpts [data-opt="${k}"]`); if (el && el.type !== 'checkbox') { el.focus(); const n = el.value.length; try { el.setSelectionRange(n, n); } catch { /* ignore */ } } }
+  }
   function renderOptions() {
     const t = ed.tool, specs = (t.options || []).filter(o => !o.show || o.show(ed));
     $('#optName').textContent = t.label + (specs.length ? '' : ' · no options');
@@ -100,8 +108,8 @@ export function startUI(ed: Editor) {
   function bindOpt(o: OptionSpec) {
     const el = document.querySelector<HTMLElement>(`#toolOpts [data-opt="${o.key}"]`); if (!el) return;
     if (o.type === 'seg') el.querySelectorAll<HTMLElement>('button').forEach(b => b.onclick = () => { ed.opt[o.key] = b.dataset.v; renderOptions(); ed.changed('opts'); R.request(); });
-    else if (o.type === 'number') { const inp = el as HTMLInputElement; inp.oninput = () => { const v = o.unit === 'mm' ? parseLength(inp.value) : parseFloat(inp.value); if (inp.value.trim() === '') { ed.opt[o.key] = ''; } else if (isFinite(v)) { ed.opt[o.key] = v; if (o.key === 'offD') ed.opt.offFollow = false; } R.request(); }; inp.onkeydown = e => { if (e.key === 'Enter' || e.key === 'Escape') { inp.blur(); syncOptions(); } }; }
-    else if (o.type === 'check') (el as HTMLInputElement).onchange = () => { ed.opt[o.key] = (el as HTMLInputElement).checked; R.request(); };
+    else if (o.type === 'number') { const inp = el as HTMLInputElement; inp.oninput = () => { const v = o.unit === 'mm' ? parseLength(inp.value) : parseFloat(inp.value); if (inp.value.trim() === '') { ed.opt[o.key] = ''; } else if (isFinite(v)) { ed.opt[o.key] = v; if (o.key === 'offD') ed.opt.offFollow = false; } R.request(); }; inp.onkeydown = e => { if (e.key === 'Enter' || e.key === 'Escape') { inp.blur(); syncOptions(); } }; inp.onchange = () => refreshOptions(); }
+    else if (o.type === 'check') (el as HTMLInputElement).onchange = () => { ed.opt[o.key] = (el as HTMLInputElement).checked; refreshOptions(); R.request(); };
     else if (o.type === 'select') (el as HTMLSelectElement).onchange = () => { ed.opt[o.key] = (el as HTMLSelectElement).value; R.request(); };
     else if (o.type === 'button') el.onclick = () => { o.run(ed); R.request(); };
   }
@@ -238,6 +246,7 @@ export function startUI(ed: Editor) {
   $('#bOpen').onclick = () => $('#fileIn').click();
   const isImage = (f: File) => /^image\//i.test(f.type) || /\.(png|jpe?g|jfif|gif|webp|bmp|avif|heic|heif)$/i.test(f.name);
   $('#bTrace').onclick = () => $('#imgIn').click();
+  $('#bElements').onclick = () => openElements(ed);
   $<HTMLInputElement>('#imgIn').onchange = ev => { const inp = ev.target as HTMLInputElement, f = inp.files?.[0]; inp.value = ''; if (f) openTrace(ed, f); };
   // drop a picture (or drawing) anywhere on the window; paste a picture with Ctrl/Cmd+V
   const hasFiles = (ev: DragEvent) => [...(ev.dataTransfer?.types || [])].includes('Files');
@@ -375,10 +384,11 @@ export function startUI(ed: Editor) {
         if (e.pts.length <= 60) e.pts.forEach((p: Point, i: number) => { PF.push(numField(`P${i + 1} X`, p.x, v => { const x = live(); x.pts[i] = P(v, x.pts[i].y); })); PF.push(numField(`P${i + 1} Y`, p.y, v => { const x = live(); x.pts[i] = P(x.pts[i].x, v); })); });
         F.push(...PF); ptsHtml = PF.length ? `<details id="pPts" ${ui.ptsOpen ? 'open' : ''}><summary>Point coordinates (${e.pts.length})</summary><div class="grid2">${PF.map(f => f.html).join('')}</div></details>` : '';
         extra = `<p class="hint">${e.closed ? 'Perimeter' : 'Length'} ${fmt(lengthOf(e), dp())} mm · ${e.pts.length} points</p>`; }
+      else if (e.type === 'spline') { title = e.closed ? 'Closed curve' : 'Curve'; extra = `<p class="hint">${e.closed ? 'Perimeter' : 'Length'} ${fmt(lengthOf(e), dp())} mm · ${e.pts.length} points · Edit points to drag points and handles (Alt = sharp corner, click + to add a point)</p>`; }
       else if (e.type === 'dim') { title = 'Dimension'; pt('Point 1', 'p1'); pt('Point 2', 'p2'); extra = `<div class="grid2"><label for="dTxt">Text override</label><input type="text" id="dTxt" value="${esc(e.text || '')}" placeholder="${esc(fmt(ed.dimGeom(e).val, ed.doc.dim.dec))}"></div>`; }
       const mainF = F.filter(f => !ptsHtml.includes(`id="${f.id}"`));
       pane.innerHTML = `<h3>${title}</h3>
-        <div class="row"><button class="btn" id="pNodes" title="Drag points; double-click a shape to do the same">${ed.state.node ? 'Finish editing points' : 'Edit points'}</button>${e.type === 'poly' ? '<button class="btn" id="pExplode" title="Ctrl+E">Explode to lines</button>' : ''}<button class="btn" id="pDel">Delete</button></div>
+        <div class="row"><button class="btn" id="pNodes" title="Drag points; double-click a shape to do the same">${ed.state.node ? 'Finish editing points' : 'Edit points'}</button>${e.type === 'poly' ? '<button class="btn" id="pExplode" title="Ctrl+E">Explode to lines</button>' : e.type === 'spline' ? '<button class="btn" id="pExplode" title="Turn the curve into a path of short lines (Ctrl+E)">Convert to path</button>' : ''}<button class="btn" id="pDel">Delete</button></div>
         ${mainF.length ? `<div class="grid2">${mainF.map(f => f.html).join('')}</div>` : ''}${extra}${sz.html}${ptsHtml}
         <p class="hint">Layer ${esc(ed.store.layer(e.layer)?.name || '?')} · ${COLORS[e.color as ColorKey]?.label || e.color} · ${e.w} mm</p>`;
       bindFields(F.concat(sz.fields)); bindSize();

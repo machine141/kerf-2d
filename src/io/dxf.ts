@@ -40,6 +40,7 @@ export function exportDXF(doc: Doc, opt: DxfOptions = {}): string {
     if (e.type === 'line') line(e.a, e.b);
     else if (e.type === 'poly') { if (hasBulge(e) && opt.splitArcs) poly(flattenPath(e, tol), e.closed); else poly(e.pts, e.closed, e.bulge); }
     else if (e.type === 'ellipse') poly(flatten(e, tol).pts, true);
+    else if (e.type === 'spline') poly(flatten(e, tol).pts, e.closed);
     else if (e.type === 'circle') { if (opt.splitArcs) poly(flatten(e, tol).pts, true); else { head('CIRCLE'); g(10, nf(e.c.x)); g(20, nf(e.c.y)); g(30, 0); g(40, nf(e.r)); } }
     else if (e.type === 'arc') { if (opt.splitArcs) poly(flatten(e, tol).pts, false); else { head('ARC'); g(10, nf(e.c.x)); g(20, nf(e.c.y)); g(30, 0); g(40, nf(e.r)); g(50, nf(normA(e.a0) / DEG)); g(51, nf(normA(e.a1) / DEG)); } }
     else if (e.type === 'dim') {

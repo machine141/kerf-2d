@@ -1,11 +1,12 @@
 /** Drawing tools: line, rectangle, circle/ellipse, arc, dimension. */
 import { type Point, P, add, sub, dist, normA, angOf, clean, cp, fmt, DEG } from '../geometry/vec';
-import { pointTool, type Tool } from '../editor/tool';
+import { pointTool, type Tool, type Overlay } from '../editor/tool';
 import type { Editor } from '../editor/editor';
 import type { Shape } from '../model/types';
 import { ICONS } from './icons';
 import { arc3, tangentArc, endTangent } from '../geometry/arcs';
 import { dimValue } from '../geometry/dims';
+import { autoHandles } from '../geometry/spline';
 import { hasBulge } from '../geometry/path';
 
 const addShape = (ed: Editor, s: Shape) => { const e = ed.store.change(() => ed.store.add(s)); return e; };
@@ -26,7 +27,11 @@ export function makeCircle(p: Point[], m: { shift: boolean; alt: boolean }, from
 }
 const zero = (s: Shape) => (s.type === 'circle' && s.r < 1e-9) || (s.type === 'ellipse' && Math.min(s.rx, s.ry) < 1e-9) || (s.type === 'poly' && dist(s.pts[0], s.pts[2]) < 1e-9);
 
-export const lineTool: Tool = pointTool({
+/** A ring on the first point of a shape being drawn: come back to it to close the shape. */
+export function startMarker(o: Overlay, p: Point) {
+  o.custom((ctx, ed, C) => { const s = ed.w2s(p); ctx.strokeStyle = C['--ok']; ctx.lineWidth = 1.5; ctx.setLineDash([3, 3]); ctx.beginPath(); ctx.arc(s.x, s.y, 9, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]); });
+}
+const lineBase = pointTool({
   id: 'line', label: 'Line', key: 'L', icon: ICONS.line, group: 1, need: 'open', constrain45: true,
   prompts: ['Locate start point', 'Locate next point · Shift = 45° steps · Enter, double-click or right-click to finish · C closes'],
   options: [
@@ -39,12 +44,15 @@ export const lineTool: Tool = pointTool({
     else addShape(ed, { type: 'poly', closed: !!closed && pts.length > 2, pts } as Shape);
   },
   keyExtra(ed, key) { if ((key === 'c' || key === 'C') && ed.pts.length >= 3) { ed.state.close = true; ed.finish(); return true; } return false; },
+  intercept(ed, p) { if (ed.pts.length >= 3 && dist(p, ed.pts[0]) < 1e-9) { ed.state.close = true; ed.finish(); return true; } return false; },
   preview(ed, pts, cur, o) {
     const last = pts[pts.length - 1];
+    if (pts.length >= 2) startMarker(o, pts[0]);
     o.ghost({ type: 'poly', closed: false, pts: [...pts, cur] } as Shape);
     o.label(`L ${fmt(dist(last, cur), 3)}  ∠ ${fmt(normA(angOf(last, cur)) / DEG, 2)}°`);
   },
 });
+export const lineTool: Tool = { ...lineBase, closes: true };
 
 export const rectTool: Tool = pointTool({
   id: 'rect', label: 'Rectangle', key: 'R', icon: ICONS.rect, group: 1, need: 2, drag: true,
@@ -159,3 +167,57 @@ export const dimTool: Tool = {
 };
 const roundDim = (ed: Editor, R: { c: Point; r: number }, at: Point) => ({ type: 'dim', mode: ed.opt.dimMode, p1: R.c, p2: P(R.c.x + R.r, R.c.y), off: at }) as Shape;
 function placeRound(ed: Editor, at: Point) { addDim(ed, roundDim(ed, ed.state.round, at)); ed.state.round = null; ed.changed('prompt'); }
+
+// ---------- polygon / star ----------
+/** Regular polygon (or star) from its centre and a point giving size and turn. */
+export function makePolygon(c: Point, q: Point, sides: number, measure: 'corner' | 'flat', star: boolean, innerPct: number, stepDeg: number): Shape {
+  const n = Math.max(3, Math.min(64, Math.round(sides))), d = dist(c, q);
+  let a = angOf(c, q); if (stepDeg > 0) a = Math.round(a / (stepDeg * DEG)) * stepDeg * DEG;
+  const R = measure === 'flat' && !star ? d / Math.cos(Math.PI / n) : d, a0 = measure === 'flat' && !star ? a + Math.PI / n : a;
+  const pts: Point[] = [];
+  if (!star) for (let i = 0; i < n; i++) pts.push(cp(P(c.x + R * Math.cos(a0 + i * 2 * Math.PI / n), c.y + R * Math.sin(a0 + i * 2 * Math.PI / n))));
+  else { const r2 = R * Math.max(5, Math.min(95, innerPct)) / 100; for (let i = 0; i < 2 * n; i++) { const rr = i % 2 ? r2 : R, t = a + i * Math.PI / n; pts.push(cp(P(c.x + rr * Math.cos(t), c.y + rr * Math.sin(t)))); } }
+  return { type: 'poly', closed: true, pts } as Shape;
+}
+const polyArgs = (ed: Editor, c: Point, q: Point) => makePolygon(c, q, +ed.opt.polySides, ed.opt.polyMeasure, !!ed.opt.polyStar, +ed.opt.polyInner, ed.mods.shift ? 0 : 15);
+export const polygonTool: Tool = pointTool({
+  id: 'polygon', label: 'Polygon / star', key: 'N', group: 1, need: 2,
+  icon: '<path d="M12 3l8.5 6.2-3.3 10H6.8L3.5 9.2z"/>',
+  prompts: ['Locate the centre', 'Locate a corner (or the middle of a side) · turns in 15° steps · Shift = free · type Rel for an exact size'],
+  options: [
+    { key: 'polySides', label: 'Sides', type: 'number', min: 3, max: 64, step: 1 },
+    { key: 'polyMeasure', label: 'Size to', type: 'seg', choices: [['corner', 'Corner'], ['flat', 'Flat side']], show: ed => !ed.opt.polyStar },
+    { key: 'polyStar', label: 'Star', type: 'check' },
+    { key: 'polyInner', label: 'Inner', type: 'number', min: 5, max: 95, step: 5, unit: '%', show: ed => !!ed.opt.polyStar },
+  ],
+  make(ed, p) { if (dist(p[0], p[1]) < 1e-9) return; addShape(ed, polyArgs(ed, p[0], p[1])); },
+  preview(ed, p, cur, o) {
+    if (dist(p[0], cur) < 1e-9) return;
+    const s = polyArgs(ed, p[0], cur); o.ghost(s);
+    const d = dist(p[0], cur), n = Math.max(3, Math.round(+ed.opt.polySides));
+    const flat = ed.opt.polyMeasure === 'flat' && !ed.opt.polyStar, Rc = flat ? d / Math.cos(Math.PI / n) : d, Rf = flat ? d : d * Math.cos(Math.PI / n);
+    o.label(ed.opt.polyStar ? `${n}-point star · R ${fmt(d, 2)} mm` : `${n} sides · side ${fmt(2 * Rc * Math.sin(Math.PI / n), 2)} · across corners ${fmt(2 * Rc, 2)} · across flats ${fmt(2 * Rf, 2)} mm`);
+  },
+});
+
+// ---------- spline (smooth curve) ----------
+const splineOf = (pts: Point[], closed: boolean): Shape => ({ type: 'spline', pts: pts.map(cp), h: autoHandles(pts, closed).map(([a, b]) => [cp(a), cp(b)]), closed } as Shape);
+const splineBase = pointTool({
+  id: 'spline', label: 'Spline (smooth curve)', key: 'B', group: 1, need: 'open',
+  icon: '<path d="M3 18c3-9 6-12 9-7s6 4 9-6"/><circle cx="3" cy="18" r="1.3"/><circle cx="12" cy="11" r="1.3"/><circle cx="21" cy="5" r="1.3"/>',
+  prompts: ['Click the first point of the curve', 'Click more points · come back to the first point to close it · Enter, double-click or right-click to finish'],
+  options: [
+    { key: 'splClose', label: 'Close curve (C)', type: 'button', run: ed => { if (ed.pts.length >= 3) { ed.state.close = true; ed.finish(); } } },
+    { key: 'splFinish', label: 'Finish (Enter)', type: 'button', run: ed => ed.finish() },
+    { key: 'splHint', label: 'Double-click the curve afterwards to drag points and handles (Alt = sharp corner)', type: 'hint' },
+  ],
+  make(ed, pts, closed) { addShape(ed, splineOf(pts, !!closed && pts.length > 2)); },
+  keyExtra(ed, key) { if ((key === 'c' || key === 'C') && ed.pts.length >= 3) { ed.state.close = true; ed.finish(); return true; } return false; },
+  intercept(ed, p) { if (ed.pts.length >= 3 && dist(p, ed.pts[0]) < 1e-9) { ed.state.close = true; ed.finish(); return true; } return false; },
+  preview(ed, pts, cur, o) {
+    if (pts.length >= 2) startMarker(o, pts[0]);
+    const closing = ed.snapRes?.k === 'close';
+    o.ghost(splineOf(closing ? pts : [...pts, cur], closing && pts.length > 2));
+  },
+});
+export const splineTool: Tool = { ...splineBase, closes: true };

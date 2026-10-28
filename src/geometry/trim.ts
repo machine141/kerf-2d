@@ -47,7 +47,7 @@ const touchesOn = (my: Prim[], touch?: Touch) => { const out: Point[] = []; if (
 /** Trim with full detail: the pieces kept, the pieces removed (for preview), or why it can't be done. */
 export function trimInfo(e: Shape, click: Point, cutters: Prim[], mode: TrimMode = 'whole', touch?: Touch): TrimResult {
   if (e.type === 'dim') return { error: 'Dimensions cannot be trimmed' };
-  if (e.type === 'ellipse') e = { ...(e as any), type: 'poly', closed: true, pts: flatten(e).pts.map(cp) } as Shape;
+  if (e.type === 'ellipse' || e.type === 'spline') e = { ...(e as any), type: 'poly', closed: e.type === 'ellipse' || !!(e as any).closed, pts: flatten(e, 0.005).pts.map(cp) } as Shape;
   if (e.type === 'poly' && mode === 'segments') {
     const parts = explodePath(e);
     let bi = 0, bd = Infinity;

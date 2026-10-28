@@ -33,3 +33,16 @@ describe('array / pattern', () => {
     expect(arrayTransforms({ ...base, type: 'circ', sym: '2' }, C, c).length).toBe(10);
   });
 });
+describe('shrinking patterns keep even gaps', () => {
+  it('gaps shrink with the copies, and fill adds copies along the same length', () => {
+    const o = { ...base, cols: 4, scalePct: -20, closeUp: true, fill: false };
+    const xs = arrayTransforms(o, C, C).map(A => apA(A, C).x - C.x);
+    expect(xs[0]).toBeCloseTo(20 * 0.9, 9); expect(xs[1] - xs[0]).toBeCloseTo(20 * (0.8 + 0.64) / 2, 9);
+    const filled = arrayTransforms({ ...o, fill: true }, C, C).map(A => apA(A, C).x - C.x);
+    expect(filled.length).toBeGreaterThan(3); expect(Math.max(...filled)).toBeLessThanOrEqual(60 + 1e-9);
+  });
+  it('circular fill goes round without overlapping the original', () => {
+    const T = arrayTransforms({ ...base, type: 'circ', count: 6, scalePct: -10, closeUp: true, fill: true }, C, P(50, 0));
+    expect(T.length).toBeGreaterThan(5);
+  });
+});

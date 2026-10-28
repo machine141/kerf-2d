@@ -18,19 +18,30 @@ const MAX = 600;
 /** A∘B: apply B first, then A. */
 export const comp = (A: Affine, B: Affine): Affine => ({ a: A.a * B.a + A.b * B.c, b: A.a * B.b + A.b * B.d, c: A.c * B.a + A.d * B.c, d: A.c * B.b + A.d * B.d, e: A.a * B.e + A.b * B.f + A.e, f: A.c * B.e + A.d * B.f + A.f });
 
-export interface ArrayOpts { type: 'grid' | 'circ'; cols: number; rows: number; dx: number; dy: number; count: number; angle: number; rotate: boolean; scalePct: number; sym: '1' | '2' | '4' }
+export interface ArrayOpts {
+  type: 'grid' | 'circ'; cols: number; rows: number; dx: number; dy: number; count: number; angle: number; rotate: boolean; scalePct: number; sym: '1' | '2' | '4';
+  /** gaps shrink (or grow) with the copies, so the spacing looks even */
+  closeUp?: boolean;
+  /** with closeUp: add copies until the pattern reaches the same length (or goes all the way round) */
+  fill?: boolean;
+}
 
 /** Transforms for every copy (not the original) of a pattern around `base` (the selection centre); `c` = circular centre. */
 export function arrayTransforms(o: ArrayOpts, base: Point, c: Point): Affine[] {
-  const out: Affine[] = [], f = 1 + (o.scalePct || 0) / 100;
-  const sized = (A: Affine, k: number) => { if (Math.abs(f - 1) < 1e-12 || k === 0) return A; const s = Math.pow(f, k), q = apA(A, base); return comp(affScale(q, s, s), A); };
+  const out: Affine[] = [], f = 1 + (o.scalePct || 0) / 100, shrinking = Math.abs(f - 1) > 1e-12, close = !!o.closeUp && shrinking;
+  const sized = (A: Affine, k: number) => { if (!shrinking || k === 0) return A; const s = Math.pow(f, k), q = apA(A, base); return comp(affScale(q, s, s), A); };
+  /** distance (in units of the spacing) from the original to copy n: each gap is scaled by the average size of its two neighbours */
+  const C = (n: number) => { if (!close) return n; let t = 0; for (let m = 0; m < n; m++) t += (Math.pow(f, m) + Math.pow(f, m + 1)) / 2; return t; };
+  /** how many to place along one direction: the set number, or (fill) as many as fit in the same length */
+  const tooSmall = (k: number) => f < 1 && Math.pow(f, k) < 0.05;   // stop filling once copies are under 5 % of the original
+  const howMany = (n: number) => { if (!(close && o.fill)) return n; let k = 1; while (k < 400 && !tooSmall(k) && C(k) <= (n - 1) + 1e-9) k++; return k; };
   if (o.type === 'grid') {
-    const nc = Math.max(1, Math.round(o.cols)), nr = Math.max(1, Math.round(o.rows));
+    const nc = howMany(Math.max(1, Math.round(o.cols))), nr = howMany(Math.max(1, Math.round(o.rows)));
     const iMin = o.sym !== '1' ? -(nc - 1) : 0, jMin = o.sym === '4' ? -(nr - 1) : 0;
     const mx = affMir(base, P(base.x, base.y + 1)), my = affMir(base, P(base.x + 1, base.y));
     for (let j = jMin; j < nr; j++) for (let i = iMin; i < nc; i++) {
       if (i === 0 && j === 0) continue;
-      let A = sized(affMove(P(Math.abs(i) * o.dx, Math.abs(j) * o.dy)), Math.max(Math.abs(i), Math.abs(j)));
+      let A = sized(affMove(P(C(Math.abs(i)) * o.dx, C(Math.abs(j)) * o.dy)), Math.max(Math.abs(i), Math.abs(j)));
       if (i < 0) A = comp(mx, A);
       if (j < 0) A = comp(my, A);
       out.push(A);
@@ -39,9 +50,11 @@ export function arrayTransforms(o: ArrayOpts, base: Point, c: Point): Affine[] {
     return out;
   }
   const n = Math.max(2, Math.round(o.count)), full = Math.abs(Math.abs(o.angle) - 360) < 1e-9, step = (full ? o.angle / n : o.angle / (n - 1)) * DEG;
-  const place = (k: number) => { const R = affRot(c, step * k); return o.rotate ? R : affMove(sub(apA(R, base), base)); };
+  let kMax = n - 1;
+  if (close && o.fill) { const lim = full ? Math.abs(o.angle) * DEG : Math.abs(o.angle) * DEG + 1e-9; kMax = 0; while (kMax < 400 && !tooSmall(kMax + 1)) { const k = kMax + 1, th = Math.abs(step) * C(k), end = full ? th + Math.abs(step) * (Math.pow(f, k) + 1) / 2 : th; if (end > lim + 1e-9) break; kMax = k; } }
+  const place = (k: number) => { const R = affRot(c, step * C(k)); return o.rotate ? R : affMove(sub(apA(R, base), base)); };
   const axis = affMir(c, base);
-  for (let k = 1; k < n; k++) {
+  for (let k = 1; k <= kMax; k++) {
     out.push(sized(place(k), k));
     if (o.sym !== '1') out.push(comp(axis, sized(place(k), k)));   // the other way round, mirrored
     if (out.length >= MAX) break;
@@ -52,7 +65,8 @@ export function arrayTransforms(o: ArrayOpts, base: Point, c: Point): Affine[] {
 const isGrid = (ed: Editor) => ed.opt.arrType !== 'circ';
 /** Grid and circular keep their own settings for size change and symmetry. */
 const opts = (ed: Editor): ArrayOpts => ({ type: isGrid(ed) ? 'grid' : 'circ', cols: +ed.opt.arrCols, rows: +ed.opt.arrRows, dx: +ed.opt.arrDx, dy: +ed.opt.arrDy, count: +ed.opt.arrCount, angle: +ed.opt.arrAngle, rotate: !!ed.opt.arrRotate,
-  scalePct: +(isGrid(ed) ? ed.opt.gridScale : ed.opt.circScale) || 0, sym: isGrid(ed) ? ed.opt.gridSym : ed.opt.circSym });
+  scalePct: +(isGrid(ed) ? ed.opt.gridScale : ed.opt.circScale) || 0, sym: isGrid(ed) ? ed.opt.gridSym : ed.opt.circSym,
+  closeUp: !!(isGrid(ed) ? ed.opt.gridClose : ed.opt.circClose), fill: !!(isGrid(ed) ? ed.opt.gridFill : ed.opt.circFill) });
 const baseOf = (ed: Editor) => { const b = ed.selBox(); return b ? boxCentre(b) : P(0, 0); };
 /** Circular centre for a cursor position: the centre of a circle / arc / rounded corner under it (not one being copied), else the snapped point. */
 function centreAt(ed: Editor, raw: Point, snapped: Point): { c: Point; onCircle: boolean } {
@@ -112,11 +126,15 @@ export const arrayTool: Tool = {
     { key: 'arrDy', label: 'Y', type: 'number', unit: 'mm', step: 1, show: isGrid },
     { key: 'arrFollow', label: 'Set by cursor', type: 'check', show: isGrid },
     { key: 'gridScale', label: 'Size change', type: 'number', min: -50, max: 50, step: 1, unit: '% each', show: isGrid },
+    { key: 'gridClose', label: 'Gaps shrink too', type: 'check', show: ed => isGrid(ed) && +ed.opt.gridScale !== 0 },
+    { key: 'gridFill', label: 'Fill the same length', type: 'check', show: ed => isGrid(ed) && +ed.opt.gridScale !== 0 && !!ed.opt.gridClose },
     { key: 'gridSym', label: 'Symmetry', type: 'seg', choices: [['1', 'Off'], ['2', '2-way'], ['4', '4-way']], show: isGrid },
     { key: 'arrCount', label: 'Copies', type: 'number', min: 2, max: 360, step: 1, show: ed => !isGrid(ed) },
     { key: 'arrAngle', label: 'Over °', type: 'number', step: 15, show: ed => !isGrid(ed) },
     { key: 'arrRotate', label: 'Turn copies', type: 'check', show: ed => !isGrid(ed) },
     { key: 'circScale', label: 'Size change', type: 'number', min: -50, max: 50, step: 1, unit: '% each', show: ed => !isGrid(ed) },
+    { key: 'circClose', label: 'Gaps shrink too', type: 'check', show: ed => !isGrid(ed) && +ed.opt.circScale !== 0 },
+    { key: 'circFill', label: 'Fill the circle', type: 'check', show: ed => !isGrid(ed) && +ed.opt.circScale !== 0 && !!ed.opt.circClose },
     { key: 'circSym', label: 'Both ways', type: 'seg', choices: [['1', 'Off'], ['2', 'On']], show: ed => !isGrid(ed) },
     placeBtn,
   ],

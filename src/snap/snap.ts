@@ -8,7 +8,7 @@ import { type Point, P, sub, add, mul, dot, dist, angOf, polar, DEG, cp } from '
 import { prims, keypoints, intersect, nearestOnPrim, bbox, type Prim, type SnapKind } from '../geometry/entity';
 import type { Aids, Entity, Shape } from '../model/types';
 
-export type SnapLabel = SnapKind | 'grid' | 'step' | 'radial' | 'track' | null;
+export type SnapLabel = SnapKind | 'grid' | 'step' | 'radial' | 'track' | 'close' | null;
 export interface SnapResult { p: Point; k: SnapLabel; guides?: { from: Point; to: Point }[] }
 export interface SnapContext {
   ents: Entity[];

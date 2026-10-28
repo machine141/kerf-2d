@@ -36,6 +36,8 @@ export interface Tool {
   group: number;
   /** uses snapping and accepts typed coordinates */
   draws?: boolean;
+  /** the first point of the shape being drawn snaps to close it */
+  closes?: boolean;
   /** Shift gives 45° steps from the last point */
   constrain45?: boolean;
   needsSelection?: boolean;

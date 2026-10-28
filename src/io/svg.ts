@@ -1,4 +1,5 @@
 /** SVG export (mm-sized, true arcs/ellipses, Inkscape layers) and basic SVG import. */
+import { splineSegs } from '../geometry/spline';
 import { type Point, P, add, sub, mul, dist, normA, angOf, polar, clean, cp, fmt, DEG } from '../geometry/vec';
 import { dimGeom } from '../geometry/dims';
 import { hasBulge, segsOf } from '../geometry/path';
@@ -29,6 +30,7 @@ export function exportSVG(doc: Doc, opt: SvgOptions = {}): string {
       }
       else if (e.type === 'poly') out.push(`<${e.closed ? 'polygon' : 'polyline'} points="${e.pts.map(p => nf(p.x) + ',' + Y(p.y)).join(' ')}" ${st}/>`);
       else if (e.type === 'circle') out.push(`<circle cx="${nf(e.c.x)}" cy="${Y(e.c.y)}" r="${nf(e.r)}" ${st}/>`);
+      else if (e.type === 'spline') { const sg = splineSegs(e); if (sg.length) out.push(`<path d="M ${nf(sg[0][0].x)} ${Y(sg[0][0].y)} ${sg.map(b => `C ${nf(b[1].x)} ${Y(b[1].y)} ${nf(b[2].x)} ${Y(b[2].y)} ${nf(b[3].x)} ${Y(b[3].y)}`).join(' ')}${e.closed ? ' Z' : ''}" ${st}/>`); }
       else if (e.type === 'ellipse') out.push(`<ellipse cx="${nf(e.c.x)}" cy="${Y(e.c.y)}" rx="${nf(e.rx)}" ry="${nf(e.ry)}"${Math.abs(e.rot) > 1e-12 ? ` transform="rotate(${nf(-e.rot / DEG)} ${nf(e.c.x)} ${Y(e.c.y)})"` : ''} ${st}/>`);
       else if (e.type === 'arc') {
         const s = polar(e.c, e.r, e.a0), f = polar(e.c, e.r, e.a1), lg = normA(e.a1 - e.a0) > Math.PI ? 1 : 0;

@@ -20,7 +20,7 @@ type IntPath = { X: number; Y: number }[];
 const toInt = (pts: Point[]): IntPath => { const ip = pts.map(p => ({ X: Math.round(p.x * SCALE), Y: Math.round(p.y * SCALE) })); if (!L.Clipper.Orientation(ip)) ip.reverse(); return ip; };
 const fromInt = (path: IntPath): Point[] => path.map(q => P(q.X / SCALE, q.Y / SCALE));
 
-export const isClosedShape = (s: Shape) => s.type === 'circle' || s.type === 'ellipse' || (s.type === 'poly' && s.closed && s.pts.length > 2);
+export const isClosedShape = (s: Shape) => s.type === 'circle' || s.type === 'ellipse' || ((s.type === 'poly' || s.type === 'spline') && s.closed && s.pts.length > 2);
 
 /** Signed area of a closed shape's outline (mm²), positive. */
 export function areaOf(s: Shape): number {

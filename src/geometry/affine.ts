@@ -43,6 +43,7 @@ export function affEnt<T extends Shape>(e: T, A: Affine): Shape {
       if (hasBulge(e) && !conformal) { n.pts = flattenPath(e, geomSettings.flatTol).map(f); delete n.bulge; return n; }
       n.pts = e.pts.map(f); if (e.bulge && det < 0) n.bulge = e.bulge.map((b: number) => -b); return n;
     case 'dim': n.p1 = f(e.p1); n.p2 = f(e.p2); n.off = f(e.off); return n;
+    case 'spline': n.pts = e.pts.map(f); n.h = e.h.map(([a, b]) => [f(a), f(b)]); return n;
     case 'circle':
       if (conformal) { n.c = f(e.c); n.r = clean(e.r * s); return n; }
       return toEllipse(e.c, [A.a * e.r, A.b * e.r, A.c * e.r, A.d * e.r]);
