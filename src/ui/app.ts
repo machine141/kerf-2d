@@ -6,6 +6,7 @@ import { geomSettings } from '../geometry/entity';
 import type { BoolOp } from '../geometry/boolean';
 import { openTrace } from './trace';
 import { openElements } from './elements';
+import { openBox } from './box';
 import { DEFAULT_OPTS, type Editor, type CoordMode } from '../editor/editor';
 import type { OptionSpec, PointerInfo } from '../editor/tool';
 import { Renderer } from '../render/renderer';
@@ -245,8 +246,13 @@ export function startUI(ed: Editor) {
   $('#bSave').onclick = saveNative; $('#bSvg').onclick = () => showExport('svg'); $('#bDxf').onclick = () => showExport('dxf');
   $('#bOpen').onclick = () => $('#fileIn').click();
   const isImage = (f: File) => /^image\//i.test(f.type) || /\.(png|jpe?g|jfif|gif|webp|bmp|avif|heic|heif)$/i.test(f.name);
-  $('#bTrace').onclick = () => $('#imgIn').click();
-  $('#bElements').onclick = () => openElements(ed);
+  $('#bTrace').onclick = () => { document.querySelector<HTMLElement>('#mkMenu .pop')!.hidden = true; $('#imgIn').click(); };
+  $('#bElements').onclick = () => { closeMake(); openElements(ed); };
+  $('#bBox').onclick = () => { closeMake(); openBox(ed); };
+  const makePop = () => document.querySelector<HTMLElement>('#mkMenu .pop')!;
+  const closeMake = () => { makePop().hidden = true; $('#bMake').setAttribute('aria-expanded', 'false'); };
+  $('#bMake').onclick = ev => { ev.stopPropagation(); const p = makePop(); p.hidden = !p.hidden; $('#bMake').setAttribute('aria-expanded', String(!p.hidden)); };
+  document.addEventListener('click', ev => { if (!(ev.target as HTMLElement).closest?.('#mkMenu')) closeMake(); });
   $<HTMLInputElement>('#imgIn').onchange = ev => { const inp = ev.target as HTMLInputElement, f = inp.files?.[0]; inp.value = ''; if (f) openTrace(ed, f); };
   // drop a picture (or drawing) anywhere on the window; paste a picture with Ctrl/Cmd+V
   const hasFiles = (ev: DragEvent) => [...(ev.dataTransfer?.types || [])].includes('Files');

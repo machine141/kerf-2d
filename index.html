@@ -49,6 +49,12 @@ header{grid-area:head;display:flex;align-items:center;gap:12px;padding-block:8px
 #docName{background:transparent;border:1px solid transparent;border-radius:4px;padding:3px 6px;width:170px;min-width:0}
 #docName:hover,#docName:focus{border-color:var(--line);background:var(--panel)}
 .actions{display:flex;gap:4px;flex-wrap:wrap;margin-left:auto}
+.menu{position:relative}
+.menu .pop{position:absolute;top:calc(100% + 4px);left:0;z-index:30;background:var(--panel);border:1px solid var(--line);border-radius:8px;box-shadow:0 8px 28px var(--shadow);padding:4px;min-width:260px;display:flex;flex-direction:column}
+.menu .pop[hidden]{display:none}
+.menu .pop button{display:flex;flex-direction:column;align-items:flex-start;gap:1px;text-align:left;border:0;background:none;color:var(--fg);padding:7px 10px;border-radius:6px;cursor:pointer;font:inherit}
+.menu .pop button:hover,.menu .pop button:focus-visible{background:var(--panel-2)}
+.menu .pop button span{font-size:11.5px;color:var(--muted)}
 .btn{border:1px solid var(--line);background:var(--panel);border-radius:5px;padding:4px 10px;line-height:1.4;white-space:nowrap}
 .btn:hover{border-color:var(--muted)}
 .btn.primary{background:var(--accent);color:var(--accent-fg);border-color:var(--accent);font-weight:500}
@@ -131,6 +137,22 @@ table.res td:last-child{text-align:right;white-space:nowrap}
 #modal .foot{display:flex;gap:8px;justify-content:flex-end;align-items:center;padding:0 14px 12px;flex-wrap:wrap}
 #modal .foot .hint{margin-right:auto}
 .dropping-x{}
+#boxmaker{position:fixed;inset:0;background:rgba(10,15,12,.45);display:grid;place-items:center;z-index:21;padding:12px}
+#boxmaker .box{background:var(--panel);border:1px solid var(--line);border-radius:8px;width:min(1000px,100%);height:min(680px,100%);display:flex;flex-direction:column;box-shadow:0 10px 40px var(--shadow)}
+#boxmaker .head,#boxmaker .foot{display:flex;gap:8px;align-items:center;padding:10px 14px}
+#boxmaker .head{justify-content:space-between;border-bottom:1px solid var(--line)}
+#boxmaker .foot{justify-content:flex-end;border-top:1px solid var(--line);flex-wrap:wrap}
+#boxmaker .foot .hint{margin-right:auto;color:var(--bad)}
+#boxmaker .x{border:0;background:none;color:var(--fg);font-size:16px;cursor:pointer}
+#boxmaker .body{flex:1;min-height:0;display:grid;grid-template-columns:1fr 290px}
+#boxmaker .view{min-width:0;min-height:0;display:flex;flex-direction:column;background:var(--sheet);padding:10px}
+#boxmaker svg{flex:1;min-height:0;width:100%}
+#boxmaker svg path{fill:color-mix(in srgb,var(--accent) 8%,transparent);stroke:var(--ink);stroke-width:.4;vector-effect:non-scaling-stroke;stroke-linejoin:miter}
+#boxmaker svg text{font-size:5px;fill:var(--muted);text-anchor:middle;dominant-baseline:middle;font-family:var(--f-sans,sans-serif)}
+#boxmaker .ctl{overflow:auto;padding:12px 14px;border-left:1px solid var(--line);display:flex;flex-direction:column;gap:9px}
+#boxmaker .sl{display:grid;grid-template-columns:1fr 70px auto;gap:6px;align-items:center;font-size:12.5px}
+#boxmaker .stat{font-size:12px;color:var(--muted);margin:6px 0 0}
+@media (max-width:760px){#boxmaker .body{grid-template-columns:1fr;grid-template-rows:45% 1fr}#boxmaker .ctl{border-left:0;border-top:1px solid var(--line)}}
 #elements{position:fixed;inset:0;background:rgba(10,15,12,.45);display:grid;place-items:center;z-index:21;padding:12px}
 #elements .box{background:var(--panel);border:1px solid var(--line);border-radius:8px;width:min(860px,100%);max-height:min(720px,100%);display:flex;flex-direction:column;box-shadow:0 10px 40px var(--shadow)}
 #elements .head{display:flex;gap:14px;align-items:center;padding:10px 14px;border-bottom:1px solid var(--line)}
@@ -186,13 +208,19 @@ body.dropping #main{outline:3px dashed var(--accent);outline-offset:-6px}
 </head>
 <body>
 <header>
-  <div class="brand"><b>Kerf 2D</b><span>precision drafting · v0.7/span></div>
+  <div class="brand"><b>Kerf 2D</b><span>precision drafting · v0.8</span></div>
   <input id="docName" aria-label="Drawing name" value="Glasses front">
   <div class="actions">
     <button class="btn" id="bNew">New</button>
     <button class="btn" id="bOpen">Open…</button>
-    <button class="btn" id="bElements" title="Ready-made outlines: hearts, stars, flowers, clouds…">Elements…</button>
-    <button class="btn" id="bTrace" title="Turn a picture into outlines — or drop a picture on the window, or paste one with Ctrl/Cmd+V">Trace image…</button>
+    <div class="menu" id="mkMenu">
+      <button class="btn" id="bMake" aria-haspopup="true" aria-expanded="false" title="Box maker, elements and picture tracing">Make ▾</button>
+      <div class="pop" role="menu" hidden>
+        <button role="menuitem" id="bBox"><b>Box maker…</b><span>Finger-jointed box, kerf compensated</span></button>
+        <button role="menuitem" id="bElements"><b>Elements…</b><span>Hearts, stars, flowers, clouds…</span></button>
+        <button role="menuitem" id="bTrace"><b>Trace image…</b><span>Turn a picture into outlines (or drop / paste one)</span></button>
+      </div>
+    </div>
     <button class="btn" id="bSave">Save</button>
     <button class="btn" id="bUndo" title="Undo (Ctrl+Z)">Undo</button>
     <button class="btn" id="bRedo" title="Redo (Ctrl+Y)">Redo</button>

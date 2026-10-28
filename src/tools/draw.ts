@@ -246,12 +246,17 @@ export function makeSpiral(c: Point, outer: Point, turns: number, innerR: number
   h[0][0] = pts[0]; h[n][1] = pts[n];
   return { type: 'spline', pts, h, closed: false } as Shape;
 }
-const spiralArgs = (ed: Editor, c: Point, q: Point) => makeSpiral(c, q, +ed.opt.spTurns, +ed.opt.spInner, ed.opt.spKind, ed.opt.spDir === 'ccw', ed.mods.shift ? 0 : 15);
+/** The two clicks in order: centre then outer end, or (Start from: Outer end) the outer end first, then the centre. */
+const fromEnd = (ed: Editor) => ed.opt.spFrom === 'end';
+const spiralArgs = (ed: Editor, a: Point, b: Point) => fromEnd(ed)
+  ? makeSpiral(b, a, +ed.opt.spTurns, +ed.opt.spInner, ed.opt.spKind, ed.opt.spDir === 'ccw', 0)
+  : makeSpiral(a, b, +ed.opt.spTurns, +ed.opt.spInner, ed.opt.spKind, ed.opt.spDir === 'ccw', ed.mods.shift ? 0 : 15);
 const spiralBase = pointTool({
   id: 'spiral', label: 'Spiral', key: 'J', group: 1, need: 2,
   icon: '<path d="M12 12a1.5 1.5 0 0 1 3 0 3 3 0 0 1-6 0 4.5 4.5 0 0 1 9 0 6 6 0 0 1-12 0 7.5 7.5 0 0 1 15 0"/>',
-  prompts: ['Locate the centre of the spiral', 'Locate the outer end (sets the size and where it finishes) · wheel = turns · Shift = free angle'],
+  prompts: ed => fromEnd(ed) ? ['Locate the outer end (snap to another spiral’s end to join them)', 'Locate the centre · wheel = turns'] : ['Locate the centre of the spiral', 'Locate the outer end (sets the size and where it finishes) · wheel = turns · Shift = free angle'],
   options: [
+    { key: 'spFrom', label: 'Start from', type: 'seg', choices: [['centre', 'Centre'], ['end', 'Outer end']] },
     { key: 'spKind', label: 'Coils', type: 'seg', choices: [['even', 'Even'], ['grow', 'Growing']] },
     { key: 'spTurns', label: 'Turns', type: 'number', min: 0.25, max: 50, step: 0.5 },
     { key: 'spInner', label: 'Inner radius', type: 'number', min: 0, step: 1, unit: 'mm' },
@@ -261,6 +266,7 @@ const spiralBase = pointTool({
   preview(ed, p, cur, o) {
     const s = spiralArgs(ed, p[0], cur); if (!s) return; o.ghost(s);
     const R = dist(p[0], cur), r0 = Math.min(+ed.opt.spInner || 0, R * 0.95), T = +ed.opt.spTurns;
+    if (fromEnd(ed)) o.custom((ctx, ed2, C) => { const q = ed2.w2s(p[0]); ctx.strokeStyle = C['--ok']; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(q.x, q.y, 6, 0, Math.PI * 2); ctx.stroke(); });
     o.label(ed.opt.spKind === 'even' ? `R ${fmt(R, 2)} · ${fmt(T, 2)} turns · gap ${fmt((R - r0) / Math.max(0.25, T), 2)} mm` : `R ${fmt(R, 2)} · ${fmt(T, 2)} turns · each coil ×${fmt(Math.pow(R / Math.max(r0, R * 0.02), 1 / Math.max(0.25, T)), 2)}`);
   },
 });
