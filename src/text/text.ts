@@ -173,7 +173,7 @@ export function expandText<T extends { type: string }>(ents: T[]): T[] {
   return ents.flatMap(e => e.type !== 'text' ? [e] : textShapes(e as any).map(s => ({ ...s, id: (e as any).id, layer: (e as any).layer, color: (e as any).color, w: (e as any).w }) as any));
 }
 /** A new text object's settings. */
-export const TEXT_DEFAULTS = { font: 'fredoka', size: 10, spacing: 0, lineSpacing: 1.6, align: 'left' as const };
+export const TEXT_DEFAULTS = { font: 'arimo', size: 10, spacing: 0, lineSpacing: 1.6, align: 'left' as const };
 
 // register with the geometry core so drawing, picking, snapping and exports see the letters
 ext.textShapes = textShapes as any;

@@ -77,7 +77,8 @@ header{grid-area:head;display:flex;align-items:center;gap:12px;padding-block:8px
 #attr label,#opts label{display:flex;align-items:center;gap:5px;color:var(--muted);font-size:12px}
 #attr select,#opts select,#opts input[type=text]{background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:2px 4px;color:var(--fg)}
 #opts input[type=text]{width:72px;font-family:var(--f-mono)}
-#opts{grid-area:opts;display:flex;align-items:center;gap:12px;height:42px;padding-left:8px;overflow-x:auto;overflow-y:hidden;white-space:nowrap;border-bottom:1px solid var(--line);min-width:0}
+#opts{grid-area:opts;display:flex;align-items:center;gap:6px 12px;min-height:42px;padding:5px 0 5px 8px;flex-wrap:wrap;white-space:nowrap;border-bottom:1px solid var(--line);min-width:0}
+#toolOpts{row-gap:6px}
 #opts .optname{font-weight:600;font-size:12px;color:var(--accent);flex:none}
 #opts .hint{margin:0;flex:none}
 .segc{display:inline-flex;border:1px solid var(--line);border-radius:5px;overflow:hidden}
@@ -273,10 +274,10 @@ table.res td:last-child{text-align:right;white-space:nowrap}
 .hbtn.on,.htopic.on{border-color:var(--accent);box-shadow:0 0 0 2px color-mix(in srgb,var(--accent) 25%,transparent)}
 .hbtn:hover,.htopic:hover{border-color:var(--accent)}
 /* first-time tip card */
-.txed{position:absolute;z-index:6;min-width:160px;max-width:min(420px,calc(100% - 16px));font-size:20px;line-height:1.25;padding:6px 8px;border:2px solid var(--accent);border-radius:8px;background:var(--panel);color:var(--fg);box-shadow:0 6px 22px var(--shadow);resize:none;overflow:hidden;white-space:pre}
 .fontgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(92px,1fr));gap:6px;margin:6px 0}
 .fontgrid button{font-size:17px;padding:6px 4px;border:1px solid var(--line);border-radius:8px;background:var(--sheet);color:var(--fg);cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .fontgrid button[aria-pressed="true"]{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent) inset}
+.fontgrid .fgl{grid-column:1/-1;margin:4px 0 -2px;font-size:11px;text-transform:uppercase;letter-spacing:.06em}
 .fontgrid button small{display:block;font:11px system-ui,sans-serif;color:var(--muted)}
 #pTxt{width:100%;min-height:54px;font-size:16px;resize:vertical}
 #coach{position:absolute;left:12px;top:12px;max-width:min(360px,calc(100% - 24px));display:flex;gap:10px;background:var(--panel);border:1px solid var(--accent);border-radius:10px;padding:10px 12px;box-shadow:0 8px 28px var(--shadow);z-index:5;font-size:13px}
@@ -354,7 +355,7 @@ body.dropping #main{outline:3px dashed var(--accent);outline-offset:-6px}
 </head>
 <body>
 <header>
-  <div class="brand"><b>Kerf 2D</b><span>precision drafting · v0.12</span></div>
+  <div class="brand"><b>Kerf 2D</b><span>precision drafting · v0.12.1</span></div>
   <input id="docName" aria-label="Drawing name" value="Glasses front">
   <div class="actions">
     <button class="btn" id="bNew">New</button>
@@ -389,7 +390,7 @@ body.dropping #main{outline:3px dashed var(--accent);outline-offset:-6px}
   <label title="Bed / material size (the white sheet)">Bed <select id="aBed"></select></label>
   <input type="text" id="aBedW" class="mono bedin" aria-label="Bed width mm"><span class="hint">×</span><input type="text" id="aBedH" class="mono bedin" aria-label="Bed height mm"><span class="hint">mm</span>
 </div>
-<div id="opts"><span class="optname" id="optName">Select</span><div id="toolOpts" class="row" style="flex-wrap:nowrap;gap:12px"></div></div>
+<div id="opts"><span class="optname" id="optName">Select</span><div id="toolOpts" class="row" style="flex-wrap:wrap;gap:6px 12px;min-width:0;flex:1 1 0"></div></div>
 <div id="main"><canvas id="cv" aria-label="Drawing sheet"></canvas><div id="toast" role="status"></div></div>
 <aside id="side">
   <div class="tabs" role="tablist">

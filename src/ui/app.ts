@@ -19,10 +19,10 @@ import { exportDXF, importDXF, type DxfOptions } from '../io/dxf';
 import { zipOne } from '../io/zip';
 import { enterNodeEdit } from '../tools/select';
 import { isText, editTexts, flipText, optsFromText } from '../tools/text';
-import { attachTextEditor, cssFont } from './textedit';
+import { cssFont } from './textedit';
 import { textShapes } from '../text/text';
 import { weldShapes } from '../text/place';
-import { FONTS } from '../text/fonts';
+import { FONTS, FONT_GROUPS } from '../text/fonts';
 import { runSelfTest, type TestResult } from '../selftest';
 
 const $ = <T extends HTMLElement = HTMLElement>(s: string) => document.querySelector(s) as T;
@@ -33,7 +33,30 @@ export function startUI(ed: Editor) {
   const prefs = loadPrefs(); if (prefs.joinTol != null) ed.opt.joinTol = prefs.joinTol; if (prefs.pickPx != null) ed.opt.pickPx = prefs.pickPx;
   const ui = { helpShow: null as string | null, alignTo: 'sel' as 'sel' | 'page', ptsOpen: false, tab: 'props', spaceDown: false, lastTest: null as null | { results: TestResult[]; doc: string | null }, exportOpts: { splitArcs: false, includeHidden: false, curveTol: 0.01, skipDims: true } as DxfOptions };
   let DL: any = null;
-  attachTextEditor(ed, $('#main'), cv);
+  // ---------- typing text: the box is in the Properties panel; the drawing changes as you type ----------
+  /** The text being typed into (one undo step from first key to finishing). */
+  let typing: { id: string; isNew: boolean; pushed: boolean } | null = null;
+  function finishTyping() {
+    const s = typing; typing = null; ed.state.typing = null; if (!s) return;
+    const t = ed.store.byId(s.id) as TextEntT | undefined; if (!t) return;
+    if (!t.text.trim()) {
+      if (s.isNew) { ed.store.remove([s.id]); ed.store.discardCheckpoint(); } else { if (!s.pushed) ed.store.checkpoint(); ed.store.remove([s.id]); }
+      ed.toast('Empty text removed'); ed.store.emit(); return;
+    }
+    if (s.pushed) ed.store.emit();
+  }
+  ed.textEditor = (id, isNew) => {
+    if (typing && typing.id !== id) finishTyping();
+    typing = { id, isNew, pushed: isNew };
+    if (ui.tab !== 'props') { ui.tab = 'props'; document.querySelectorAll('.tabs button').forEach(x => x.setAttribute('aria-selected', String((x as HTMLElement).dataset.tab === 'props'))); }
+    renderPane();
+    // focus once the click that made it has finished (the canvas would take focus back)
+    setTimeout(() => {
+      const ta = document.querySelector<HTMLTextAreaElement>('#pTxt'); if (!ta) return;
+      ta.focus(); if (isNew) ta.select(); else ta.setSelectionRange(ta.value.length, ta.value.length);
+      if (matchMedia('(max-width: 900px)').matches) ta.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    }, 40);
+  };
   (async () => { try { DL = (window as any).claude?.use ? await (window as any).claude.use('downloads') : null; } catch { DL = null; } })();
 
   // ---------- canvas ----------
@@ -78,7 +101,10 @@ export function startUI(ed: Editor) {
   ed.on(k => {
     if (k === 'view') { R.request(); return; }
     if (k === 'doc') { renderAttr(); renderPane(); syncButtons(); }
-    if (k === 'sel') { renderAttr(); if (ui.tab === 'props') renderPane(); }
+    if (k === 'sel') {
+      renderAttr(); if (ui.tab === 'props') renderPane();
+      if (ed.tool.id === 'select') { const st = ed.selected(); if (st.length && st.every(isText)) optsFromText(ed, st[0] as TextEntT); renderOptions(); }
+    }
     if (k === 'tool') { renderToolbox(); renderOptions(); ui.helpShow = null; if (ui.tab === 'help') renderPane(); coach(); }
     if (k === 'opts') syncOptions();
     if (k === 'aids') { renderToggles(); if (ui.tab === 'aids') renderPane(); }
@@ -102,7 +128,7 @@ export function startUI(ed: Editor) {
   }
   function renderOptions() {
     const t = ed.tool, specs = (t.options || []).filter(o => !o.show || o.show(ed));
-    $('#optName').textContent = t.label + (specs.length ? '' : ' · no options');
+    $('#optName').textContent = t.id === 'select' && specs.length ? 'Text' : t.label + (specs.length ? '' : ' · no options');
     $('#toolOpts').innerHTML = specs.map(o => optHTML(o)).join('');
     for (const o of specs) bindOpt(o);
   }
@@ -314,7 +340,26 @@ export function startUI(ed: Editor) {
   type Field = { html: string; id: string; set: (v: number) => void; unit?: boolean };
   const numField = (label: string, val: number, set: (v: number) => void, unit = true): Field => { const id = 'f' + (++fid); return { id, set, unit, html: `<label for="${id}">${label}</label><input type="text" inputmode="decimal" id="${id}" value="${fmt(val, dp())}" title="Exact: ${fmt(val, 6)}">` }; };
   const dp = () => Math.min(6, Math.max(0, prefs.dp ?? 2));
-  const bindFields = (fields: Field[]) => { for (const f of fields) $(`#${f.id}`).onchange = (ev: Event) => { const t = (ev.target as HTMLInputElement).value, v = f.unit ? parseLength(t) : parseFloat(t); if (!isFinite(v)) { renderPane(); return; } ed.store.change(() => f.set(v)); }; };
+  /**
+   * Number boxes change the drawing as you type (live): the first key makes one undo step, each
+   * new value is applied to the drawing as it was before you started typing, and Enter or
+   * leaving the box finishes. A box left empty or nonsense puts things back.
+   */
+  let liveEdit: { id: string; snap: string } | null = null;
+  const bindFields = (fields: Field[]) => { for (const f of fields) {
+    const inp = $<HTMLInputElement>(`#${f.id}`), parse = (t: string) => f.unit ? parseLength(t) : parseFloat(t);
+    inp.oninput = () => {
+      const v = parse(inp.value); if (!isFinite(v)) return;
+      if (!liveEdit || liveEdit.id !== f.id) { liveEdit = { id: f.id, snap: JSON.stringify(ed.doc) }; ed.store.checkpoint(); }
+      else ed.store.doc = JSON.parse(liveEdit.snap);
+      f.set(v); ed.syncTextPaths(); ed.changed('view');
+    };
+    inp.onchange = () => {
+      const v = parse(inp.value), le = liveEdit && liveEdit.id === f.id ? liveEdit : null; liveEdit = null;
+      if (le) { if (!isFinite(v)) { ed.store.doc = JSON.parse(le.snap); ed.store.discardCheckpoint(); } ed.store.emit(); return; }
+      if (!isFinite(v)) { renderPane(); return; } ed.store.change(() => f.set(v));
+    };
+  } };
   function sizeBlock(): { html: string; fields: Field[] } {
     const b = ed.selBox(); if (!b) return { html: '', fields: [] };
     const F: Field[] = [numField('X', b.x0, v => { const bb = ed.selBox()!; ed.transformSel(affMove(P(v - bb.x0, 0))); }), numField('Y', b.y0, v => { const bb = ed.selBox()!; ed.transformSel(affMove(P(0, v - bb.y0))); })];
@@ -363,9 +408,11 @@ export function startUI(ed: Editor) {
     if (pp) F.push(numField('Lift off the line', pp.lift || 0, v => { live().path!.lift = v; }));
     else { F.push(numField('Line spacing ×', e.lineSpacing || 1.6, v => { if (v > 0) live().lineSpacing = v; }, false)); F.push(numField('Angle °', normA(e.angle || 0) / DEG, v => { live().angle = normA(v * DEG); }, false)); }
     const seg = (id: string, cur: string, ch: [string, string, string?][]) => `<span class="segc" role="group" id="${id}">${ch.map(([v, l, t]) => `<button type="button" data-v="${v}" aria-pressed="${cur === v}"${t ? ` title="${esc(t)}"` : ''}>${esc(l)}</button>`).join('')}</span>`;
-    const fonts = FONTS.map(f => `<button type="button" data-font="${f.id}" aria-pressed="${f.id === e.font}" title="${esc(f.name + ' — ' + f.note)}" style="font-family:${esc(cssFont(f.id))}">${f.id === 'kerf-line' ? 'ABC' : 'Abc'}<small>${esc(f.name)}</small></button>`).join('');
+    const fbtn = (f: typeof FONTS[number]) => `<button type="button" data-font="${f.id}" aria-pressed="${f.id === e.font}" title="${esc(f.name + ' — ' + f.note)}" style="font-family:${esc(cssFont(f.id))}">${f.id === 'kerf-line' ? 'ABC' : 'Abc'}<small>${esc(f.name)}</small></button>`;
+    const fonts = FONT_GROUPS.map(([g, label]) => { const fs = FONTS.filter(f => f.group === g); return fs.length ? `<div class="hint fgl">${label}</div>` + fs.map(fbtn).join('') : ''; }).join('');
     pane.innerHTML = `<h3>${pp ? 'Text on a line' : 'Text'}</h3>
-      <textarea id="pTxt" aria-label="Text" spellcheck="false">${esc(e.text)}</textarea>
+      <textarea id="pTxt" aria-label="Text" spellcheck="false" placeholder="Type or paste your text here">${esc(e.text)}</textarea>
+      <p class="hint">Type or paste here — the drawing changes as you type.${pp ? '' : ' Enter = new line.'}</p>
       <div class="fontgrid" role="group" aria-label="Font">${fonts}</div>
       <div class="grid2">${F.map(f => f.html).join('')}</div>
       ${pp ? `<div class="row"><span class="hint">Letters</span>${seg('pEff', pp.effect, [['rainbow', 'A Rainbow', 'Letters turn to follow the line'], ['stretch', 'B Stretch', 'Letters bend with the line'], ['skew', 'C Skew', 'Letters stay upright and slant with the line'], ['stair', 'D Stair', 'Letters stay upright, stepping along the line']])}</div>
@@ -376,11 +423,19 @@ export function startUI(ed: Editor) {
         <p class="hint">Drag the text onto a line, arc or circle and let go: it follows it.</p>`}
       <h3>Make it cuttable</h3>
       <div class="row"><label class="chk"><input type="checkbox" id="pEng" ${e.color === 'blue' ? 'checked' : ''}>Engrave (blue)</label><button class="btn" id="pOutl" title="Turn the letters into ordinary shapes you can edit point by point (the text can't be retyped after)">Convert to outlines</button><button class="btn" id="pWeld" title="Letters that touch join into one outline — good for names cut out in a script font">Weld letters</button><button class="btn" id="pDel">Delete</button></div>
-      <p class="hint">Mouse wheel over selected text: letter spacing · Shift+wheel: size · Alt+wheel: ${pp ? 'lift off the line' : 'line spacing'} · double-click to retype. For a key ring: Contour the text, then add a ring to the contour.</p>
+      <p class="hint">Mouse wheel over selected text: letter spacing · Shift+wheel: size · Alt+wheel: ${pp ? 'lift off the line' : 'line spacing'} · double-click to retype. For a key ring: Contour the text, then add a ring to the contour — if the letters are far apart, draw a line through them first and the contour follows it.</p>
       ${pp ? '' : sz.html}`;
     bindFields(F.concat(pp ? [] : sz.fields)); if (!pp) bindSize();
     const ta = $<HTMLTextAreaElement>('#pTxt'); ta.style.fontFamily = cssFont(e.font);
-    ta.onchange = () => set(t => { t.text = t.path ? ta.value.replace(/\n/g, ' ') : ta.value; });
+    ta.onfocus = () => { if (!typing || typing.id !== e.id) typing = { id: e.id, isNew: false, pushed: false }; ed.state.typing = finishTyping; };
+    ta.oninput = () => {
+      const t = live(); if (!t) return;
+      if (!typing || typing.id !== e.id) typing = { id: e.id, isNew: false, pushed: false };
+      if (!typing.pushed) { ed.store.checkpoint(); typing.pushed = true; }
+      t.text = t.path ? ta.value.replace(/\n/g, ' ') : ta.value; ed.changed('view');
+    };
+    ta.onkeydown = ev => { if (ev.key === 'Escape' || (ev.key === 'Enter' && (ev.ctrlKey || ev.metaKey || live()?.path))) { ev.preventDefault(); ta.blur(); } };
+    ta.onblur = () => setTimeout(() => { if (document.activeElement?.id !== 'pTxt') finishTyping(); }, 0);
     pane.querySelectorAll<HTMLElement>('[data-font]').forEach(b => b.onclick = () => set(t => { t.font = b.dataset.font!; }));
     const segBind = (id: string, f: (t: TextEntT, v: string) => void) => document.querySelectorAll<HTMLElement>(`#${id} button`).forEach(b => b.onclick = () => set(t => f(t, b.dataset.v!)));
     segBind('pEff', (t, v) => { t.path!.effect = v as any; }); segBind('pSide', (t, v) => { t.path!.side = v as any; }); segBind('pAlign', (t, v) => { t.align = v as any; });

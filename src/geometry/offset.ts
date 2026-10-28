@@ -52,6 +52,37 @@ export function connectedGroup<T extends Shape>(start: T, all: T[]): T[] {
   return group;
 }
 
+/**
+ * Text plus any open lines/curves drawn through its letters (a "spine" for a
+ * key ring, so one contour goes round every letter and along the line between
+ * them). Starts from `group` and adds what crosses it, from `all`.
+ */
+export function withSpines<T extends Shape>(group: T[], all: T[]): T[] {
+  const out = [...group], has = new Set(out);
+  const isOpen = (e: Shape) => e.type === 'line' || e.type === 'arc' || ((e.type === 'poly' || e.type === 'spline') && !e.closed);
+  const crosses = (text: Shape, line: Shape) => {
+    const solid = makeSource([text]).solid; if (!solid.length) return false;
+    const f = flatten(line).pts;
+    for (let i = 0; i < f.length; i++) {
+      if (pointInSolid(f[i], solid)) return true;
+      const b = f[i + 1]; if (!b) break;
+      const n = Math.min(200, Math.ceil(dist(f[i], b) / 0.5));
+      for (let k = 1; k < n; k++) if (pointInSolid({ x: f[i].x + (b.x - f[i].x) * k / n, y: f[i].y + (b.y - f[i].y) * k / n }, solid)) return true;
+    }
+    return false;
+  };
+  for (let pass = 0; pass < 3; pass++) {
+    let grew = false;
+    for (const x of all) {
+      if (has.has(x)) continue;
+      const hit = x.type === 'text' ? out.some(g => isOpen(g) && crosses(x, g)) : isOpen(x) ? out.some(g => g.type === 'text' && crosses(g, x)) : false;
+      if (hit) { out.push(x); has.add(x); grew = true; }
+    }
+    if (!grew) break;
+  }
+  return out;
+}
+
 export interface OffsetSource { closed: Point[][]; open: Point[][]; solid: IntPath[] }
 export function makeSource(shapes: Shape[]): OffsetSource {
   const closed: Point[][] = [], pieces: Point[][] = [];

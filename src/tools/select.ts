@@ -11,7 +11,7 @@ import type { Tool, PointerInfo } from '../editor/tool';
 import type { Editor } from '../editor/editor';
 import type { Entity, Shape } from '../model/types';
 import { ICONS } from './icons';
-import { isText, flipText, slideText, textWheel, pathUnder, attachToPath } from './text';
+import { isText, flipText, slideText, textWheel, pathUnder, attachToPath, textOptions, applyOpt } from './text';
 import { anchorPoint, textShapes } from '../text/text';
 import type { TextEnt } from '../model/types';
 
@@ -126,6 +126,9 @@ export function enterNodeEdit(ed: Editor, e: Entity) { ed.setSelection([e.id]); 
 
 export const selectTool: Tool = {
   id: 'select', label: 'Select', key: 'V', icon: ICONS.select, group: 0,
+  // while text is selected, its settings show in the option bar and change it straight away
+  get options() { return textOptions(true); },
+  onOpt: applyOpt,
   prompt: ed => ed.state.node ? 'Editing points · drag a node (snaps apply) · click + to add a node · Delete removes the selected node · Esc to finish'
     : 'Click or drag a box to select · drag handles to stretch, rotate or flip · double-click a shape to edit its points',
   down(ed, raw, info) {

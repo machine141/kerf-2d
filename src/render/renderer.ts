@@ -93,7 +93,9 @@ export class Renderer {
     for (const e of ed.doc.ents as Entity[]) {
       if (!ed.store.visible(e) || hidden.has(e.id)) continue;
       const st = hi.get(e.id), col = st === 'selected' ? C['--sel'] : st === 'source' ? C['--source'] : (C[COLORS[e.color]?.tok] || C['--ink']);
-      this.stroke(e as Shape, col, Math.max(1.1, e.w * k) + (st ? 1 : 0), st ? [6, 3] : undefined);
+      // selected text: a thin solid line in the selection colour (dashes make small letters hard to read)
+      if (st && e.type === 'text') this.stroke(e as Shape, col, Math.max(1.1, e.w * k), undefined);
+      else this.stroke(e as Shape, col, Math.max(1.1, e.w * k) + (st ? 1 : 0), st ? [6, 3] : undefined);
     }
     for (const g of ghosts) g.style === 'remove' ? (ctx.globalAlpha = .28, this.stroke(g.s, C['--bad'], 10), ctx.globalAlpha = 1, this.stroke(g.s, C['--sheet'], 2, [4, 4])) : this.stroke(g.s, g.style === 'selected' ? C['--sel'] : g.style === 'source' ? C['--source'] : C['--accent'], g.style === 'selected' ? 1.5 : 1.3, g.style === 'selected' ? undefined : [5, 4]);
     // open ends (gaps) of selected lines/arcs/open paths

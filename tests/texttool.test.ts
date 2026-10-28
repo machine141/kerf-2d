@@ -9,6 +9,7 @@ import { areaOf } from '../src/geometry/boolean';
 import type { Shape, TextEnt } from '../src/model/types';
 import { handles } from '../src/tools/select';
 import { flipText } from '../src/tools/text';
+import { offsetResult } from '../src/tools/offset';
 
 function setup() {
   const ed = new Editor(ALL_TOOLS);
@@ -126,5 +127,34 @@ describe('Text tool', () => {
     const big = w.map(areaOf).sort((a, b) => b - a);
     expect(big[0]).toBeLessThan(areaOf(parts[0]) + areaOf(parts[2]));   // they overlapped
     expect(big[1]).toBeGreaterThan(50); expect(big[2]).toBeGreaterThan(25);
+  });
+  it('new text uses a plain, easy-to-read font by default', () => {
+    const { ed, click } = setup(); ed.setTool('text'); click(P(0, 0));
+    expect(texts(ed)[0].font).toBe('arimo');
+  });
+  it('selecting text shows the text settings in the option bar (Select tool)', () => {
+    const { ed, click } = setup(); ed.setTool('text'); click(P(0, 0));
+    ed.setTool('select'); ed.setSelection([]);
+    const shown = () => (ed.tool.options || []).filter(o => !o.show || o.show(ed)).map(o => o.key);
+    expect(shown()).toEqual([]);
+    ed.setSelection([texts(ed)[0].id]);
+    expect(shown()).toEqual(['txtFont', 'txtSize', 'txtSpacing', 'txtAlign', 'txtEngrave']);
+    ed.opt.txtSize = 25; ed.tool.onOpt!(ed, 'txtSize'); expect(texts(ed)[0].size).toBe(25);
+  });
+  it('contour of spaced-out text with a line drawn through it is one outline round everything', () => {
+    const { ed } = setup();
+    const t = ed.store.add({ type: 'text', text: 'A B', font: 'arimo', size: 20, spacing: 12, lineSpacing: 1.6, align: 'left', at: P(0, 0), angle: 0 } as Shape) as TextEnt;
+    const tb = boxOf(t);
+    const ln = ed.store.add({ type: 'spline', closed: false, pts: [P(-4, 10), P(tb.x1 / 2, 14), P(tb.x1 + 4, 10)], h: [[P(-4, 10), P(10, 12)], [P(tb.x1 / 2 - 15, 14), P(tb.x1 / 2 + 15, 14)], [P(tb.x1 - 10, 12), P(tb.x1 + 4, 10)]] } as Shape);
+    ed.store.emit();
+    ed.setSelection([t.id]); ed.setTool('offset'); ed.opt.offD = 3; ed.opt.offSide = 'out'; ed.opt.offCount = 1; ed.opt.offFollow = false;
+    expect([...ed.state.off.ids]).toContain(ln.id);
+    const res = offsetResult(ed, P(-50, -50));
+    const outer = res.filter(s => { const f = flatten(s, 0.05).pts; const x0 = Math.min(...f.map(p => p.x)), x1 = Math.max(...f.map(p => p.x)); return x0 < tb.x0 && x1 > tb.x1; });
+    expect(outer.length).toBe(1);           // one piece round all the letters
+    // and without the line the letters stay apart (no outline goes round them all)
+    ed.state.off = null; ed.setTool('select'); ed.store.remove([ln.id]); ed.store.emit(); ed.setSelection([t.id]); ed.setTool('offset');
+    const res2 = offsetResult(ed, P(-50, -50));
+    expect(res2.filter(s => { const f = flatten(s, 0.05).pts; return Math.min(...f.map(p => p.x)) < tb.x0 && Math.max(...f.map(p => p.x)) > tb.x1; }).length).toBe(0);
   });
 });

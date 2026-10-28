@@ -3,20 +3,21 @@
  *  • Click a shape → that shape (and anything joined to it end-to-end).
  *  • Click empty space inside an area → the enclosed boundary is traced (lines may cross).
  *  • Select several shapes first → contour around all of them together.
+ *  • Text takes any open line drawn through its letters with it (one contour round the letters and along the line).
  *  • "One edge" mode → exact parallel copy of a single line/arc/circle.
  * Then move inside/outside to choose the side; the mouse wheel changes the distance.
  */
 import { type Point, dist, clean, fmt } from '../geometry/vec';
 import { prims, distPrim, bbox, type Prim } from '../geometry/entity';
 import { offsetGeos, refit } from '../geometry/boolean';
-import { makeSource, contour, connectedGroup, offsetPrim, pointInSolid, type OffsetSource, type Side } from '../geometry/offset';
+import { makeSource, contour, connectedGroup, withSpines, offsetPrim, pointInSolid, type OffsetSource, type Side } from '../geometry/offset';
 import { findRegion } from '../geometry/region';
 import type { Tool } from '../editor/tool';
 import type { Editor } from '../editor/editor';
 import type { Entity, Shape } from '../model/types';
 import { ICONS } from './icons';
 
-interface OffState { srcPrims?: Prim[]; ids: Set<string>; shapes: Shape[]; source?: OffsetSource; edge?: Prim; region?: Shape; cache?: { key: string; res: Shape[] } }
+interface OffState { spine?: boolean; srcPrims?: Prim[]; ids: Set<string>; shapes: Shape[]; source?: OffsetSource; edge?: Prim; region?: Shape; cache?: { key: string; res: Shape[] } }
 
 export function offsetBegin(ed: Editor, shapes: Shape[], ids: string[], extra: Partial<OffState> = {}) {
   ed.state.off = { ids: new Set(ids), shapes, source: extra.edge ? undefined : makeSource(shapes), ...extra } as OffState;
@@ -60,8 +61,8 @@ export function offsetResult(ed: Editor, cur: Point): Shape[] {
 export function offsetCommit(ed: Editor, cur: Point): string[] {
   const res = offsetResult(ed, cur); if (!res.length) { ed.toast('Nothing to place at this distance'); return []; }
   const ids = ed.store.change(() => res.map(s => ed.store.add(structuredClone(s)).id));
-  ed.state.off = null; ed.setSelection(ids);
-  ed.toast(`Placed ${ids.length} contour${ids.length > 1 ? 's' : ''} at ${fmt(+ed.opt.offD, 3)} mm`); ed.changed('prompt');
+  const spine = ed.state.off.spine; ed.state.off = null; ed.setSelection(ids);
+  ed.toast(`Placed ${ids.length} contour${ids.length > 1 ? 's' : ''} at ${fmt(+ed.opt.offD, 3)} mm` + (spine ? ' · now delete the line through the text, or it will be cut too' : '')); ed.changed('prompt');
   return ids;
 }
 /** Pick a source at a click: an edge, a shape group, or an enclosed area. */
@@ -71,8 +72,9 @@ export function offsetPick(ed: Editor, raw: Point): boolean {
     if (ed.opt.offMode === 'edge' && hit.e.type !== 'ellipse' && hit.e.type !== 'poly') { offsetBegin(ed, [hit.e as Shape], [hit.e.id], { edge: hit.pr }); return true; }
     if (ed.opt.offMode === 'edge' && hit.e.type === 'poly' && hit.pr.t === 'seg') { offsetBegin(ed, [{ type: 'line', a: hit.pr.a, b: hit.pr.b } as Shape], [hit.e.id], { edge: hit.pr }); return true; }
     const usable = ed.doc.ents.filter(ed.store.usable) as Entity[];
-    const group = connectedGroup(hit.e, usable);
-    offsetBegin(ed, group as Shape[], group.map(g => g.id)); return true;
+    const g0 = connectedGroup(hit.e, usable), group = withSpines(g0, usable);
+    if (group.length > g0.length) ed.toast('The contour goes round the text and along the line through it');
+    offsetBegin(ed, group as Shape[], group.map(g => g.id), { spine: group.length > g0.length }); return true;
   }
   const r = findRegion(raw, ed.doc.ents.filter(ed.store.visible) as Shape[]);
   if (!r.ok) { ed.toast(r.reason || 'No closed boundary here'); return false; }
@@ -93,7 +95,13 @@ export const offsetTool: Tool = {
   ],
   prompt: ed => ed.state.off ? 'Move inside or outside to choose the side · mouse wheel changes the distance · click to place'
     : 'Click a shape, or click inside an enclosed area (or select shapes first)',
-  activate(ed) { const sel = ed.selected().filter(e => e.type !== 'dim'); if (sel.length) offsetBegin(ed, sel as Shape[], sel.map(e => e.id)); },
+  activate(ed) {
+    const s0 = ed.selected().filter(e => e.type !== 'dim'); if (!s0.length) return;
+    // selected text also takes any line drawn through its letters (so a key ring can be one piece)
+    const sel = s0.some(e => e.type === 'text') ? withSpines(s0, ed.doc.ents.filter(ed.store.usable) as Entity[]) : s0;
+    if (sel.length > s0.length) ed.toast('The contour goes round the text and along the line through it');
+    offsetBegin(ed, sel as Shape[], sel.map(e => e.id), { spine: sel.length > s0.length });
+  },
   down(ed, raw) { if (ed.state.off) offsetCommit(ed, raw); else offsetPick(ed, raw); },
   wheel(ed, dir, info) {
     if (!ed.state.off) return false;

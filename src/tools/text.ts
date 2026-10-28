@@ -108,20 +108,28 @@ export function slideText(ed: Editor, t: TextEnt, raw: Point): string | null {
 }
 
 const FONT_CHOICES = (): [string, string][] => FONTS.map(f => [f.id, f.name]);
+/** Selected text objects (Select tool), or null when the selection isn't all text. */
+const selTexts = (ed: Editor): TextEnt[] | null => { const s = ed.selected(); return s.length && s.every(isText) ? s as TextEnt[] : null; };
+/**
+ * The text settings for the option bar. The Text tool always shows them; the
+ * Select tool shows them while text is selected (the "on a line" ones only for text on a line).
+ */
+export function textOptions(forSelect: boolean): NonNullable<Tool['options']> {
+  const any = (ed: Editor) => !forSelect || !!selTexts(ed), onLine = (ed: Editor) => !forSelect || !!selTexts(ed)?.some(t => t.path), straight = (ed: Editor) => !forSelect || !!selTexts(ed)?.some(t => !t.path);
+  return [
+    { key: 'txtFont', label: 'Font', type: 'select', choices: FONT_CHOICES(), show: any },
+    { key: 'txtSize', label: 'Size', type: 'number', min: 0.5, step: 1, unit: 'mm', show: any },
+    { key: 'txtSpacing', label: 'Spacing', type: 'number', step: 0.1, unit: 'mm', show: any },
+    { key: 'txtAlign', label: 'Align', type: 'seg', choices: [['left', '⇤ Left'], ['center', 'Centre'], ['right', 'Right ⇥']], show: straight },
+    { key: 'txtEffect', label: 'On a line', type: 'seg', choices: [['rainbow', 'A Rainbow'], ['stretch', 'B Stretch'], ['skew', 'C Skew'], ['stair', 'D Stair']], show: onLine },
+    { key: 'txtSide', label: 'Sits', type: 'seg', choices: [['above', 'Above'], ['on', 'On'], ['below', 'Below']], show: onLine },
+    { key: 'txtFit', label: 'Fit to length', type: 'check', show: onLine },
+    { key: 'txtEngrave', label: 'Engrave (blue)', type: 'check', show: any },
+  ];
+}
 export const textTool: Tool = {
   id: 'text', label: 'Text', key: 'W', icon: ICONS.text, group: 1, draws: true,
-  get options() {
-    return [
-      { key: 'txtFont', label: 'Font', type: 'select', choices: FONT_CHOICES() },
-      { key: 'txtSize', label: 'Size', type: 'number', min: 0.5, step: 1, unit: 'mm' },
-      { key: 'txtSpacing', label: 'Spacing', type: 'number', step: 0.1, unit: 'mm' },
-      { key: 'txtAlign', label: 'Align', type: 'seg', choices: [['left', '⇤ Left'], ['center', 'Centre'], ['right', 'Right ⇥']] },
-      { key: 'txtEffect', label: 'On a line', type: 'seg', choices: [['rainbow', 'A Rainbow'], ['stretch', 'B Stretch'], ['skew', 'C Skew'], ['stair', 'D Stair']] },
-      { key: 'txtSide', label: 'Sits', type: 'seg', choices: [['above', 'Above'], ['on', 'On'], ['below', 'Below']] },
-      { key: 'txtFit', label: 'Fit to length', type: 'check' },
-      { key: 'txtEngrave', label: 'Engrave (blue)', type: 'check' },
-    ] as Tool['options'];
-  },
+  get options() { return textOptions(false); },
   prompt: () => 'Click to type · click on a line, arc or circle to write along it · click text to change it · wheel over selected text: spacing (Shift: size)',
   move(ed, raw) {
     const onText = ed.pick(raw, undefined, isText)?.e;
