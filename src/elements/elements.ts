@@ -10,6 +10,7 @@ import { affEnt, affScale, affMove, affMir, affRot } from '../geometry/affine';
 import { bbox, unionBox, boxCentre } from '../geometry/entity';
 import { makePolygon } from '../tools/draw';
 import type { Shape } from '../model/types';
+import { CUTE, REPLACED } from './cute';
 
 export type ElementCat = 'Shapes' | 'Nature' | 'Animals' | 'Objects' | 'Food' | 'Seasonal';
 export const ELEMENT_CATS: ElementCat[] = ['Shapes', 'Nature', 'Animals', 'Objects', 'Food', 'Seasonal'];
@@ -42,7 +43,7 @@ const U = (...a: (Shape | Shape[])[]) => union(...a.flat());
 const cut = (a: Shape | Shape[], ...b: Shape[]) => minus(Array.isArray(a) ? a[0] : a, ...b);
 const open = (pts: [number, number][]) => poly(pts, false);
 
-export const ELEMENTS: Element[] = [
+const BASE: Element[] = [
   { id: 'heart', name: 'Heart', cat: 'Shapes', make: () => [curve([[0, -18], [-12, -6], [-18, 6], [-14, 15], [-6, 16], [0, 10], [6, 16], [14, 15], [18, 6], [12, -6]], [0, 5])] },
   { id: 'star', name: 'Star', cat: 'Shapes', make: () => [makePolygon(P(0, 0), P(0, 20), 5, 'corner', true, 42, 0)] },
   { id: 'flower', name: 'Flower', cat: 'Nature', make: () => union(circle(0, 0, 8), ...Array.from({ length: 6 }, (_, i) => circle(11 * Math.cos(i * Math.PI / 3 + Math.PI / 2), 11 * Math.sin(i * Math.PI / 3 + Math.PI / 2), 7.5))) },
@@ -108,6 +109,9 @@ export const ELEMENTS: Element[] = [
   { id: 'bauble', name: 'Bauble', cat: 'Seasonal', make: () => [...U(circle(0, -3, 16), rect(-4, 11, 4, 17), circle(0, 19.5, 3.2)), circle(0, 19.5, 1.6), makePolygon(P(0, -3), P(0, 6), 5, 'corner', true, 42, 0)] },
   { id: 'gift', name: 'Gift', cat: 'Seasonal', make: () => [...U(rect(-13, -16, 13, 4), rect(-15, 3.5, 15, 9), ell(-5.5, 12.5, 6, 3.5, 25), ell(5.5, 12.5, 6, 3.5, -25)), open([[0, -16], [0, 9]])] },
 ];
+
+/** The library: the cute set first, then the plain designs it doesn't replace. */
+export const ELEMENTS: Element[] = [...CUTE, ...BASE.filter(e => !REPLACED.includes(e.id))];
 
 /** An element's shapes scaled so the longest side is `size` mm, centred on `at`. */
 export function placeElement(el: Element, size: number, at: Point): Shape[] {

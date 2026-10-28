@@ -18,13 +18,13 @@ function saveMine(list: Saved[]): boolean { try { localStorage.setItem(STORE, JS
 const asElement = (s: Saved): Element => ({ id: s.id, name: s.name, cat: 'Shapes', make: () => JSON.parse(JSON.stringify(s.shapes)) });
 /** geometry only: drop id, layer, colour, width and grouping; leave out dimensions */
 function cleanShapes(ents: any[]): Shape[] {
-  return ents.filter(e => e.type !== 'dim').map(e => { const { id, layer, color, w, group, ...g } = e; void id; void layer; void color; void w; void group; return JSON.parse(JSON.stringify(g)); });
+  return ents.filter(e => e.type !== 'dim').map(e => { const { id, layer, color, w, group, ...g } = e; void id; void layer; void w; void group; return JSON.parse(JSON.stringify(color === 'blue' ? { ...g, color } : g)); });
 }
 const esc = (s: string) => s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]!));
 
 function thumb(el: Element): string {
   let shapes: Shape[] = []; try { shapes = placeElement(el, 40, P(0, 0)); } catch { /* broken saved element */ }
-  const lines = shapes.map(s => { const f = flatten(s, 0.05), d = f.pts.map((p, i) => `${i ? 'L' : 'M'}${fmt(p.x, 2)} ${fmt(-p.y, 2)}`).join(' '); return `<path d="${d}${f.closed ? ' Z' : ''}"/>`; }).join('');
+  const lines = shapes.map(s => { const f = flatten(s, 0.05), d = f.pts.map((p, i) => `${i ? 'L' : 'M'}${fmt(p.x, 2)} ${fmt(-p.y, 2)}`).join(' '); return `<path${(s as any).color === 'blue' ? ' class="eng"' : ''} d="${d}${f.closed ? ' Z' : ''}"/>`; }).join('');
   return `<svg viewBox="-23 -23 46 46" aria-hidden="true">${lines}</svg>`;
 }
 
@@ -93,7 +93,7 @@ export function openElements(ed: Editor, saveFile?: (name: string, text: string)
       + (cat === MY && !mine.length ? `<p class="hint empty">No saved elements yet. Draw something, select it with <b>Select (V)</b>, then press <b>Save selection…</b> here (or <b>Make ▾ → Save selection as element</b>).</p>` : '');
     $('#eHint').innerHTML = cat === MY
       ? `Saved elements stay in this browser. Share them with a class: <button type="button" class="btn" id="eExport" ${mine.length ? '' : 'disabled'}>Download my elements</button> <label class="btn" for="eImport">Add from a file…</label><input type="file" id="eImport" accept=".json,.kerf-elements,application/json" hidden>`
-      : `Click one to place it in the middle of your view, then stretch it, add a ring (K), or combine it with other shapes. These designs are original to Kerf 2D, so they're free to use.<br><b>More free pictures:</b> <a href="https://openclipart.org" target="_blank" rel="noopener">Openclipart</a> (public domain). Download a PNG or SVG, then drop it on Kerf: an SVG opens as outlines, a PNG/JPG opens in Trace image.`;
+      : `Click one to place it in the middle of your view, then stretch it, add a ring (K), or combine it with other shapes. <b style="color:#1c7ed6">Blue</b> lines (faces) are engraved; black lines are cut. These designs are original to Kerf 2D, so they're free to use.<br><b>More free pictures:</b> <a href="https://openclipart.org" target="_blank" rel="noopener">Openclipart</a> (public domain). Download a PNG or SVG, then drop it on Kerf: an SVG opens as outlines, a PNG/JPG opens in Trace image.`;
     root.querySelectorAll<HTMLElement>('.card[data-id]').forEach(b => b.onclick = () => place(ELEMENTS.find(e => e.id === b.dataset.id)!));
     root.querySelectorAll<HTMLElement>('.card[data-mine]').forEach(b => {
       const go = () => { const m = loadMine().find(x => x.id === b.dataset.mine); if (m) place(asElement(m)); };
