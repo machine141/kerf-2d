@@ -18,7 +18,7 @@ export type CoordMode = 'abs' | 'rel' | 'pol';
 export type ChangeKind = 'doc' | 'sel' | 'tool' | 'prompt' | 'view' | 'aids' | 'opts';
 
 export const DEFAULT_OPTS: Record<string, any> = {
-  rectFrom: 'corner', circFrom: 'centre', arcMode: '3pt', filletMode: 'fillet', filletR: 5, filletFollow: false, fixedR: '', dimMode: 'a', rotAngle: 60, rotCopies: 5, moveCopy: false, mirKeep: false, mirStep: 15, arrType: 'grid', arrCols: 4, arrRows: 1, arrDx: 20, arrDy: 20, arrFollow: true, arrCount: 6, arrAngle: 360, arrRotate: true, arrScale: 0, arrSym: '1',
+  rectFrom: 'corner', circFrom: 'centre', arcMode: '3pt', filletMode: 'fillet', filletR: 5, filletFollow: false, fixedR: '', dimMode: 'a', rotAngle: 60, rotCopies: 5, moveCopy: false, mirKeep: false, mirStep: 15, arrType: 'grid', arrCols: 4, arrRows: 1, arrDx: 20, arrDy: 20, arrFollow: true, arrCount: 6, arrAngle: 360, arrRotate: true, gridScale: 0, gridSym: '1', circScale: 0, circSym: '1',
   offMode: 'shape', offSide: 'auto', offD: 5, offRound: '1', offCount: 1, offFollow: false, trimMode: 'whole', joinTol: 0.05, pickPx: 14, eraseR: 15, eraseSmall: true, eraseMax: 5, ringD: 10, ringHole: 5, ringOverlap: 2, lockAspect: false,
 };
 
@@ -321,6 +321,42 @@ export class Editor {
     if (joinedFrom) parts.push(`joined ${joinedFrom} pieces into ${joinedInto} path${joinedInto > 1 ? 's' : ''}${closedN ? ` (${closedN} closed)` : ''}`);
     if (rep.gapsClosed) parts.push(`closed ${rep.gapsClosed} gap${rep.gapsClosed > 1 ? 's' : ''} (largest ${fmt(rep.maxGap, 3)} mm)`);
     this.toast(parts.length ? 'Tidy: ' + parts.join(' · ') : 'Tidy: nothing to fix');
+  }
+  /** Selection split into units that move together: each outer group, or a single ungrouped object. */
+  selUnits(): { ids: string[]; box: Box }[] {
+    const by = new Map<string, Entity[]>();
+    for (const e of this.selected()) { const k = this.groupRoot(e) || e.id; by.set(k, [...(by.get(k) || []), e]); }
+    return [...by.values()].map(es => ({ ids: es.map(e => e.id), box: unionBox(es.map(e => this.bbox(e)))! }));
+  }
+  private moveUnit(ids: string[], v: Point) {
+    if (Math.abs(v.x) < 1e-12 && Math.abs(v.y) < 1e-12) return;
+    const A = affMove(cp(v)); for (const id of ids) { const e = this.store.byId(id); if (e) this.store.replace(id, affEnt(e as Shape, A)); }
+  }
+  /**
+   * Align the selection: left / centre / right / top / middle / bottom.
+   * To the selection's own bounds (2+ objects or groups), or to the sheet.
+   */
+  alignSel(kind: 'left' | 'hcentre' | 'right' | 'top' | 'vmiddle' | 'bottom', to: 'sel' | 'page' = 'sel') {
+    const U = this.selUnits(); if (!U.length) { this.toast('Select objects to align'); return; }
+    if (to === 'sel' && U.length < 2) to = 'page';
+    const pg = this.doc.page, R: Box = to === 'page' ? { x0: 0, y0: 0, x1: pg.w, y1: pg.h } : unionBox(U.map(u => u.box))!;
+    this.store.change(() => { for (const u of U) {
+      const b = u.box, v = P(0, 0);
+      if (kind === 'left') v.x = R.x0 - b.x0; else if (kind === 'right') v.x = R.x1 - b.x1; else if (kind === 'hcentre') v.x = (R.x0 + R.x1) / 2 - (b.x0 + b.x1) / 2;
+      else if (kind === 'bottom') v.y = R.y0 - b.y0; else if (kind === 'top') v.y = R.y1 - b.y1; else v.y = (R.y0 + R.y1) / 2 - (b.y0 + b.y1) / 2;
+      this.moveUnit(u.ids, v);
+    } });
+    this.toast(`Aligned ${U.length} ${U.length === 1 ? 'object' : 'objects'} ${({ left: 'left', hcentre: 'centre', right: 'right', top: 'top', vmiddle: 'middle', bottom: 'bottom' })[kind]}${to === 'page' ? ' on the sheet' : ''}`);
+  }
+  /** Even gaps between 3+ objects/groups, horizontally or vertically (outermost stay put). */
+  distributeSel(axis: 'h' | 'v') {
+    const U = this.selUnits(); if (U.length < 3) { this.toast('Select three or more objects to space evenly'); return; }
+    const lo = (b: Box) => axis === 'h' ? b.x0 : b.y0, hi = (b: Box) => axis === 'h' ? b.x1 : b.y1;
+    U.sort((a, b) => (lo(a.box) + hi(a.box)) - (lo(b.box) + hi(b.box)));
+    const span = hi(U[U.length - 1].box) - lo(U[0].box), sizes = U.reduce((a, u) => a + hi(u.box) - lo(u.box), 0), gap = (span - sizes) / (U.length - 1);
+    let at = lo(U[0].box);
+    this.store.change(() => { for (const u of U) { const d = at - lo(u.box); this.moveUnit(u.ids, axis === 'h' ? P(d, 0) : P(0, d)); at += hi(u.box) - lo(u.box) + gap; } });
+    this.toast(`Spaced ${U.length} objects evenly · gap ${fmt(gap, 2)} mm`);
   }
   selectAll() { this.setSelection(this.doc.ents.filter(this.store.usable).map(e => e.id)); }
 

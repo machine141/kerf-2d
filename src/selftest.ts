@@ -11,7 +11,7 @@ import { ALL_TOOLS } from './tools';
 import { trimAt } from './tools/trim';
 import { offsetBegin, offsetResult, offsetPick } from './tools/offset';
 import { connectedGroup } from './geometry/offset';
-import { handles, handleTransform, nodeHandles, nodeApply } from './tools/select';
+import { handles, handleTransform, nodeHandles, nodeApply, smartAlign } from './tools/select';
 import { exportDXF, importDXF } from './io/dxf';
 import { exportSVG, importSVG } from './io/svg';
 import type { Entity, Shape } from './model/types';
@@ -226,6 +226,17 @@ export function runSelfTest(): { results: TestResult[]; doc: string | null } {
     const pi1 = { sp: P(0, 0), shift: false, alt: false, ctrl: false };
     ed.tool.down!(ed, P(705, 302), pi1); ed.tool.move!(ed, P(715, 302), pi1); ed.tool.move!(ed, P(722, 302), pi1); ed.tool.up!(ed, P(722, 302), pi1); ed.view.k = k0; ed.setTool('select');
     ok('Eraser brush removes flakes, keeps the outline', ed.doc.ents.length === nE - 6 && ed.doc.ents.some((e: any) => e.type === 'poly' && e.pts[0]?.x === 700 && e.pts[0]?.y === 300), '6 specks erased in one drag · the 60 × 40 outline under the brush kept ("only small pieces")');
+    // 12a5 · align, distribute and smart alignment while dragging
+    ed.store.change(() => { ed.store.add({ type: 'circle', c: P(810, 50), r: 5 } as Shape); ed.store.add({ type: 'poly', closed: true, pts: [P(830, 60), P(850, 60), P(850, 70), P(830, 70)] } as Shape); ed.store.add({ type: 'circle', c: P(900, 40), r: 8 } as Shape); });
+    const al = ed.doc.ents.slice(-3).map(e => e.id); ed.setSelection(al); ed.alignSel('left');
+    const lefts = al.map(id => ed.bbox(byId(id)).x0);
+    ed.alignSel('vmiddle'); const mids = al.map(id => { const b = ed.bbox(byId(id)); return (b.y0 + b.y1) / 2; });
+    ok('Align left and middles', lefts.every(x => x === 805) && mids.every(y => Math.abs(y - mids[0]) < 1e-9), `left edges all at x = 805 · middles all at y = ${fmt(mids[0], 3)}`);
+    ed.store.change(() => { for (const [i, x] of [[0, 800], [1, 815], [2, 870]] as [number, number][]) { const e: any = byId(al[i]), b = ed.bbox(e); ed.store.replace(e.id, affEnt(e, { a: 1, b: 0, c: 0, d: 1, e: x - b.x0, f: 0 } as any)); } });
+    ed.distributeSel('h'); const dbx = al.map(id => ed.bbox(byId(id))).sort((a, b) => a.x0 - b.x0), dg1 = dbx[1].x0 - dbx[0].x1, dg2 = dbx[2].x0 - dbx[1].x1;
+    ok('Space evenly across', Math.abs(dg1 - dg2) < 1e-9 && dbx[0].x0 === 800, `equal gaps of ${fmt(dg1, 3)} mm between three objects`);
+    const sa = smartAlign(ed, { x0: 0, y0: 0, x1: 10, y1: 10 }, [{ x0: 20, y0: 50, x1: 40, y1: 60 }], P(20.3 / 1, 0));
+    ok('Smart alignment snaps edges while dragging', sa.hit && sa.d.x === 20 && sa.guides.length === 1, `left edge pulled 0.3 mm onto the other shape's left edge (x = 20) with a guide line`);
     // 12b · fixes: trim keeps closed shapes, Make Path closes tiny gaps
     ed.setTool('rect'); typed(['abs', 620, 300], ['rel', 40, 30]); const gl: any = last(); ed.setTool('select');
     ed.opt.arcMode = '3pt'; ed.setTool('arc'); typed(['abs', 660, 320], ['abs', 680, 320], ['abs', 670, 325]); ed.opt.arcMode = 'centre'; ed.setTool('select');

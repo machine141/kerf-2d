@@ -56,6 +56,8 @@ header{grid-area:head;display:flex;align-items:center;gap:12px;padding-block:8px
 #tools{grid-area:tools;display:flex;flex-direction:column;gap:2px;padding:8px 6px 8px 0;overflow:auto}
 .tool{width:44px;height:40px;border:1px solid transparent;border-radius:6px;background:transparent;display:grid;place-items:center;position:relative;color:var(--fg);flex:none}
 .tool:hover{background:var(--panel-2)}
+.btn.ico{padding:4px 6px;line-height:0}
+.row.align{gap:4px}
 .flash{animation:kflash .4s ease-out}
 @keyframes kflash{0%{background:var(--accent);color:var(--sheet);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 35%,transparent)}100%{}}
 .tool[aria-pressed="true"]{background:var(--panel);border-color:var(--accent);color:var(--accent)}
@@ -170,7 +172,7 @@ body.dropping #main{outline:3px dashed var(--accent);outline-offset:-6px}
 </head>
 <body>
 <header>
-  <div class="brand"><b>Kerf 2D</b><span>precision drafting · v0.6.4</span></div>
+  <div class="brand"><b>Kerf 2D</b><span>precision drafting · v0.6.5</span></div>
   <input id="docName" aria-label="Drawing name" value="Glasses front">
   <div class="actions">
     <button class="btn" id="bNew">New</button>

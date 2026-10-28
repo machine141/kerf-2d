@@ -26,6 +26,30 @@ export function handles(ed: Editor): Handle[] {
   H.push({ k: 'rot', x: B.x + 26, y: my, b }, { k: 'flipV', x: mx, y: A.y - 26, b }, { k: 'flipH', x: A.x - 26, y: my, b }, { k: 'copy', x: mx, y: B.y + 26, b }, { k: 'move', x: mx, y: my, b });
   return H;
 }
+/**
+ * Smart alignment while dragging (like Figma / Fusion): the moving selection's
+ * left, centre and right (and bottom, middle, top) line up with other shapes and
+ * with the sheet when they come within a few pixels. Returns the adjusted move and guide lines.
+ */
+export function smartAlign(ed: Editor, sel: Box, others: Box[], d: Point): { d: Point; guides: [Point, Point][]; hit: boolean } {
+  const tol = 7 / ed.view.k, B = { x0: sel.x0 + d.x, x1: sel.x1 + d.x, y0: sel.y0 + d.y, y1: sel.y1 + d.y };
+  const xs = (b: Box) => [b.x0, (b.x0 + b.x1) / 2, b.x1], ys = (b: Box) => [b.y0, (b.y0 + b.y1) / 2, b.y1];
+  let bx: { diff: number; v: number; o: Box } | null = null, by: { diff: number; v: number; o: Box } | null = null;
+  for (const o of others) {
+    for (const a of xs(B)) for (const v of xs(o)) { const df = v - a; if (Math.abs(df) <= tol && (!bx || Math.abs(df) < Math.abs(bx.diff))) bx = { diff: df, v, o }; }
+    for (const a of ys(B)) for (const v of ys(o)) { const df = v - a; if (Math.abs(df) <= tol && (!by || Math.abs(df) < Math.abs(by.diff))) by = { diff: df, v, o }; }
+  }
+  const out = P(d.x + (bx?.diff || 0), d.y + (by?.diff || 0)), M = { x0: sel.x0 + out.x, x1: sel.x1 + out.x, y0: sel.y0 + out.y, y1: sel.y1 + out.y }, guides: [Point, Point][] = [];
+  if (bx) guides.push([P(bx.v, Math.min(M.y0, bx.o.y0)), P(bx.v, Math.max(M.y1, bx.o.y1))]);
+  if (by) guides.push([P(Math.min(M.x0, by.o.x0), by.v), P(Math.max(M.x1, by.o.x1), by.v)]);
+  return { d: out, guides, hit: !!(bx || by) };
+}
+const WEAK_SNAPS = new Set<any>(['grid', 'step', 'radial', 'track', 'nearest', null, undefined]);
+function startDrag(ed: Editor, from: Point, extra: Record<string, any> = {}) {
+  const pg = ed.doc.page, others = ed.doc.ents.filter(e => !ed.sel.has(e.id) && ed.store.visible(e) && e.type !== 'dim').slice(0, 2000).map(e => ed.bbox(e));
+  others.push({ x0: 0, y0: 0, x1: pg.w, y1: pg.h });
+  return { from, to: from, moved: false, box: ed.selBox(), others, guides: [] as [Point, Point][], ...extra };
+}
 export const hitHandle = (ed: Editor, sp: Point) => handles(ed).find(h => Math.abs(h.x - sp.x) <= 8 && Math.abs(h.y - sp.y) <= 8) || null;
 
 /** The transform a handle drag produces for the current cursor. */
@@ -98,17 +122,17 @@ export const selectTool: Tool = {
       if (hd.k === 'flipH' || hd.k === 'flipV') { ed.flipSel(hd.k === 'flipH' ? 'h' : 'v'); return; }
       if (hd.k === 'move' || hd.k === 'copy') {
         if (hd.k === 'copy') { S.copySrc = [...ed.sel]; ed.store.checkpoint(); ed.transformSel(affMove(P(0, 0)), 1); ed.store.emit(); }
-        const s = ed.snapAt(raw, { exclude: ed.sel, drawing: true }); S.drag = { from: s.p, to: s.p, moved: false, copy: hd.k === 'copy' }; return;
+        const s = ed.snapAt(raw, { exclude: ed.sel, drawing: true }); S.drag = startDrag(ed, s.p, { copy: hd.k === 'copy' }); return;
       }
       S.hdrag = { h: hd, start: raw, tx: null }; return;
     }
     const hit = ed.pick(raw)?.e;
-    if (hit && ed.sel.has(hit.id) && !info.shift) { const s = ed.snapAt(raw, { exclude: ed.sel, drawing: true }); S.drag = { from: s.p, to: s.p, moved: false }; return; }
+    if (hit && ed.sel.has(hit.id) && !info.shift) { const s = ed.snapAt(raw, { exclude: ed.sel, drawing: true }); S.drag = startDrag(ed, s.p); return; }
     if (hit) {
       const members = ed.withGroups([hit.id]);
       if (info.shift) { const on = ed.sel.has(hit.id); for (const id of members) on ? ed.sel.delete(id) : ed.sel.add(id); ed.changed('sel'); }
       else ed.setSelection(members);
-      const s = ed.snapAt(raw, { exclude: ed.sel, drawing: true }); S.drag = { from: s.p, to: s.p, moved: false }; return;
+      const s = ed.snapAt(raw, { exclude: ed.sel, drawing: true }); S.drag = startDrag(ed, s.p); return;
     }
     if (!info.shift && ed.sel.size) ed.setSelection([]);
     S.box = { a: raw, b: raw };
@@ -118,7 +142,11 @@ export const selectTool: Tool = {
     if (S.box) { S.box.b = raw; ed.snapRes = null; }
     else if (S.ndrag) { const e = ed.store.byId(S.ndrag.id)!; ed.snapRes = ed.snapAt(raw, { exclude: new Set([e.id]), drawing: true }); S.ndrag.preview = nodeApply(e, S.ndrag.h, ed.snapRes.p); }
     else if (S.hdrag) { ed.snapRes = S.hdrag.h.k === 'rot' ? null : ed.snapAt(raw, { exclude: ed.sel, drawing: true }); S.hdrag.tx = handleTransform(ed, S.hdrag.h, S.hdrag.start, raw, info); }
-    else if (S.drag) { ed.snapRes = ed.snapAt(raw, { exclude: ed.sel, drawing: true }); S.drag.to = ed.snapRes.p; if (dist(S.drag.to, S.drag.from) > 1e-9) S.drag.moved = true; }
+    else if (S.drag) {
+      ed.snapRes = ed.snapAt(raw, { exclude: ed.sel, drawing: true }); let d = sub(ed.snapRes.p, S.drag.from); S.drag.guides = [];
+      if (S.drag.box && WEAK_SNAPS.has(ed.snapRes.k as any) && !info.alt) { const g = smartAlign(ed, S.drag.box, S.drag.others, d); d = g.d; S.drag.guides = g.guides; if (g.hit) ed.snapRes = { ...ed.snapRes, k: null }; }
+      S.drag.to = add(S.drag.from, d); if (dist(S.drag.to, S.drag.from) > 1e-9) S.drag.moved = true;
+    }
   },
   up(ed) {
     const S = ed.state;
@@ -161,7 +189,11 @@ export const selectTool: Tool = {
   },
   overlay(ed, o) {
     const S = ed.state;
-    if (S.drag?.moved) { o.hide(ed.sel); const A = affMove(sub(S.drag.to, S.drag.from)); for (const e of ed.selected()) o.ghost(affEnt(e as Shape, A), 'selected'); o.label(`Δ ${fmt(S.drag.to.x - S.drag.from.x, 3)}, ${fmt(S.drag.to.y - S.drag.from.y, 3)}`, S.drag.to); return; }
+    if (S.drag?.moved) {
+      o.hide(ed.sel); const A = affMove(sub(S.drag.to, S.drag.from)); for (const e of ed.selected()) o.ghost(affEnt(e as Shape, A), 'selected');
+      const G: [Point, Point][] = S.drag.guides || [];
+      if (G.length) o.custom((ctx, ed2, C) => { ctx.strokeStyle = C['--sel']; ctx.lineWidth = 1; ctx.setLineDash([]); for (const [a, b] of G) { const p = ed2.w2s(a), q = ed2.w2s(b); ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(q.x, q.y); ctx.stroke(); for (const r of [p, q]) { ctx.beginPath(); ctx.moveTo(r.x - 3, r.y - 3); ctx.lineTo(r.x + 3, r.y + 3); ctx.moveTo(r.x + 3, r.y - 3); ctx.lineTo(r.x - 3, r.y + 3); ctx.stroke(); } } });
+      o.label(`Δ ${fmt(S.drag.to.x - S.drag.from.x, 3)}, ${fmt(S.drag.to.y - S.drag.from.y, 3)}`, S.drag.to); return; }
     if (S.hdrag?.tx) { o.hide(ed.sel); for (const e of ed.selected()) o.ghost(affEnt(e as Shape, S.hdrag.tx.A), 'selected'); o.label(S.hdrag.tx.label, ed.cur); return; }
     if (S.ndrag?.preview) { o.hide([S.ndrag.id]); o.ghost(S.ndrag.preview, 'selected'); }
     if (S.box) o.custom((ctx, ed2, C) => {

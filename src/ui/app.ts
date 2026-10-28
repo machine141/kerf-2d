@@ -21,7 +21,7 @@ const esc = (s: string) => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<
 export function startUI(ed: Editor) {
   const cv = $<HTMLCanvasElement>('#cv'), R = new Renderer(cv, ed);
   const prefs = loadPrefs(); if (prefs.joinTol != null) ed.opt.joinTol = prefs.joinTol; if (prefs.pickPx != null) ed.opt.pickPx = prefs.pickPx;
-  const ui = { ptsOpen: false, tab: 'props', spaceDown: false, lastTest: null as null | { results: TestResult[]; doc: string | null }, exportOpts: { splitArcs: false, includeHidden: false, curveTol: 0.01, skipDims: true } as DxfOptions };
+  const ui = { alignTo: 'sel' as 'sel' | 'page', ptsOpen: false, tab: 'props', spaceDown: false, lastTest: null as null | { results: TestResult[]; doc: string | null }, exportOpts: { splitArcs: false, includeHidden: false, curveTol: 0.01, skipDims: true } as DxfOptions };
   let DL: any = null;
   (async () => { try { DL = (window as any).claude?.use ? await (window as any).claude.use('downloads') : null; } catch { DL = null; } })();
 
@@ -292,9 +292,32 @@ export function startUI(ed: Editor) {
     if (b.y1 - b.y0 > 1e-9) F.push(numField('Height', b.y1 - b.y0, v => { const bb = ed.selBox()!, w = bb.x1 - bb.x0, h = bb.y1 - bb.y0, s = v / h; ed.transformSel(affScale(P(bb.x0, bb.y0), lock && w > 1e-9 ? s : 1, s)); }));
     return { fields: F, html: `<h3>Size &amp; position</h3><div class="grid2">${F.map(f => f.html).join('')}</div>
       <div class="row"><label class="chk"><input type="checkbox" id="pLock" ${lock ? 'checked' : ''}>Keep proportions</label></div>
+      ${alignBlock(ed.selUnits().length)}
       <div class="row"><span class="hint">Rotate by</span><input type="text" id="pRot" value="90" style="width:60px" class="mono"><span class="hint">°</span><button class="btn" id="pRotGo">Rotate</button><button class="btn" id="pFlipH">Flip ↔</button><button class="btn" id="pFlipV">Flip ↕</button></div>` };
   }
+  /** Align / distribute buttons (Figma / Fusion style). */
+  function alignBlock(n: number): string {
+    const I = (d: string) => `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6">${d}</svg>`;
+    const B: [string, string, string][] = [
+      ['left', 'Align left', '<path d="M4 3v18"/><rect x="7" y="6" width="12" height="4"/><rect x="7" y="14" width="7" height="4"/>'],
+      ['hcentre', 'Align centres (horizontally)', '<path d="M12 3v18"/><rect x="5" y="6" width="14" height="4"/><rect x="8" y="14" width="8" height="4"/>'],
+      ['right', 'Align right', '<path d="M20 3v18"/><rect x="5" y="6" width="12" height="4"/><rect x="10" y="14" width="7" height="4"/>'],
+      ['top', 'Align top', '<path d="M3 4h18"/><rect x="6" y="7" width="4" height="12"/><rect x="14" y="7" width="4" height="7"/>'],
+      ['vmiddle', 'Align middles (vertically)', '<path d="M3 12h18"/><rect x="6" y="5" width="4" height="14"/><rect x="14" y="8" width="4" height="8"/>'],
+      ['bottom', 'Align bottom', '<path d="M3 20h18"/><rect x="6" y="5" width="4" height="12"/><rect x="14" y="10" width="4" height="7"/>'],
+    ];
+    const to = n > 1 ? ui.alignTo : 'page';
+    return `<h3>Align</h3><div class="row align">${B.map(([k, t, d]) => `<button class="btn ico" data-al="${k}" title="${t}${to === 'page' ? ' — on the sheet' : ''}" aria-label="${t}">${I(d)}</button>`).join('')}
+      ${n > 2 ? `<button class="btn ico" data-dist="h" title="Space evenly — across" aria-label="Space evenly across">${I('<rect x="3" y="7" width="4" height="10"/><rect x="10" y="7" width="4" height="10"/><rect x="17" y="7" width="4" height="10"/>')}</button><button class="btn ico" data-dist="v" title="Space evenly — up and down" aria-label="Space evenly up and down">${I('<rect x="7" y="3" width="10" height="4"/><rect x="7" y="10" width="10" height="4"/><rect x="7" y="17" width="10" height="4"/>')}</button>` : ''}</div>
+      ${n > 1 ? `<div class="row"><span class="hint">Align to</span><span class="segc" role="group" id="alTo"><button type="button" data-v="sel" aria-pressed="${to === 'sel'}">Selection</button><button type="button" data-v="page" aria-pressed="${to === 'page'}">Sheet</button></span></div>` : '<p class="hint">One object aligns to the sheet (e.g. centre it on the material).</p>'}`;
+  }
+  function bindAlign() {
+    document.querySelectorAll<HTMLElement>('#pane [data-al]').forEach(b => b.onclick = () => ed.alignSel(b.dataset.al as any, ed.sel.size > 1 && ed.selUnits().length > 1 ? ui.alignTo : 'page'));
+    document.querySelectorAll<HTMLElement>('#pane [data-dist]').forEach(b => b.onclick = () => ed.distributeSel(b.dataset.dist as any));
+    document.querySelectorAll<HTMLElement>('#alTo button').forEach(b => b.onclick = () => { ui.alignTo = b.dataset.v as any; renderPane(); });
+  }
   function bindSize() {
+    bindAlign();
     const lk = document.querySelector<HTMLInputElement>('#pLock'); if (lk) lk.onchange = () => { ed.opt.lockAspect = lk.checked; };
     const go = document.querySelector<HTMLElement>('#pRotGo'); if (go) go.onclick = () => { const b = ed.selBox(), t = parseFloat($<HTMLInputElement>('#pRot').value) * DEG; if (!b || !isFinite(t)) return; ed.store.change(() => ed.transformSel(affRot(boxCentre(b), t))); };
     const fh = document.querySelector<HTMLElement>('#pFlipH'); if (fh) fh.onclick = () => ed.flipSel('h');
