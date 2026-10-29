@@ -6,6 +6,9 @@ import { affEnt } from '../geometry/affine';
 import { MultiNester, nestOrder, placeTransform, rng, growOutline, type NestJob, type MultiResult, type IP } from '../nest/nest';
 import { findParts, nestShape, outlineOf, type Part } from '../nest/parts';
 import { sheetOf } from '../io/sheets';
+import { modeOf } from '../model/types';
+import { lineIssues } from '../nest/problems';
+import { closePairs } from '../nest/verify';
 
 const TURNS: [string, string, number][] = [['none', 'No turning', 0], ['90', '90°', 4], ['45', '45°', 8], ['15', 'Any (15°)', 24]];
 const S = { copies: 1, fill: false, gap: 2, margin: 5, turn: '90', clear: true, more: false };
@@ -23,6 +26,10 @@ export function openNest(ed: Editor, o: NestOpen = {}) {
   const others = ed.doc.ents.filter(e => usable(e) && !pickedIds.has(e.id) && sheetOf(ed.doc, e as Shape) === 0);
   const counts = parts.map(() => S.copies);
   const ownerOf = (p: Part) => p.ids.map(id => ed.store.byId(id)?.owner).find(Boolean);
+  // cut lines inside each design that cross, touch or lie on top of each other
+  const issues = parts.map(p => lineIssues(p.ids.map(id => ed.store.byId(id)!).filter(Boolean), e => modeOf(ed.doc, e.color) === 'cut'));
+  const hasIssue = (k: number) => issues[k].cross.length + issues[k].overlap.length > 0;
+  const nameOf = (k: number) => ownerOf(parts[k])?.split(' · ')[0] || `the ${thumbs[k]?.label.replace(/ mm$/, '')} mm part`;
 
   document.querySelector('#boxmaker')?.remove();
   const root = document.createElement('div'); root.id = 'boxmaker'; root.className = 'nest';
@@ -53,8 +60,9 @@ export function openNest(ed: Editor, o: NestOpen = {}) {
   const pathD = (polys: Point[][]) => polys.map(q => 'M' + q.map(p => `${fmt(p.x, 2)} ${fmt(-p.y, 2)}`).join('L') + 'Z').join('');
   const esc = (t: string) => t.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]!));
   const thumbs = parts.map(p => { let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity; for (const q of p.polys) for (const v of q) { x0 = Math.min(x0, v.x); x1 = Math.max(x1, v.x); y0 = Math.min(y0, v.y); y1 = Math.max(y1, v.y); } const who = ownerOf(p); return { vb: `${x0 - 1} ${-y1 - 1} ${x1 - x0 + 2} ${y1 - y0 + 2}`, d: pathD(p.polys), label: (who ? esc(who) + ' · ' : '') + `${fmt(x1 - x0, 1)} × ${fmt(y1 - y0, 1)} mm` }; });
+  const issueText = (k: number) => [issues[k].cross.length ? `${issues[k].cross.length} place${issues[k].cross.length > 1 ? 's' : ''} where lines cross or touch` : '', issues[k].overlap.length ? 'lines drawn on top of each other' : ''].filter(Boolean).join(' · ');
   const renderParts = () => {
-    $('#nParts').innerHTML = parts.length > 1 || !S.fill ? parts.map((_, i) => `<div class="np"><svg viewBox="${thumbs[i].vb}"><path d="${thumbs[i].d}"/></svg><span>${thumbs[i].label}</span>${S.fill ? '' : `<label>× <input type="text" inputmode="numeric" data-i="${i}" value="${counts[i]}"></label>`}</div>`).join('') : '';
+    $('#nParts').innerHTML = parts.length > 1 || !S.fill ? parts.map((_, i) => `<div class="np${hasIssue(i) ? ' bad' : ''}"><svg viewBox="${thumbs[i].vb}"><path d="${thumbs[i].d}"/></svg><span>${thumbs[i].label}${hasIssue(i) ? `<br><b>⚠ ${issueText(i)}</b>` : ''}</span>${S.fill ? '' : `<label>× <input type="text" inputmode="numeric" data-i="${i}" value="${counts[i]}"></label>`}</div>`).join('') : '';
     root.querySelectorAll<HTMLInputElement>('#nParts input').forEach(inp => inp.addEventListener('input', () => { const v = parseInt(inp.value); if (v >= 0 && v <= 2000) { counts[+inp.dataset.i!] = v; restart(); } }));
   };
 
@@ -67,6 +75,7 @@ export function openNest(ed: Editor, o: NestOpen = {}) {
     return { shapes, counts: S.fill ? parts.map(() => Infinity) : counts.slice(), W: pg.w, H: pg.h, margin: S.margin, gap: S.gap, angles: angles(), fixed };
   };
   const multi = () => S.more && !S.fill;
+  let lineWarn = '';
   let best: MultiResult | null = null, runId = 0, tries = 0, harder = false;
   const better = (a: MultiResult, b: MultiResult | null) => !b || a.score < b.score - 1e-6;
   async function run(rnd?: () => number) {
@@ -107,15 +116,27 @@ export function openNest(ed: Editor, o: NestOpen = {}) {
       if (n > 1) out.push(`<text class="sh" x="${x}" y="${-pg.h - 3}">Sheet ${k + 1}</text>`);
     }
     if (job.fixed) out.push(`<path class="fixed" d="${pathD(others.flatMap(e => outlineOf(e)))}"/>`);
-    r.sheets.forEach((sr, k) => { for (const p of sr.placed) { const A = placeTransform(P(0, 0), p.angle, P(p.at.x + k * (pg.w + SG), p.at.y)); out.push(`<path d="${pathD(shapes[p.shape].raw.map(q => q.map(v => P(A.a * v.x + A.b * v.y + A.e, A.c * v.x + A.d * v.y + A.f))))}"/>`); } });
+    // every placed part, where it lands; problem parts in red with a ring round each trouble spot
+    const laid: { k: number; polys: Point[][] }[] = [], rings: string[] = [];
+    r.sheets.forEach((sr, sk) => { for (const p of sr.placed) {
+      const A = placeTransform(P(0, 0), p.angle, P(p.at.x + sk * (pg.w + SG), p.at.y)), map = (v: Point) => P(A.a * v.x + A.b * v.y + A.e, A.c * v.x + A.d * v.y + A.f);
+      laid.push({ k: p.shape, polys: shapes[p.shape].raw.map(q => q.map(map)) });
+      if (hasIssue(p.shape)) { const c = shapes[p.shape].centre; for (const q of [...issues[p.shape].cross, ...issues[p.shape].overlap]) { const m = map(P(q.x - c.x, q.y - c.y)); rings.push(`<circle class="hit" cx="${fmt(m.x, 2)}" cy="${fmt(-m.y, 2)}" r="2.5"/>`); } }
+    } });
+    const close = progress === undefined ? closePairs(laid, S.gap) : [], tooClose = new Set(close.flat());
+    laid.forEach((l, i) => out.push(`<path${hasIssue(l.k) || tooClose.has(i) ? ' class="bad"' : ''} d="${pathD(l.polys)}"/>`));
+    out.push(...rings);
     svg.innerHTML = out.join('');
+    const badParts = [...new Set(laid.filter(l => hasIssue(l.k)).map(l => l.k))];
+    lineWarn = (badParts.length ? `⚠ ${badParts.length} design${badParts.length > 1 ? 's have' : ' has'} cut lines that cross, touch or overlap (red rings): ${badParts.slice(0, 5).map(nameOf).join(', ')}${badParts.length > 5 ? '…' : ''}. The laser would cut extra pieces or burn twice — Union them into one outline, or move them apart. ` : '')
+      + (close.length ? `⚠ ${close.length} pair${close.length > 1 ? 's' : ''} of parts closer than the gap (red). ` : '');
     const want = S.fill ? null : counts.reduce((a, b) => a + b, 0), miss = r.missing.reduce((a, b) => a + b, 0);
     const use = r.sheets.length ? Math.round(r.sheets.reduce((t, s) => t + s.use, 0) / r.sheets.length * 100) : 0;
     const sheets = r.sheets.length > 1 ? `${r.sheets.length} sheets · ` : '';
     const lb = r.sheets[r.sheets.length - 1]?.box, box = lb ? ` · ${r.sheets.length > 1 ? 'last sheet' : 'layout'} ${fmt(lb[2] - lb[0], 0)} × ${fmt(lb[3] - lb[1], 0)} mm` : '';
     $('#nStat').textContent = progress !== undefined ? `Placing… ${Math.round(progress * 100)} %` :
       `${r.placed}${want !== null ? ` of ${want}` : ''} placed · ${sheets}${use} % of the sheet${r.sheets.length > 1 ? 's' : ''} used${box}${tries > 1 ? ` · best of ${tries} tries` : ''}${harder ? ' · trying more…' : ''}`;
-    $('#nWarn').textContent = progress !== undefined ? '' : miss ? `${miss} didn't fit${multi() ? ' on any sheet (bigger than the sheet?)' : ''}${S.fill ? '' : ' — copies are not made; your own parts go beside the sheet'}.${multi() ? '' : ' Tick "Use more sheets", or try a smaller gap or more turning.'}` : r.placed ? '' : 'Nothing fits on this sheet.';
+    $('#nWarn').textContent = progress !== undefined ? '' : lineWarn + (miss ? `${miss} didn't fit${multi() ? ' on any sheet (bigger than the sheet?)' : ''}${S.fill ? '' : ' — copies are not made; your own parts go beside the sheet'}.${multi() ? '' : ' Tick "Use more sheets", or try a smaller gap or more turning.'}` : r.placed ? '' : 'Nothing fits on this sheet.');
     ($('#nPlace') as HTMLButtonElement).disabled = progress !== undefined || !r.placed;
   }
 

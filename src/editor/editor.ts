@@ -12,13 +12,16 @@ import { booleanShapes, isClosedShape, areaOf, type BoolOp } from '../geometry/b
 import { snapPoint, type SnapResult } from '../snap/snap';
 import { DocStore } from '../model/document';
 import { SHEET_GAP, type Entity, type Shape } from '../model/types';
+
+/** Inside an area with holes (even–odd). */
+export function inRings(p: { x: number; y: number }, rings: { x: number; y: number }[][]): boolean { let c = false; for (const r of rings) for (let i = 0, j = r.length - 1; i < r.length; j = i++) { const a = r[i], b = r[j]; if ((a.y > p.y) !== (b.y > p.y) && p.x < (b.x - a.x) * (p.y - a.y) / (b.y - a.y) + a.x) c = !c; } return c; }
 import type { Tool, PointerInfo } from './tool';
 
 export type CoordMode = 'abs' | 'rel' | 'pol';
 export type ChangeKind = 'doc' | 'sel' | 'tool' | 'prompt' | 'view' | 'aids' | 'opts';
 
 export const DEFAULT_OPTS: Record<string, any> = {
-  rectFrom: 'corner', circFrom: 'centre', arcMode: '3pt', filletMode: 'fillet', filletR: 5, filletFollow: false, fixedR: '', dimMode: 'a', rotAngle: 60, rotCopies: 5, moveCopy: false, mirKeep: false, polySides: 6, polyMeasure: 'corner', polyStar: false, polyInner: 50, splineClosed: false, spFrom: 'centre', spKind: 'even', spTurns: 4, spInner: 0, spDir: 'ccw', mirStep: 15, arrType: 'grid', arrCols: 4, arrRows: 1, arrDx: 20, arrDy: 20, arrFollow: true, arrCount: 6, arrAngle: 360, arrRotate: true, gridScale: 0, gridSym: '1', gridClose: true, gridFill: true, circScale: 0, circSym: '1', circClose: true, circFill: true,
+  rectFrom: 'corner', circFrom: 'box', paint: 'pink', fillOpacity: 45, arcMode: '3pt', filletMode: 'fillet', filletR: 5, filletFollow: false, fixedR: '', dimMode: 'a', rotAngle: 60, rotCopies: 5, moveCopy: false, mirKeep: false, polySides: 6, polyMeasure: 'corner', polyStar: false, polyInner: 50, splineClosed: false, spFrom: 'centre', spKind: 'even', spTurns: 4, spInner: 0, spDir: 'ccw', mirStep: 15, arrType: 'grid', arrCols: 4, arrRows: 1, arrDx: 20, arrDy: 20, arrFollow: true, arrCount: 6, arrAngle: 360, arrRotate: true, gridScale: 0, gridSym: '1', gridClose: true, gridFill: true, circScale: 0, circSym: '1', circClose: true, circFill: true,
   offMode: 'shape', offSide: 'auto', offD: 5, offRound: '1', offCount: 1, offFollow: false, offJoin: true, trimMode: 'whole', joinTol: 0.05, pickPx: 14, eraseR: 15, eraseSmall: true, eraseMax: 5, ringD: 10, ringHole: 5, ringOverlap: 2, lockAspect: false,
   txtFont: 'arimo', txtSize: 10, txtSpacing: 0, txtAlign: 'left', txtEffect: 'rainbow', txtSide: 'above', txtFit: false,
   hbMode: 'area', hbPattern: 'straight', hbR: 12, hbOver: false, hbPitch: 2.5, hbSlit: 15, hbBridge: 3, hbEdge: 3, hbPreview: true, hbAngle: '', hbFollow: false, hbMat: 'ply', hbT: 3, hbKerf: 0.2, hbBendR: '', softDrag: false, softR: 20, smMode: 'shape', smRound: 2, smCorners: 'both', smStrength: 'medium', smR: 30,
@@ -92,6 +95,8 @@ export class Editor {
       const e = ents[i]; if (!this.store.usable(e) || (filter && !filter(e))) continue;
       const b = this.bbox(e); if (raw.x < b.x0 - tol || raw.x > b.x1 + tol || raw.y < b.y0 - tol || raw.y > b.y1 + tol) continue;
       // text: a click anywhere over the word picks it (not just on a letter's edge)
+      // a fill: a click anywhere inside it (but a line close by wins)
+      if (e.type === 'fill' && inRings(raw, e.rings) && (!best || best.d > tol * 0.6)) best = { e, d: tol * 0.6, pr: { t: 'seg', a: raw, b: raw } };
       if (e.type === 'text' && raw.x >= b.x0 && raw.x <= b.x1 && raw.y >= b.y0 && raw.y <= b.y1 && (!best || best.d > tol * 0.5)) best = { e, d: tol * 0.5, pr: { t: 'seg', a: raw, b: raw } };
       for (const pr of this.geomPrims(e)) {
         const q = pr.t === 'seg' ? segDist(raw, pr.a, pr.b) : arcDist(raw, pr);

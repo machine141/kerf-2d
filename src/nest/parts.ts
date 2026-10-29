@@ -20,6 +20,8 @@ export interface Part { ids: string[]; polys: Point[][] }
 export function outlineOf(e: Entity | Shape, tol = 0.1): Point[][] {
   if (e.type === 'dim') return [];
   if (e.type === 'text') return textShapes(e as any).flatMap(s => outlineOf(s, tol));
+  // a fill's outside edge (it sits inside its own outline, so it travels with that part)
+  if (e.type === 'fill') return e.rings.length && e.rings[0].length > 2 ? [e.rings[0]] : [];
   const f = flatten(e as Shape, tol);
   if (f.pts.length < 2) return [];
   if (f.closed && f.pts.length > 2) return [f.pts];

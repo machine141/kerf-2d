@@ -22,7 +22,7 @@ export const MIN_WIDTH = 1.5;
 export function checkDesign(doc: Doc): Check[] {
   const out: Check[] = [];
   const vis = new Set(doc.layers.filter(l => l.visible).map(l => l.id));
-  const ents = doc.ents.filter(e => vis.has(e.layer) && e.type !== 'dim' && modeOf(doc, e.color) !== 'off') as Entity[];
+  const ents = doc.ents.filter(e => vis.has(e.layer) && e.type !== 'dim' && e.type !== 'fill' && modeOf(doc, e.color) !== 'off') as Entity[];
   const cut = ents.filter(e => modeOf(doc, e.color) === 'cut');
   if (!cut.length) { out.push({ level: 'stop', text: ents.length ? 'Nothing is set to cut — the outline needs a cut colour (e.g. Black · Cut).' : 'There is nothing in the drawing yet.' }); return out; }
 

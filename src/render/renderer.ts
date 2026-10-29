@@ -3,7 +3,7 @@ import { splineSegs } from '../geometry/spline';
 import { type Point, P, TAU } from '../geometry/vec';
 import type { Editor } from '../editor/editor';
 import type { Overlay, GhostStyle } from '../editor/tool';
-import { COLORS, modeOf, sheetX, type Entity, type Shape } from '../model/types';
+import { COLORS, PAINTS, modeOf, sheetX, type Entity, type Shape } from '../model/types';
 import { hasBulge, segsOf } from '../geometry/path';
 import { keypoints , ext } from '../geometry/entity';
 const isClosed = (e: Shape) => e.type === 'circle' || e.type === 'ellipse' || e.type === 'text' || ((e.type === 'poly' || e.type === 'spline') && e.closed);
@@ -97,8 +97,16 @@ export class Renderer {
     for (const t of Object.values(ed.tools)) t.underlay?.(ctx, ed, C);
     const or = ed.w2s(P(0, 0)); ctx.strokeStyle = C['--accent']; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(or.x, or.y); ctx.lineTo(or.x + 18, or.y); ctx.moveTo(or.x, or.y); ctx.lineTo(or.x, or.y - 18); ctx.stroke();
 
+    // paint-bucket fills first, see-through, so every line stays on top
+    const alpha = Math.max(0.05, Math.min(1, (+ed.opt.fillOpacity || 45) / 100));
     for (const e of ed.doc.ents as Entity[]) {
-      if (!ed.store.visible(e) || hidden.has(e.id)) continue;
+      if (e.type !== 'fill' || !ed.store.visible(e) || hidden.has(e.id)) continue;
+      ctx.beginPath(); for (const r of e.rings) r.forEach((p, i) => { const s = ed.w2s(p); i ? ctx.lineTo(s.x, s.y) : ctx.moveTo(s.x, s.y); }), ctx.closePath();
+      ctx.save(); ctx.globalAlpha = alpha; ctx.fillStyle = PAINTS[e.paint]?.hex || '#ddd'; ctx.fill('evenodd'); ctx.restore();
+      if (hi.get(e.id)) { ctx.save(); ctx.setLineDash([6, 3]); ctx.lineWidth = 2; ctx.strokeStyle = C['--sel']; ctx.stroke(); ctx.restore(); }
+    }
+    for (const e of ed.doc.ents as Entity[]) {
+      if (!ed.store.visible(e) || hidden.has(e.id) || e.type === 'fill') continue;
       const base = C[COLORS[e.color]?.tok] || COLORS[e.color]?.hex || C['--ink'], mode = modeOf(ed.doc, e.color);
       const st = hi.get(e.id), col = st === 'selected' ? C['--sel'] : st === 'source' ? C['--source'] : base;
       // "Engrave area" colours show their area lightly filled; "Don't cut" colours are drawn faint

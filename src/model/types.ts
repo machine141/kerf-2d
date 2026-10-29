@@ -24,7 +24,16 @@ export interface SplineEnt extends EntBase { type: 'spline'; pts: Point[]; h: [P
 export interface TextPath { ref?: string; geom: Shape; pos: number; anchor: 'start' | 'center' | 'end' | 'fit'; side: 'above' | 'on' | 'below'; flip: boolean; effect: 'rainbow' | 'stretch' | 'skew' | 'stair'; lift: number }
 /** Editable text: size = capital height (mm); at = alignment point on the first baseline; optionally on a path. */
 export interface TextEnt extends EntBase { type: 'text'; text: string; font: string; size: number; spacing: number; lineSpacing: number; align: 'left' | 'center' | 'right'; at: Point; angle: number; mirror?: boolean; path?: TextPath }
-export type Entity = LineEnt | PolyEnt | CircleEnt | EllipseEnt | ArcEnt | SplineEnt | DimEnt | TextEnt;
+/** Paint-bucket fill: an enclosed area (first ring the outside, any more are holes), in a soft colour. */
+export interface FillEnt extends EntBase { type: 'fill'; rings: Point[][]; paint: PaintKey }
+export type Entity = LineEnt | PolyEnt | CircleEnt | EllipseEnt | ArcEnt | SplineEnt | DimEnt | TextEnt | FillEnt;
+/** Soft fill colours for the paint bucket (shown see-through on screen; exported as solid colours). */
+export type PaintKey = 'pink' | 'peach' | 'lemon' | 'mint' | 'sky' | 'lavender' | 'coral' | 'aqua' | 'sand' | 'grey';
+export const PAINTS: Record<PaintKey, { label: string; hex: string }> = {
+  pink: { label: 'Pink', hex: '#F7B9D0' }, peach: { label: 'Peach', hex: '#FFD3A8' }, lemon: { label: 'Lemon', hex: '#FFF0A0' }, mint: { label: 'Mint', hex: '#BDEBC8' },
+  sky: { label: 'Sky', hex: '#B5DBFA' }, lavender: { label: 'Lavender', hex: '#D7C6F2' }, coral: { label: 'Coral', hex: '#FFB3A3' }, aqua: { label: 'Aqua', hex: '#B3EEE8' },
+  sand: { label: 'Sand', hex: '#EBDDC2' }, grey: { label: 'Grey', hex: '#D6D6D6' },
+};
 /** An entity before it has been given an id/layer/colour. */
 export type Shape = DistributiveOmit<Entity, keyof EntBase> & Partial<EntBase>;
 type DistributiveOmit<T, K extends keyof any> = T extends any ? Omit<T, K> : never;

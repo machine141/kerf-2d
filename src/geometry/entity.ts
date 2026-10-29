@@ -141,6 +141,7 @@ export function bbox(e: Shape, dimLines?: (e: Shape) => { lines: [Point, Point][
     }
   }
   else if (e.type === 'spline') pts = flatten(e, 0.01).pts;
+  else if (e.type === 'fill') pts = e.rings.flat();
   else if (e.type === 'arc') { pts = [polar(e.c, e.r, e.a0), polar(e.c, e.r, e.a1)]; for (let i = 0; i < 4; i++) { const a = i * Math.PI / 2; if (angIn(a, e.a0, e.a1)) pts.push(polar(e.c, e.r, a)); } }
   else if (e.type === 'dim') { if (dimLines) { const g = dimLines(e); g.lines.forEach(l => pts.push(l[0], l[1])); pts.push(g.text.p); } else pts = [e.p1, e.p2, e.off]; }
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;

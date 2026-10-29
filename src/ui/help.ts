@@ -69,10 +69,9 @@ export const GUIDES: HelpGuide[] = [
     { t: 'Hold <b>Shift</b> for a perfect square. Hold <b>Alt</b> to draw out from the middle.', svg: pic(dash('M40 25h55v55h-55z') + key(120, 45, 'Shift') + txt(160, 46, 'square', MUTED, 'start')) },
     { t: '<b>Exact size</b>: after the first click, type the width and height in the boxes at the bottom (Rel) and press Enter.', svg: pic(`<rect x="10" y="65" width="180" height="22" rx="3" fill="none" stroke="${MUTED}" stroke-width=".7"/>` + key(16, 80, 'Rel') + key(50, 80, ' 60 ') + key(90, 80, ' 30 ') + key(140, 80, 'Enter') + solid('M60 15h60v30h-60z') + txt(90, 57, '60 × 30 mm', A)) },
   ] },
-  { id: 'circle', title: 'Circle / ellipse', intro: 'Round holes, wheels, eyes… or ovals.', steps: [
-    { t: '<b>Click</b> the centre.', svg: pic(pt(80, 52, 1) + mouse(170, 50, 'L')) },
-    { t: 'Move out and <b>click</b> again. That sets the size. You can type an exact radius too.', svg: pic(`<circle cx="80" cy="52" r="32" fill="none" stroke="${A}" stroke-width="1.4" stroke-dasharray="4 3"/>` + pt(80, 52, 1) + pt(112, 52, 2) + txt(96, 47, 'R', A)) },
-    { t: 'For an <b>oval</b>, choose <b>In a box</b> at the top, then drag out a box.', svg: pic(bar('Draw  [From centre] [In a box]') + `<ellipse cx="90" cy="60" rx="55" ry="25" fill="none" stroke="${A}" stroke-dasharray="4 3" stroke-width="1.4"/>` + dash('M35 35h110v50h-110z')) },
+  { id: 'circle', title: 'Circle / ellipse', intro: 'Round holes, wheels, eyes… or ovals. Starts corner to corner, like Fusion and Onshape.', steps: [
+    { t: '<b>Click</b> one corner, then the <b>opposite corner</b> (or drag). You always get a circle that fits the box. Hold <b>Shift</b> to stretch it into an <b>oval</b>, <b>Alt</b> to grow it from the middle.', svg: pic(dash('M50 20h70v70h-70z') + `<circle cx="85" cy="55" r="35" fill="none" stroke="${A}" stroke-width="1.4"/>` + pt(50, 20, 1) + pt(120, 90, 2)) },
+    { t: 'Want to start from the <b>centre</b>? Press the second picture next to <b>Draw</b> (a circle with a dot). Click the centre, then a point on the edge. You can type an exact radius too.', svg: pic(`<circle cx="80" cy="52" r="32" fill="none" stroke="${A}" stroke-width="1.4" stroke-dasharray="4 3"/>` + pt(80, 52, 1) + pt(112, 52, 2) + txt(96, 47, 'R', A)) },
   ] },
   { id: 'arc', title: 'Arc', intro: 'A part of a circle. Pick how you want to draw it in the bar at the top.', steps: [
     { t: 'Choose the arc type at the top (for example <b>3 points</b>).', svg: barPic('Arc  [3 points] [Tangent] [Centre, start, end]') },
@@ -137,6 +136,11 @@ export const GUIDES: HelpGuide[] = [
     { t: 'Pick <b>Gentle</b>, <b>Medium</b> or <b>Strong</b> at the top. The little squares show the points the brush will move.', svg: barPic('Brush [Smooth] [Sharpen corners]  Strength [Gentle] [Medium] [Strong]') },
     { t: '<b>Sharpen corners</b> does the opposite on curves: points under the brush become crisp corners (the tip of a leaf).', svg: pic(solid('M40 80Q100 20 160 80') + dash('M40 80L100 30L160 80') + pt(100, 30)) },
   ], tip: 'Each drag is one Undo. Zoom in to fix small kinks with a small brush.' },
+  { id: 'bucket', title: 'Fill (paint bucket)', intro: 'Colour in areas with soft pastel colours, so you can see your design clearly. Exported as solid colours, which the laser engraves as areas.', steps: [
+    { t: 'Pick the <b>Fill</b> tool (bucket, <b>Y</b>) and a <b>colour</b> at the top. Move over an area: it lights up to show what will fill.', svg: pic(`<circle cx="80" cy="52" r="34" fill="#BDEBC8" opacity=".5" stroke="${A}" stroke-dasharray="4 3"/><circle cx="80" cy="34" r="5" fill="var(--sheet,#fff)" stroke="${MUTED}"/>` + mouse(150, 50, 'L')) },
+    { t: '<b>Click</b> to fill. Holes inside (like a key ring hole) stay clear, and the fill joins your shape so they move together. Click a filled area with another colour to change it; <b>Alt+click</b> removes it.', svg: pic(`<circle cx="80" cy="52" r="34" fill="#F7B9D0" opacity=".6" stroke="#000"/><circle cx="80" cy="34" r="5" fill="var(--sheet,#fff)" stroke="#000"/>`) },
+    { t: '<b>See-through on screen</b> sets how strong fills look (it is remembered). Exports always use the solid colour. SVG includes fills; DXF cannot hold them.', svg: barPic('See-through on screen [ 45 ] %') },
+  ], tip: 'Nothing fills? There is a gap in the outline — close it first (select the lines and press Make path).' },
   { id: 'eraser', title: 'Eraser brush', intro: 'Rub out bits, such as tiny specks left after tracing a picture.', steps: [
     { t: '<b>Hold the left button and drag</b> over what you want gone.', svg: pic(solid('M30 40h40M90 60h30') + `<circle cx="140" cy="40" r="2" fill="${INK}"/><circle cx="150" cy="55" r="2" fill="${INK}"/>` + `<circle cx="146" cy="47" r="12" fill="color-mix(in srgb, var(--accent) 15%, transparent)" stroke="${A}"/>` + mouse(185, 50, 'L')) },
     { t: 'With <b>Only small pieces</b> ticked, it only removes little bits, so your main shape is safe.', svg: barPic('Brush [ 40 ] px   ☑ Only small pieces') },

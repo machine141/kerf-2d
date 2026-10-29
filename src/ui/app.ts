@@ -36,7 +36,8 @@ const esc = (s: string) => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<
 export function startUI(ed: Editor) {
   const cv = $<HTMLCanvasElement>('#cv'), R = new Renderer(cv, ed);
   const prefs = loadPrefs(); if (prefs.joinTol != null) ed.opt.joinTol = prefs.joinTol; if (prefs.pickPx != null) ed.opt.pickPx = prefs.pickPx;
-  const ui = { soft: 50, softC: 'both', simp: 35, helpShow: null as string | null, alignTo: 'sel' as 'sel' | 'page', ptsOpen: false, tab: 'props', spaceDown: false, lastTest: null as null | { results: TestResult[]; doc: string | null }, exportOpts: { splitArcs: false, includeHidden: false, curveTol: 0.01, skipDims: true } as DxfOptions };
+  try { const fo = localStorage.getItem('kerf.fillOpacity'); if (fo && +fo > 0) ed.opt.fillOpacity = +fo; } catch { /* private window */ }
+  const ui = { soft: 50, softC: 'both', simp: 35, helpShow: null as string | null, alignTo: 'sel' as 'sel' | 'page', ptsOpen: false, tab: 'props', spaceDown: false, lastTest: null as null | { results: TestResult[]; doc: string | null }, exportOpts: { splitArcs: false, includeHidden: false, curveTol: 0.01, skipDims: true, skipFills: false } as DxfOptions & { skipFills?: boolean } };
   let DL: any = null;
   // ---------- typing text: the box is in the Properties panel; the drawing changes as you type ----------
   /** The text being typed into (one undo step from first key to finishing). */
@@ -141,7 +142,7 @@ export function startUI(ed: Editor) {
   }
   function optHTML(o: OptionSpec): string {
     const v = ed.opt[o.key];
-    if (o.type === 'seg') return `<label>${esc(o.label)} <span class="segc" role="group" data-opt="${o.key}">${o.choices.map(([cv, l]) => `<button type="button" data-v="${cv}" aria-pressed="${String(v) === cv}">${esc(l)}</button>`).join('')}</span></label>`;
+    if (o.type === 'seg') return `<label>${esc(o.label)} <span class="segc${o.icons ? ' icons' : ''}" role="group" data-opt="${o.key}">${o.choices.map(([cv, l]) => o.icons?.[cv] ? `<button type="button" data-v="${cv}" aria-pressed="${String(v) === cv}" title="${esc(l)}" aria-label="${esc(l)}"><svg viewBox="0 0 24 24" aria-hidden="true">${o.icons[cv]}</svg></button>` : `<button type="button" data-v="${cv}" aria-pressed="${String(v) === cv}">${esc(l)}</button>`).join('')}</span></label>`;
     if (o.type === 'number') return `<label>${esc(o.label)} <input type="text" inputmode="decimal" data-opt="${o.key}" data-step="${o.step ?? 1}"${o.min != null ? ` data-min="${o.min}"` : ''}${o.max != null ? ` data-max="${o.max}"` : ''} value="${esc(String(v ?? ''))}" placeholder="${esc(o.placeholder || '')}">${o.unit ? `<span>${o.unit}</span>` : ''}</label>`;
     if (o.type === 'check') return `<label><input type="checkbox" data-opt="${o.key}" ${v ? 'checked' : ''}> ${esc(o.label)}</label>`;
     if (o.type === 'select') return `<label>${esc(o.label)} <select data-opt="${o.key}">${o.choices.map(([cv, l]) => `<option value="${cv}" ${String(v) === cv ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select></label>`;
@@ -305,8 +306,9 @@ export function startUI(ed: Editor) {
     const n = ed.doc.ents.filter(e => (ed.store.visible(e) || ui.exportOpts.includeHidden) && !(ui.exportOpts.skipDims && e.type === 'dim')).length;
     $('#mHint').textContent = `${ed.doc.page.w} × ${ed.doc.page.h} mm · ${n} objects` + (kind === 'dxf' && DL ? ' · saved as a .zip containing the .dxf' : '');
     $('#mOpts').innerHTML = (nS > 1 ? `<div>Sheet <div class="segc" id="xSheet" role="group">${Array.from({ length: nS }, (_, i) => `<button type="button" data-v="${i}" aria-pressed="${i === exportSheet}">${i + 1}</button>`).join('')}</div></div>` : '') + `<label class="chk"><input type="checkbox" id="xHidden" ${ui.exportOpts.includeHidden ? 'checked' : ''}> Include hidden layers</label><label class="chk"><input type="checkbox" id="xDims" ${ui.exportOpts.skipDims ? '' : 'checked'}> Include dimensions</label>` +
+      (ed.doc.ents.some(e => e.type === 'fill') ? (kind === 'svg' ? `<label class="chk"><input type="checkbox" id="xFills" ${ui.exportOpts.skipFills ? '' : 'checked'}> Include fills (solid colours — the laser engraves them as areas)</label>` : `<span class="hint">Fills are left out: DXF can't hold filled areas. Use SVG to engrave them.</span>`) : '') +
       (kind === 'dxf' ? `<label class="chk"><input type="checkbox" id="xSplit" ${ui.exportOpts.splitArcs ? 'checked' : ''}> Split arcs &amp; circles into lines</label><label class="chk">Curve tolerance <input type="text" id="xTol" value="${ui.exportOpts.curveTol}" style="width:60px" class="mono"> mm</label>` : '');
-    const rebind = () => { ui.exportOpts.includeHidden = $<HTMLInputElement>('#xHidden').checked; ui.exportOpts.skipDims = !$<HTMLInputElement>('#xDims').checked; if (kind === 'dxf') { ui.exportOpts.splitArcs = $<HTMLInputElement>('#xSplit').checked; const t = parseLength($<HTMLInputElement>('#xTol').value); if (t > 0) ui.exportOpts.curveTol = t; } refresh(); };
+    const rebind = () => { ui.exportOpts.includeHidden = $<HTMLInputElement>('#xHidden').checked; ui.exportOpts.skipDims = !$<HTMLInputElement>('#xDims').checked; const xf = document.querySelector<HTMLInputElement>('#xFills'); if (xf) ui.exportOpts.skipFills = !xf.checked; if (kind === 'dxf') { ui.exportOpts.splitArcs = $<HTMLInputElement>('#xSplit').checked; const t = parseLength($<HTMLInputElement>('#xTol').value); if (t > 0) ui.exportOpts.curveTol = t; } refresh(); };
     $('#mOpts').querySelectorAll('input').forEach(i => i.addEventListener('change', rebind));
     $('#mOpts').querySelectorAll<HTMLElement>('#xSheet button').forEach(b => b.onclick = () => { exportSheet = +b.dataset.v!; $('#mOpts').querySelectorAll('#xSheet button').forEach(x => x.setAttribute('aria-pressed', String(x === b))); refresh(); });
     refresh(); $('#modal').hidden = false;

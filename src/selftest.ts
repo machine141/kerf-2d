@@ -44,7 +44,7 @@ function contourError(res: Shape[], src: Shape[], d: number) {
 
 export function runSelfTest(): { results: TestResult[]; doc: string | null } {
   const R: TestResult[] = [], ok = (name: string, pass: any, detail: string) => R.push({ name, ok: !!pass, detail });
-  const ed = new Editor(ALL_TOOLS);
+  const ed = new Editor(ALL_TOOLS); ed.opt.circFrom = 'centre';   // the checks below draw circles from the centre
   ed.view = { k: 4, ox: 0, oy: 0, W: 1600, H: 1200 };
   ed.opt.arcMode = 'centre';
   const d = ed.doc; d.name = 'Accuracy test'; d.page = { w: 600, h: 400, preset: 'BED' }; d.aids.attach.on = false;
@@ -72,9 +72,9 @@ export function runSelfTest(): { results: TestResult[]; doc: string | null } {
     const bw = (e: Entity) => { const b = ed.bbox(e); return [b.x1 - b.x0, b.y1 - b.y0, (b.x0 + b.x1) / 2, (b.y0 + b.y1) / 2]; };
     ok('Rectangle: corner, centre, Shift = square', bw(r1)[0] === 40 && bw(r1)[1] === 20 && bw(r2)[0] === 30 && bw(r2)[1] === 20 && bw(r2)[2] === 100 && bw(r2)[3] === 310 && bw(r3)[0] === 30 && bw(r3)[1] === 30,
       `40×20 · 30×20 centred (100, 310) · square ${bw(r3)[0]}×${bw(r3)[1]}`);
-    ed.setTool('circle'); ed.opt.circFrom = 'box'; typed(['abs', 200, 300], ['rel', 40, 20]); const el: any = last();
-    ed.mods.shift = true; typed(['abs', 260, 300], ['rel', 30, 18]); const ec: any = last(); ed.mods.shift = false; ed.opt.circFrom = 'centre';
-    ok('Circle tool: box → ellipse, Shift → perfect circle', el.type === 'ellipse' && el.rx === 20 && el.ry === 10 && ec.type === 'circle' && ec.r === 15 && ec.c.x === 275 && ec.c.y === 315,
+    ed.setTool('circle'); ed.opt.circFrom = 'box'; ed.mods.shift = true; typed(['abs', 200, 300], ['rel', 40, 20]); ed.mods.shift = false; const el: any = last();
+    typed(['abs', 260, 300], ['rel', 30, 18]); const ec: any = last(); ed.opt.circFrom = 'centre';
+    ok('Circle tool: corner to corner → circle, Shift → oval', el.type === 'ellipse' && el.rx === 20 && el.ry === 10 && ec.type === 'circle' && ec.r === 15 && ec.c.x === 275 && ec.c.y === 315,
       `ellipse ${el.rx * 2}×${el.ry * 2} · circle R${ec.r} at (${ec.c.x}, ${ec.c.y})`);
     // 3 · trim
     ed.setTool('line'); typed(['abs', 20, 20], ['abs', 100, 20]); ed.finish(); typed(['abs', 60, 0], ['abs', 60, 40]); ed.finish();

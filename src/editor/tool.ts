@@ -8,7 +8,7 @@ import type { Shape } from '../model/types';
 import type { Editor } from './editor';
 
 export type OptionSpec =
-  | { key: string; label: string; type: 'seg'; choices: [string, string][]; hint?: string; show?: (ed: Editor) => boolean }
+  | { key: string; label: string; type: 'seg'; choices: [string, string][]; hint?: string; show?: (ed: Editor) => boolean; /** a picture per choice (24×24 strokes); the words become its tooltip */ icons?: Record<string, string> }
   | { key: string; label: string; type: 'number'; min?: number; max?: number; step?: number; unit?: string; placeholder?: string; show?: (ed: Editor) => boolean }
   | { key: string; label: string; type: 'check'; show?: (ed: Editor) => boolean }
   | { key: string; label: string; type: 'select'; choices: [string, string][]; show?: (ed: Editor) => boolean }

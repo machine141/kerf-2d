@@ -19,8 +19,9 @@ export function makeRect(p: Point[], m: { shift: boolean; alt: boolean }, from: 
 }
 export function makeCircle(p: Point[], m: { shift: boolean; alt: boolean }, from: string): Shape {
   if (from === 'centre') return { type: 'circle', c: p[0], r: clean(dist(p[0], p[1])) } as Shape;
+  // corner to corner: a circle that fits the box (the longer side); Shift stretches it into an oval
   const fromC = !!m.alt; let dx = p[1].x - p[0].x, dy = p[1].y - p[0].y;
-  if (m.shift) { const s = Math.max(Math.abs(dx), Math.abs(dy)); dx = (dx < 0 ? -1 : 1) * s; dy = (dy < 0 ? -1 : 1) * s; }
+  if (!m.shift) { const s = Math.max(Math.abs(dx), Math.abs(dy)); dx = (dx < 0 ? -1 : 1) * s; dy = (dy < 0 ? -1 : 1) * s; }
   const c = fromC ? p[0] : add(p[0], P(dx / 2, dy / 2)), rx = clean(Math.abs(fromC ? dx : dx / 2)), ry = clean(Math.abs(fromC ? dy : dy / 2));
   if (Math.abs(rx - ry) < 1e-9) return { type: 'circle', c: cp(c), r: rx } as Shape;
   return { type: 'ellipse', c: cp(c), rx, ry, rot: 0 } as Shape;
@@ -70,11 +71,11 @@ export const rectTool: Tool = pointTool({
 
 export const circleTool: Tool = pointTool({
   id: 'circle', label: 'Circle / ellipse', key: 'C', icon: ICONS.circle, group: 1, need: 2, drag: true,
-  prompts: ['Locate centre (or first corner of the box) · drag, or click twice', 'Locate a point on the circle · in Box mode Shift = perfect circle, Alt = from centre'],
+  prompts: ed => ed.opt.circFrom === 'centre' ? ['Locate the centre · drag, or click twice', 'Locate a point on the circle'] : ['Locate the first corner · drag, or click twice', 'Locate the opposite corner · Shift = oval · Alt = from the middle'],
   options: [
-    { key: 'circFrom', label: 'Draw', type: 'seg', choices: [['centre', 'From centre'], ['box', 'In a box']] },
+    { key: 'circFrom', label: 'Draw', type: 'seg', choices: [['box', 'Corner to corner (Shift = oval, Alt = from the middle)'], ['centre', 'From the centre out']], icons: { box: ICONS.circBox, centre: ICONS.circCentre } },
     { key: 'fixedR', label: 'Fixed radius', type: 'number', min: 0, placeholder: 'off', unit: 'mm', show: ed => ed.opt.circFrom === 'centre' },
-    { key: 'circHint', label: 'Shift = perfect circle · Alt = from centre', type: 'hint', show: ed => ed.opt.circFrom === 'box' },
+    { key: 'circHint', label: 'Corner to corner · Shift = oval · Alt = from the middle', type: 'hint', show: ed => ed.opt.circFrom === 'box' },
   ],
   intercept(ed, p) {
     const r = +ed.opt.fixedR;

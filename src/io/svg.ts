@@ -4,13 +4,13 @@ import { splineSegs } from '../geometry/spline';
 import { type Point, P, add, sub, mul, dist, normA, angOf, polar, clean, cp, fmt, DEG } from '../geometry/vec';
 import { dimGeom } from '../geometry/dims';
 import { hasBulge, segsOf } from '../geometry/path';
-import { COLORS, modeOf, type Doc, type Shape, type ColorKey } from '../model/types';
+import { COLORS, PAINTS, modeOf, type Doc, type Shape, type ColorKey } from '../model/types';
 
 const nf = (v: number) => fmt(clean(v), 6);
 const esc = (s: string) => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' } as any)[c]);
 const slug = (s: string) => (s.replace(/[^A-Za-z0-9_-]+/g, '_') || 'layer');
 
-export interface SvgOptions { includeHidden?: boolean; skipDims?: boolean }
+export interface SvgOptions { includeHidden?: boolean; skipDims?: boolean; /** leave out paint-bucket fills */ skipFills?: boolean }
 
 export function exportSVG(doc: Doc, opt: SvgOptions = {}): string {
   const { w, h } = doc.page, Y = (y: number) => nf(h - y), out: string[] = [];
@@ -23,8 +23,13 @@ export function exportSVG(doc: Doc, opt: SvgOptions = {}): string {
     const keep = (e: any) => e.layer === L.id && !(opt.skipDims && e.type === 'dim') && (e.type === 'dim' || modeOf(doc, e.color) !== 'off');
     // text in an "Engrave area" colour: all its letters as one filled path, so the middles of o, e, a stay clear
     const fillText = doc.ents.filter(e => e.type === 'text' && keep(e) && modeOf(doc, e.color) === 'fill');
-    const ents = expandText(doc.ents.filter(e => !fillText.includes(e))).filter(keep); if (!ents.length && !fillText.length) continue;
+    const fills = opt.skipFills ? [] : doc.ents.filter(e => e.type === 'fill' && e.layer === L.id);
+    const ents = expandText(doc.ents.filter(e => !fillText.includes(e) && e.type !== 'fill')).filter(keep); if (!ents.length && !fillText.length && !fills.length) continue;
     out.push(`<g id="${esc(slug(L.name))}" inkscape:groupmode="layer" inkscape:label="${esc(L.name)}" fill="none" stroke-linecap="round" stroke-linejoin="round"${L.visible ? '' : ' style="display:none"'}>`);
+    // paint-bucket fills: solid colour areas (no outline) under the lines — laser software engraves them as areas
+    if (!opt.skipFills) for (const f of doc.ents) if (f.type === 'fill' && f.layer === L.id) {
+      out.push(`<path d="${f.rings.map(r => 'M ' + r.map(p => nf(p.x) + ' ' + Y(p.y)).join(' L ') + ' Z').join(' ')}" fill="${PAINTS[f.paint]?.hex || '#D6D6D6'}" fill-rule="evenodd" stroke="none"/>`);
+    }
     for (const t of fillText) {
       const hx = COLORS[t.color]?.hex || '#000000';
       const d = expandText([t]).map((e: any) => e.type === 'spline' ? (() => { const sg = splineSegs(e); return sg.length ? `M ${nf(sg[0][0].x)} ${Y(sg[0][0].y)} ${sg.map(b => `C ${nf(b[1].x)} ${Y(b[1].y)} ${nf(b[2].x)} ${Y(b[2].y)} ${nf(b[3].x)} ${Y(b[3].y)}`).join(' ')}${e.closed ? ' Z' : ''}` : ''; })() : e.type === 'poly' ? `M ${e.pts.map((p: Point) => nf(p.x) + ' ' + Y(p.y)).join(' L ')}${e.closed ? ' Z' : ''}` : '').join(' ');

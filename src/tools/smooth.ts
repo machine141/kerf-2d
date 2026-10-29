@@ -11,7 +11,7 @@ import type { Editor } from '../editor/editor';
 import type { Shape } from '../model/types';
 import { softenShape, softenable, planSoften, applyPlan, type SoftenMode, type SoftPlan } from '../geometry/soften';
 
-export const SMOOTH_ICON = '<path d="M3 17c3-6 5 2 8-3s4-6 7-2"/><circle cx="18" cy="7" r="3"/>';
+export const SMOOTH_ICON = '<path d="M2 19.5h3.5c5.5 0 7.5-15 13-15H22" stroke-width="3.2" stroke="currentColor"/>';
 const STRENGTH: Record<string, number> = { gentle: 0.2, medium: 0.45, strong: 0.75 };
 const radius = (ed: Editor) => (+ed.opt.smR || 30) / ed.view.k;
 

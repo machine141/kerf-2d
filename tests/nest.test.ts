@@ -133,3 +133,19 @@ describe('Nesting: fast no-fit polygons match Clipper', () => {
     }
   });
 });
+
+describe('Nesting: lines that cross, touch or overlap', () => {
+  it('finds a ring circle crossing the outline, a hole touching it, and a line drawn twice; joined paths are fine', async () => {
+    const { lineIssues } = await import('../src/nest/problems');
+    const cut = () => true;
+    const body = ent('b', rect(0, 0, 40, 30)), ring = { id: 'r', layer: 'L1', color: 'ink', w: 0.1, type: 'circle', c: P(20, 30), r: 6 } as any;
+    const a = lineIssues([body, ring], cut); expect(a.cross.length).toBe(2); expect(a.ids.sort()).toEqual(['b', 'r']);
+    const touch = { id: 't', layer: 'L1', color: 'ink', w: 0.1, type: 'circle', c: P(20, 25), r: 5 } as any;   // touches the top edge
+    expect(lineIssues([body, touch], cut).cross.length).toBe(1);
+    const twice = lineIssues([body, ent('b2', rect(0, 0, 40, 30))], cut); expect(twice.overlap.length).toBeGreaterThan(0);
+    const l1 = { id: 'l1', layer: 'L1', color: 'ink', w: 0.1, type: 'line', a: P(0, 0), b: P(10, 0) } as any, l2 = { ...l1, id: 'l2', a: P(10, 0), b: P(10, 10) };
+    expect(lineIssues([l1, l2], cut).cross.length).toBe(0);
+    const hole = { id: 'h', layer: 'L1', color: 'ink', w: 0.1, type: 'circle', c: P(20, 15), r: 3 } as any;
+    const ok = lineIssues([body, hole], cut); expect(ok.cross.length + ok.overlap.length).toBe(0);
+  });
+});
