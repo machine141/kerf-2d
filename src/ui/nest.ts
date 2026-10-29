@@ -1,28 +1,33 @@
-/** Nest window: fit many parts (e.g. 30 key rings) on the sheet, previewed live, then placed. */
+/** Nest window: fit many parts (e.g. 30 key rings) on the sheet — or several sheets — previewed live, then placed. */
 import type { Editor } from '../editor/editor';
-import type { Entity, Shape } from '../model/types';
+import { sheetX, type Entity, type Shape } from '../model/types';
 import { fmt, P, type Point } from '../geometry/vec';
 import { affEnt } from '../geometry/affine';
-import { Nester, nestOrder, placeTransform, rng, growOutline, type NestJob, type NestResult, type IP } from '../nest/nest';
+import { MultiNester, nestOrder, placeTransform, rng, growOutline, type NestJob, type MultiResult, type IP } from '../nest/nest';
 import { findParts, nestShape, outlineOf, type Part } from '../nest/parts';
+import { sheetOf } from '../io/sheets';
 
 const TURNS: [string, string, number][] = [['none', 'No turning', 0], ['90', '90°', 4], ['45', '45°', 8], ['15', 'Any (15°)', 24]];
-const S = { copies: 1, fill: false, gap: 2, margin: 5, turn: '90', clear: true };
+const S = { copies: 1, fill: false, gap: 2, margin: 5, turn: '90', clear: true, more: false };
+export interface NestOpen { /** start with "use more sheets" on and one of each (class worksheets) */ classMode?: boolean }
 
-export function openNest(ed: Editor) {
+export function openNest(ed: Editor, o: NestOpen = {}) {
   const visible = new Set(ed.doc.layers.filter(l => l.visible).map(l => l.id));
   const usable = (e: Entity) => visible.has(e.layer) && e.type !== 'dim';
   const picked = ed.sel.size ? [...ed.withGroups(ed.sel)].map(id => ed.store.byId(id)!).filter(e => e && usable(e)) : ed.doc.ents.filter(usable);
   const parts: Part[] = findParts(picked, e => ed.groupRoot(e));
   if (!parts.length) { ed.toast('Nothing to nest: draw or select some parts first'); return; }
+  if (o.classMode) { S.copies = 1; S.fill = false; S.more = true; }
   const pickedIds = new Set(picked.map(e => e.id));
-  const others = ed.doc.ents.filter(e => usable(e) && !pickedIds.has(e.id));
+  // other things already on the first sheet are kept clear of
+  const others = ed.doc.ents.filter(e => usable(e) && !pickedIds.has(e.id) && sheetOf(ed.doc, e as Shape) === 0);
   const counts = parts.map(() => S.copies);
+  const ownerOf = (p: Part) => p.ids.map(id => ed.store.byId(id)?.owner).find(Boolean);
 
   document.querySelector('#boxmaker')?.remove();
   const root = document.createElement('div'); root.id = 'boxmaker'; root.className = 'nest';
   const num = (id: string, label: string, v: number, unit = 'mm') => `<label class="sl">${label} <input type="text" inputmode="decimal" id="${id}" value="${v}"> <span>${unit}</span></label>`;
-  const pg = ed.doc.page;
+  const pg = ed.doc.page, SG = sheetX(ed.doc, 1) - pg.w;
   root.innerHTML = `<div class="box" role="dialog" aria-modal="true" aria-labelledby="nTitle">
     <div class="head"><strong id="nTitle">Nest parts on the sheet</strong><button class="x" id="nClose" aria-label="Close">✕</button></div>
     <div class="body">
@@ -31,6 +36,7 @@ export function openNest(ed: Editor) {
         <p class="hint">${parts.length} part${parts.length > 1 ? 's' : ''} ${ed.sel.size ? 'from your selection' : 'in the drawing'}. A part is a group, or a shape with everything inside or touching it (holes, engraving, a ring).</p>
         <label class="sl">How many of each <input type="text" inputmode="numeric" id="nCopies" value="${S.copies}"> <span></span></label>
         <label class="chk"><input type="checkbox" id="nFill" ${S.fill ? 'checked' : ''}>Fill the sheet (as many as fit)</label>
+        <label class="chk"><input type="checkbox" id="nMore" ${S.more ? 'checked' : ''}>Use more sheets if they don't all fit</label>
         <div class="nparts" id="nParts"></div>
         ${num('nGap', 'Gap between parts', S.gap)}${num('nMargin', 'Margin from the edge', S.margin)}
         <div>Turning parts<div class="segc" id="nTurn" role="group">${TURNS.map(([v, l]) => `<button type="button" data-v="${v}">${l}</button>`).join('')}</div></div>
@@ -45,9 +51,10 @@ export function openNest(ed: Editor) {
 
   // ---- parts list with thumbnails and their own counts ----
   const pathD = (polys: Point[][]) => polys.map(q => 'M' + q.map(p => `${fmt(p.x, 2)} ${fmt(-p.y, 2)}`).join('L') + 'Z').join('');
-  const thumbs = parts.map(p => { let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity; for (const q of p.polys) for (const v of q) { x0 = Math.min(x0, v.x); x1 = Math.max(x1, v.x); y0 = Math.min(y0, v.y); y1 = Math.max(y1, v.y); } return { vb: `${x0 - 1} ${-y1 - 1} ${x1 - x0 + 2} ${y1 - y0 + 2}`, d: pathD(p.polys), size: `${fmt(x1 - x0, 1)} × ${fmt(y1 - y0, 1)}` }; });
+  const esc = (t: string) => t.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]!));
+  const thumbs = parts.map(p => { let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity; for (const q of p.polys) for (const v of q) { x0 = Math.min(x0, v.x); x1 = Math.max(x1, v.x); y0 = Math.min(y0, v.y); y1 = Math.max(y1, v.y); } const who = ownerOf(p); return { vb: `${x0 - 1} ${-y1 - 1} ${x1 - x0 + 2} ${y1 - y0 + 2}`, d: pathD(p.polys), label: (who ? esc(who) + ' · ' : '') + `${fmt(x1 - x0, 1)} × ${fmt(y1 - y0, 1)} mm` }; });
   const renderParts = () => {
-    $('#nParts').innerHTML = parts.length > 1 || !S.fill ? parts.map((_, i) => `<div class="np"><svg viewBox="${thumbs[i].vb}"><path d="${thumbs[i].d}"/></svg><span>${thumbs[i].size} mm</span>${S.fill ? '' : `<label>× <input type="text" inputmode="numeric" data-i="${i}" value="${counts[i]}"></label>`}</div>`).join('') : '';
+    $('#nParts').innerHTML = parts.length > 1 || !S.fill ? parts.map((_, i) => `<div class="np"><svg viewBox="${thumbs[i].vb}"><path d="${thumbs[i].d}"/></svg><span>${thumbs[i].label}</span>${S.fill ? '' : `<label>× <input type="text" inputmode="numeric" data-i="${i}" value="${counts[i]}"></label>`}</div>`).join('') : '';
     root.querySelectorAll<HTMLInputElement>('#nParts input').forEach(inp => inp.addEventListener('input', () => { const v = parseInt(inp.value); if (v >= 0 && v <= 2000) { counts[+inp.dataset.i!] = v; restart(); } }));
   };
 
@@ -59,10 +66,11 @@ export function openNest(ed: Editor) {
     const fixed = S.clear && others.length ? growOutline(others.flatMap(e => outlineOf(e)), S.gap / 2) : undefined;
     return { shapes, counts: S.fill ? parts.map(() => Infinity) : counts.slice(), W: pg.w, H: pg.h, margin: S.margin, gap: S.gap, angles: angles(), fixed };
   };
-  let best: NestResult | null = null, runId = 0, tries = 0, harder = false;
-  const better = (a: NestResult, b: NestResult | null) => !b || a.score < b.score - 1e-6;
+  const multi = () => S.more && !S.fill;
+  let best: MultiResult | null = null, runId = 0, tries = 0, harder = false;
+  const better = (a: MultiResult, b: MultiResult | null) => !b || a.score < b.score - 1e-6;
   async function run(rnd?: () => number) {
-    const my = runId, n = new Nester(job, nestOrder(job, rnd), cache);
+    const my = runId, n = new MultiNester(job, nestOrder(job, rnd), cache, multi() ? 20 : 1);
     let t0 = performance.now();
     while (n.step()) {
       if (my !== runId) return null;
@@ -88,34 +96,45 @@ export function openNest(ed: Editor) {
   }
   function setHarder(on: boolean) { harder = on; $('#nHarder').textContent = on ? 'Stop' : 'Try harder'; if (!on && best) draw(best); }
 
-  // ---- preview ----
-  function draw(r: NestResult, progress?: number) {
-    const svg = $('#nSvg'), pad = 6;
-    svg.setAttribute('viewBox', `${-pad} ${-pg.h - pad} ${pg.w + 2 * pad} ${pg.h + 2 * pad}`);
-    const m = S.margin, out: string[] = [`<rect class="sheet" x="0" y="${-pg.h}" width="${pg.w}" height="${pg.h}"/>`, `<rect class="marg" x="${m}" y="${-pg.h + m}" width="${Math.max(0, pg.w - 2 * m)}" height="${Math.max(0, pg.h - 2 * m)}"/>`];
+  // ---- preview: every sheet side by side ----
+  function draw(r: MultiResult, progress?: number) {
+    const svg = $('#nSvg'), pad = 6, n = Math.max(1, r.sheets.length), Wt = n * pg.w + (n - 1) * SG;
+    svg.setAttribute('viewBox', `${-pad} ${-pg.h - pad - 10} ${Wt + 2 * pad} ${pg.h + 2 * pad + 10}`);
+    const m = S.margin, out: string[] = [];
+    for (let k = 0; k < n; k++) {
+      const x = k * (pg.w + SG);
+      out.push(`<rect class="sheet" x="${x}" y="${-pg.h}" width="${pg.w}" height="${pg.h}"/>`, `<rect class="marg" x="${x + m}" y="${-pg.h + m}" width="${Math.max(0, pg.w - 2 * m)}" height="${Math.max(0, pg.h - 2 * m)}"/>`);
+      if (n > 1) out.push(`<text class="sh" x="${x}" y="${-pg.h - 3}">Sheet ${k + 1}</text>`);
+    }
     if (job.fixed) out.push(`<path class="fixed" d="${pathD(others.flatMap(e => outlineOf(e)))}"/>`);
-    for (const p of r.placed) { const A = placeTransform(P(0, 0), p.angle, p.at); out.push(`<path d="${pathD(shapes[p.shape].raw.map(q => q.map(v => P(A.a * v.x + A.b * v.y + A.e, A.c * v.x + A.d * v.y + A.f))))}"/>`); }
+    r.sheets.forEach((sr, k) => { for (const p of sr.placed) { const A = placeTransform(P(0, 0), p.angle, P(p.at.x + k * (pg.w + SG), p.at.y)); out.push(`<path d="${pathD(shapes[p.shape].raw.map(q => q.map(v => P(A.a * v.x + A.b * v.y + A.e, A.c * v.x + A.d * v.y + A.f))))}"/>`); } });
     svg.innerHTML = out.join('');
     const want = S.fill ? null : counts.reduce((a, b) => a + b, 0), miss = r.missing.reduce((a, b) => a + b, 0);
-    const box = r.box ? ` · layout ${fmt(r.box[2] - r.box[0], 0)} × ${fmt(r.box[3] - r.box[1], 0)} mm` : '';
+    const use = r.sheets.length ? Math.round(r.sheets.reduce((t, s) => t + s.use, 0) / r.sheets.length * 100) : 0;
+    const sheets = r.sheets.length > 1 ? `${r.sheets.length} sheets · ` : '';
+    const lb = r.sheets[r.sheets.length - 1]?.box, box = lb ? ` · ${r.sheets.length > 1 ? 'last sheet' : 'layout'} ${fmt(lb[2] - lb[0], 0)} × ${fmt(lb[3] - lb[1], 0)} mm` : '';
     $('#nStat').textContent = progress !== undefined ? `Placing… ${Math.round(progress * 100)} %` :
-      `${r.placed.length}${want !== null ? ` of ${want}` : ''} placed · ${Math.round(r.use * 100)} % of the sheet used${box}${tries > 1 ? ` · best of ${tries} tries` : ''}${harder ? ' · trying more…' : ''}`;
-    $('#nWarn').textContent = progress !== undefined ? '' : miss ? `${miss} didn't fit${S.fill ? '' : ' — copies are not made; your own parts go beside the sheet'}. Try a smaller gap, more turning or a bigger bed.` : r.placed.length ? '' : 'Nothing fits on this sheet.';
-    ($('#nPlace') as HTMLButtonElement).disabled = progress !== undefined || !r.placed.length;
+      `${r.placed}${want !== null ? ` of ${want}` : ''} placed · ${sheets}${use} % of the sheet${r.sheets.length > 1 ? 's' : ''} used${box}${tries > 1 ? ` · best of ${tries} tries` : ''}${harder ? ' · trying more…' : ''}`;
+    $('#nWarn').textContent = progress !== undefined ? '' : miss ? `${miss} didn't fit${multi() ? ' on any sheet (bigger than the sheet?)' : ''}${S.fill ? '' : ' — copies are not made; your own parts go beside the sheet'}.${multi() ? '' : ' Tick "Use more sheets", or try a smaller gap or more turning.'}` : r.placed ? '' : 'Nothing fits on this sheet.';
+    ($('#nPlace') as HTMLButtonElement).disabled = progress !== undefined || !r.placed;
   }
 
   // ---- place ----
   function place() {
     if (!best) return;
-    const r = best, made: string[] = [], beside: number[] = [];
-    let bx = pg.w + 10;
+    const r = best, made: string[] = [], beside: number[] = [], nS = Math.max(1, r.sheets.length);
+    const placed = r.sheets.flatMap((sr, k) => sr.placed.map(p => ({ ...p, at: P(p.at.x + sheetX(ed.doc, k), p.at.y) })));
     ed.store.change(() => {
+      // keep any sheet that still has other things on it
+      let keep = nS; for (const e of ed.doc.ents) if (!pickedIds.has(e.id)) keep = Math.max(keep, sheetOf(ed.doc, e as Shape) + 1);
+      ed.doc.sheets = keep;
+      let bx = sheetX(ed.doc, keep - 1) + pg.w + 10;
       parts.forEach((part, k) => {
-        const own = part.ids.map(id => ed.store.byId(id)!).filter(Boolean), pls = r.placed.filter(p => p.shape === k);
+        const own = part.ids.map(id => ed.store.byId(id)!).filter(Boolean), pls = placed.filter(p => p.shape === k);
         // a part made of several loose objects is grouped, so it moves as one afterwards
         const roots = new Set(own.map(e => ed.groupRoot(e))), groupIt = own.length > 1 && (roots.size > 1 || roots.has(null));
         if (!pls.length) {
-          // a part of yours that didn't fit: put it beside the sheet so nothing is lost
+          // a part of yours that didn't fit: put it beside the sheets so nothing is lost
           const sh = shapes[k], w = sh.raw.flat().reduce((m, v) => Math.max(m, v.x), 0) * 2, h = sh.raw.flat().reduce((m, v) => Math.max(m, v.y), 0);
           const A = placeTransform(sh.centre, 0, P(bx + w / 2, pg.h - h)); bx += w + 10;
           for (const e of own) ed.store.replace(e.id, affEnt(e as Shape, A)); beside.push(k); return;
@@ -138,7 +157,8 @@ export function openNest(ed: Editor) {
       });
     });
     ed.setTool('select'); ed.setSelection(made); close(); ed.fit();
-    ed.toast(`Nested ${r.placed.length} parts · ${Math.round(r.use * 100)} % of the sheet used${beside.length ? ` · ${beside.length} of yours didn't fit (beside the sheet)` : ''} · Undo puts everything back`);
+    const use = Math.round(r.sheets.reduce((t, s) => t + s.use, 0) / nS * 100);
+    ed.toast(`Nested ${r.placed} parts${nS > 1 ? ` on ${nS} sheets` : ''} · ${use} % used${beside.length ? ` · ${beside.length} of yours didn't fit (beside the sheets)` : ''} · Undo puts everything back${nS > 1 ? ' · Export asks which sheet' : ''}`);
   }
 
   // ---- wiring ----
@@ -148,15 +168,16 @@ export function openNest(ed: Editor) {
   const bindNum = (id: string, key: 'gap' | 'margin', min: number) => { const el = $<HTMLInputElement>(id); el.addEventListener('input', () => { const v = parseFloat(el.value); if (isFinite(v) && v >= min) { S[key] = v; restart(); } }); };
   bindNum('#nGap', 'gap', 0); bindNum('#nMargin', 'margin', 0);
   $<HTMLInputElement>('#nCopies').addEventListener('input', e => { const v = parseInt((e.target as HTMLInputElement).value); if (v >= 0 && v <= 2000) { S.copies = v; counts.fill(v); renderParts(); restart(); } });
-  $<HTMLInputElement>('#nFill').onchange = e => { S.fill = (e.target as HTMLInputElement).checked; $<HTMLInputElement>('#nCopies').disabled = S.fill; renderParts(); restart(); };
+  const syncFill = () => { $<HTMLInputElement>('#nCopies').disabled = S.fill; $<HTMLInputElement>('#nMore').disabled = S.fill; };
+  $<HTMLInputElement>('#nFill').onchange = e => { S.fill = (e.target as HTMLInputElement).checked; syncFill(); renderParts(); restart(); };
+  $<HTMLInputElement>('#nMore').onchange = e => { S.more = (e.target as HTMLInputElement).checked; restart(); };
   const turnBtns = () => root.querySelectorAll<HTMLElement>('#nTurn button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.v === S.turn)));
   root.querySelectorAll<HTMLElement>('#nTurn button').forEach(b => b.onclick = () => { S.turn = b.dataset.v!; turnBtns(); restart(); });
   const clr = root.querySelector<HTMLInputElement>('#nClear'); if (clr) clr.onchange = () => { S.clear = clr.checked; restart(); };
   $('#nHarder').onclick = () => { if (harder) setHarder(false); else if (best) tryHarder(); };
   $('#nClose').onclick = close; $('#nCancel').onclick = close; $('#nPlace').onclick = place;
   root.addEventListener('click', e => { if (e.target === root) close(); });
-  $<HTMLInputElement>('#nCopies').disabled = S.fill;
-  turnBtns(); renderParts(); start();
+  syncFill(); turnBtns(); renderParts(); start();
   // for the self-test and scripts
   (root as any).nest = { get best() { return best; }, place };
 }

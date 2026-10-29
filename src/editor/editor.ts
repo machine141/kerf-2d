@@ -11,7 +11,7 @@ import { explodePath, pieceToShape } from '../geometry/trim';
 import { booleanShapes, isClosedShape, areaOf, type BoolOp } from '../geometry/boolean';
 import { snapPoint, type SnapResult } from '../snap/snap';
 import { DocStore } from '../model/document';
-import type { Entity, Shape } from '../model/types';
+import { SHEET_GAP, type Entity, type Shape } from '../model/types';
 import type { Tool, PointerInfo } from './tool';
 
 export type CoordMode = 'abs' | 'rel' | 'pol';
@@ -387,7 +387,7 @@ export class Editor {
   w2s = (p: Point) => P((p.x - this.view.ox) * this.view.k, this.view.H - (p.y - this.view.oy) * this.view.k);
   s2w = (p: Point) => P(p.x / this.view.k + this.view.ox, (this.view.H - p.y) / this.view.k + this.view.oy);
   setSize(W: number, H: number) { this.view.W = W; this.view.H = H; this.changed('view'); }
-  fit() { const { w, h } = this.doc.page, m = 36, V = this.view; const k = Math.min((V.W - m * 2) / w, (V.H - m * 2) / h); V.k = k > 0 ? k : 1; V.ox = -(V.W / V.k - w) / 2; V.oy = -(V.H / V.k - h) / 2; this.changed('view'); }
+  fit() { const n = Math.max(1, this.doc.sheets || 1), h = this.doc.page.h, w = n * this.doc.page.w + (n - 1) * SHEET_GAP, m = 36, V = this.view; const k = Math.min((V.W - m * 2) / w, (V.H - m * 2) / h); V.k = k > 0 ? k : 1; V.ox = -(V.W / V.k - w) / 2; V.oy = -(V.H / V.k - h) / 2; this.changed('view'); }
   zoomAt(sp: Point, f: number) { const b = this.s2w(sp); this.view.k = Math.min(400, Math.max(0.05, this.view.k * f)); const a = this.s2w(sp); this.view.ox += b.x - a.x; this.view.oy += b.y - a.y; this.changed('view'); }
   panBy(dx: number, dy: number) { this.view.ox += dx / this.view.k; this.view.oy -= dy / this.view.k; this.changed('view'); }
 

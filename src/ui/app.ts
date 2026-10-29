@@ -8,6 +8,8 @@ import { openTrace } from './trace';
 import { openElements, saveSelectionAsElement } from './elements';
 import { helpHtml, GUIDES } from './help';
 import { openNest } from './nest';
+import { openHandIn, openClassLoad, openClassList } from './classroom';
+import { sheetDoc } from '../io/sheets';
 import { openBox } from './box';
 import { openHinge } from './hinge';
 import { openBend } from './profile';
@@ -293,16 +295,20 @@ export function startUI(ed: Editor) {
     try { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([text], { type: 'application/octet-stream' })); a.download = name; document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 4000); ed.toast('Downloaded ' + name); }
     catch { ed.toast('Saving is not available here — use Copy text'); }
   }
+  let exportSheet = 0;
   function showExport(kind: 'svg' | 'dxf') {
-    const build = () => kind === 'svg' ? exportSVG(ed.doc, ui.exportOpts) : exportDXF(ed.doc, ui.exportOpts);
-    const name = base() + '.' + kind, refresh = () => { const t = build(); $<HTMLTextAreaElement>('#mText').value = t; $('#mSave').onclick = () => saveFile(name, t); $('#mCopy').onclick = async () => { try { await navigator.clipboard.writeText(t); ed.toast('Copied'); } catch { $<HTMLTextAreaElement>('#mText').select(); ed.toast('Text selected — press Ctrl+C'); } }; };
+    const nS = Math.max(1, ed.doc.sheets || 1); if (exportSheet >= nS) exportSheet = 0;
+    const src = () => nS > 1 ? sheetDoc(ed.doc, exportSheet) : ed.doc;
+    const build = () => kind === 'svg' ? exportSVG(src(), ui.exportOpts) : exportDXF(src(), ui.exportOpts);
+    const fname = () => base() + (nS > 1 ? `-sheet${exportSheet + 1}` : '') + '.' + kind, refresh = () => { const t = build(); $<HTMLTextAreaElement>('#mText').value = t; $('#mSave').onclick = () => saveFile(fname(), t); if (nS > 1) $('#mHint').textContent = `Sheet ${exportSheet + 1} of ${nS} · ${src().ents.length} objects · export each sheet in turn`; $('#mCopy').onclick = async () => { try { await navigator.clipboard.writeText(t); ed.toast('Copied'); } catch { $<HTMLTextAreaElement>('#mText').select(); ed.toast('Text selected — press Ctrl+C'); } }; };
     $('#mTitle').textContent = kind === 'svg' ? 'Export SVG (mm)' : 'Export DXF (R12, mm)';
     const n = ed.doc.ents.filter(e => (ed.store.visible(e) || ui.exportOpts.includeHidden) && !(ui.exportOpts.skipDims && e.type === 'dim')).length;
     $('#mHint').textContent = `${ed.doc.page.w} × ${ed.doc.page.h} mm · ${n} objects` + (kind === 'dxf' && DL ? ' · saved as a .zip containing the .dxf' : '');
-    $('#mOpts').innerHTML = `<label class="chk"><input type="checkbox" id="xHidden" ${ui.exportOpts.includeHidden ? 'checked' : ''}> Include hidden layers</label><label class="chk"><input type="checkbox" id="xDims" ${ui.exportOpts.skipDims ? '' : 'checked'}> Include dimensions</label>` +
+    $('#mOpts').innerHTML = (nS > 1 ? `<div>Sheet <div class="segc" id="xSheet" role="group">${Array.from({ length: nS }, (_, i) => `<button type="button" data-v="${i}" aria-pressed="${i === exportSheet}">${i + 1}</button>`).join('')}</div></div>` : '') + `<label class="chk"><input type="checkbox" id="xHidden" ${ui.exportOpts.includeHidden ? 'checked' : ''}> Include hidden layers</label><label class="chk"><input type="checkbox" id="xDims" ${ui.exportOpts.skipDims ? '' : 'checked'}> Include dimensions</label>` +
       (kind === 'dxf' ? `<label class="chk"><input type="checkbox" id="xSplit" ${ui.exportOpts.splitArcs ? 'checked' : ''}> Split arcs &amp; circles into lines</label><label class="chk">Curve tolerance <input type="text" id="xTol" value="${ui.exportOpts.curveTol}" style="width:60px" class="mono"> mm</label>` : '');
     const rebind = () => { ui.exportOpts.includeHidden = $<HTMLInputElement>('#xHidden').checked; ui.exportOpts.skipDims = !$<HTMLInputElement>('#xDims').checked; if (kind === 'dxf') { ui.exportOpts.splitArcs = $<HTMLInputElement>('#xSplit').checked; const t = parseLength($<HTMLInputElement>('#xTol').value); if (t > 0) ui.exportOpts.curveTol = t; } refresh(); };
     $('#mOpts').querySelectorAll('input').forEach(i => i.addEventListener('change', rebind));
+    $('#mOpts').querySelectorAll<HTMLElement>('#xSheet button').forEach(b => b.onclick = () => { exportSheet = +b.dataset.v!; $('#mOpts').querySelectorAll('#xSheet button').forEach(x => x.setAttribute('aria-pressed', String(x === b))); refresh(); });
     refresh(); $('#modal').hidden = false;
   }
   $('#mClose').onclick = () => { $('#modal').hidden = true; };
@@ -317,6 +323,10 @@ export function startUI(ed: Editor) {
   $('#bHelp').onclick = () => openHelp();
   $('#bBox').onclick = () => { closeMake(); openBox(ed); };
   $('#bNest').onclick = () => { closeMake(); openNest(ed); };
+  $('#bHandIn').onclick = () => openHandIn(ed, saveFile);
+  $('#bClassLoad').onclick = () => { closeMake(); $('#classIn').click(); };
+  $('#bClassList').onclick = () => { closeMake(); openClassList(ed, saveFile); };
+  $<HTMLInputElement>('#classIn').onchange = ev => { const inp = ev.target as HTMLInputElement, fs = [...(inp.files || [])]; inp.value = ''; if (fs.length) openClassLoad(ed, fs); };
   $('#bHinge').onclick = () => { closeMake(); openHinge(ed); };
   $('#bBend').onclick = () => { closeMake(); openBend(ed); };
   const makePop = () => document.querySelector<HTMLElement>('#mkMenu .pop')!;
@@ -330,7 +340,9 @@ export function startUI(ed: Editor) {
   window.addEventListener('dragleave', ev => { if (!ev.relatedTarget) document.body.classList.remove('dropping'); });
   window.addEventListener('drop', ev => {
     document.body.classList.remove('dropping');
-    const f = ev.dataTransfer?.files?.[0]; if (!f) return; ev.preventDefault();
+    const all = [...(ev.dataTransfer?.files || [])], f = all[0]; if (!f) return; ev.preventDefault();
+    // several drawings dropped at once: a class's handed-in designs
+    if (all.filter(x => /\.json$/i.test(x.name)).length > 1) { openClassLoad(ed, all); return; }
     if (isImage(f)) openTrace(ed, f);
     else { const dt = new DataTransfer(); dt.items.add(f); const inp = $<HTMLInputElement>('#fileIn'); inp.files = dt.files; inp.dispatchEvent(new Event('change')); }
   });

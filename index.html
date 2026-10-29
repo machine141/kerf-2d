@@ -156,6 +156,24 @@ table.res td:last-child{text-align:right;white-space:nowrap}
 #boxmaker svg .sheet{fill:var(--panel);stroke:var(--line);stroke-width:1;vector-effect:non-scaling-stroke}
 #boxmaker svg .marg{fill:none;stroke:var(--muted);stroke-dasharray:4 3;stroke-width:.6;vector-effect:non-scaling-stroke}
 #boxmaker svg .fixed{fill:color-mix(in srgb,var(--muted) 18%,transparent);stroke:var(--muted)}
+#boxmaker svg text.sh{font-size:8px;text-anchor:start;dominant-baseline:auto;fill:var(--muted)}
+#boxmaker.classroom .box{width:min(560px,100%);height:auto;max-height:calc(100dvh - 24px)}
+#boxmaker.classroom.wide .box{width:min(900px,100%)}
+#boxmaker .cbody{padding:12px 16px;overflow:auto;display:flex;flex-direction:column;gap:9px;min-height:0}
+#boxmaker .cbody h4{margin:6px 0 0;font-size:13px}
+#boxmaker.classroom .sl{grid-template-columns:110px 1fr}
+#boxmaker .checks{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:5px;font-size:13px}
+#boxmaker .checks li{display:flex;gap:8px;align-items:baseline}
+#boxmaker .checks li span{flex:1}
+#boxmaker b.ok{color:var(--accent)} #boxmaker b.warn{color:#c77700} #boxmaker b.stop,#boxmaker span.stop{color:var(--bad)}
+#boxmaker .link{border:0;background:none;color:var(--accent);text-decoration:underline;cursor:pointer;padding:0;font:inherit}
+#boxmaker .ctable{overflow:auto;max-height:min(55dvh,520px);border:1px solid var(--line);border-radius:6px}
+#boxmaker table{border-collapse:collapse;width:100%;font-size:12.5px}
+#boxmaker th{position:sticky;top:0;background:var(--panel);text-align:left;font-weight:600;border-bottom:1px solid var(--line)}
+#boxmaker th,#boxmaker td{padding:5px 8px;vertical-align:top}
+#boxmaker tr+tr td{border-top:1px solid var(--line)}
+#boxmaker tr.old td{color:var(--muted)}
+#boxmaker.classroom .foot .hint{color:var(--muted)}
 #boxmaker .nparts{display:flex;flex-direction:column;gap:4px;max-height:220px;overflow:auto}
 #boxmaker .np{display:grid;grid-template-columns:38px 1fr auto;gap:8px;align-items:center;font-size:12px;color:var(--muted)}
 #boxmaker .np svg{width:38px;height:28px;flex:none}
@@ -375,7 +393,7 @@ body.dropping #main{outline:3px dashed var(--accent);outline-offset:-6px}
 </head>
 <body>
 <header>
-  <div class="brand"><b>Kerf 2D</b><span>precision drafting · v1.0</span></div>
+  <div class="brand"><b>Kerf 2D</b><span>precision drafting · v1.1</span></div>
   <input id="docName" aria-label="Drawing name" value="Glasses front">
   <div class="actions">
     <button class="btn" id="bNew">New</button>
@@ -387,18 +405,22 @@ body.dropping #main{outline:3px dashed var(--accent);outline-offset:-6px}
         <button role="menuitem" id="bHinge"><b>Living hinge…</b><span>Bendy wood: wrap a shape, or test strips</span></button>
         <button role="menuitem" id="bBend"><b>Bend to a profile…</b><span>Leaf, face, wing: bend wood to a curve you draw</span></button>
         <button role="menuitem" id="bNest"><b>Nest on sheet…</b><span>Fit lots of parts (e.g. 30 key rings) with little waste</span></button>
+        <button role="menuitem" id="bClassLoad"><b>Load class designs…</b><span>All your pupils' handed-in files at once, then nest</span></button>
+        <button role="menuitem" id="bClassList"><b>Class list…</b><span>Who is on which sheet · find a pupil's design</span></button>
         <button role="menuitem" id="bElements"><b>Elements…</b><span>Hearts, animals, key-ring blanks… and your own</span></button>
         <button role="menuitem" id="bSaveEl"><b>Save selection as element…</b><span>Keep your design to use again</span></button>
         <button role="menuitem" id="bTrace"><b>Trace image…</b><span>Turn a picture into outlines (or drop / paste one)</span></button>
       </div>
     </div>
     <button class="btn" id="bSave">Save</button>
+    <button class="btn" id="bHandIn" title="Pupils: check your design and save it to send to your teacher">Hand in</button>
     <button class="btn" id="bUndo" title="Undo (Ctrl+Z)">Undo</button>
     <button class="btn" id="bRedo" title="Redo (Ctrl+Y)">Redo</button>
     <button class="btn" id="bFit" title="Zoom to page (F)">Fit page</button>
     <button class="btn" id="bHelp" title="How to use the tool you have picked, with pictures">? Help</button>
     <button class="btn primary" id="bSvg">Export SVG</button>
     <button class="btn primary" id="bDxf">Export DXF</button>
+ <input type="file" id="classIn" accept=".json" multiple hidden>
     <input type="file" id="fileIn" accept=".json,.dxf,.svg,.png,.jpg,.jpeg,.gif,.webp,.bmp" hidden><input type="file" id="imgIn" accept="image/*" hidden>
   </div>
 </header>

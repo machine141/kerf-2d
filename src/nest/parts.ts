@@ -31,7 +31,7 @@ export function outlineOf(e: Entity | Shape, tol = 0.1): Point[][] {
 
 /** Split objects into parts (groups, and shapes touching or inside each other). */
 export function findParts(ents: Entity[], groupRoot: (e: Entity) => string | null): Part[] {
-  const units: { ids: string[]; polys: Point[][]; filled: IP[]; box: number[] }[] = [];
+  const units: { ids: string[]; polys: Point[][]; filled: IP[]; box: number[]; owner?: string }[] = [];
   const byGroup = new Map<string, number>();
   for (const e of ents) {
     if (e.type === 'dim') continue;
@@ -39,7 +39,7 @@ export function findParts(ents: Entity[], groupRoot: (e: Entity) => string | nul
     const g = groupRoot(e);
     if (g && byGroup.has(g)) { const u = units[byGroup.get(g)!]; u.ids.push(e.id); u.polys.push(...polys); continue; }
     if (g) byGroup.set(g, units.length);
-    units.push({ ids: [e.id], polys, filled: [], box: [] });
+    units.push({ ids: [e.id], polys, filled: [], box: [], owner: e.owner });
   }
   for (const u of units) {
     u.filled = growOutline(u.polys, 0, 0);
@@ -52,6 +52,10 @@ export function findParts(ents: Entity[], groupRoot: (e: Entity) => string | nul
     const a = units[i].box, b = units[k].box;
     if (a[2] < b[0] || b[2] < a[0] || a[3] < b[1] || b[3] < a[1]) continue;
     if (find(i) === find(k)) continue;
+    // two pupils' designs never become one part, even if they overlap
+    if (units[i].owner && units[k].owner && units[i].owner !== units[k].owner) continue;
+    // one pupil's pieces with one box inside the other stay together (e.g. a hole inside an outline that has a gap)
+    if (units[i].owner && units[i].owner === units[k].owner && ((a[0] <= b[0] && a[1] <= b[1] && a[2] >= b[2] && a[3] >= b[3]) || (b[0] <= a[0] && b[1] <= a[1] && b[2] >= a[2] && b[3] >= a[3]))) { parent[find(k)] = find(i); continue; }
     const c = new L.Clipper(), out = new L.Paths();
     c.AddPaths(units[i].filled, L.PolyType.ptSubject, true); c.AddPaths(units[k].filled, L.PolyType.ptClip, true);
     c.Execute(L.ClipType.ctIntersection, out, L.PolyFillType.pftNonZero, L.PolyFillType.pftNonZero);

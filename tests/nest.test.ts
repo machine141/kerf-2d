@@ -115,3 +115,21 @@ describe('Nesting: finding the parts', () => {
     expect(a.centre.x).toBeCloseTo(15, 3); expect(b.centre.x).toBeCloseTo(115, 3);
   });
 });
+
+describe('Nesting: fast no-fit polygons match Clipper', () => {
+  it('stars, hearts, L shapes, C-bands and rectangles, turned: same region', async () => {
+    const { nfpFast, nfpClipper } = await import('../src/nest/nest');
+    const star = (R: number, r: number) => Array.from({ length: 10 }, (_, k) => { const a = Math.PI / 2 + k * Math.PI / 5, q = k % 2 ? r : R; return P(q * Math.cos(a), q * Math.sin(a)); });
+    const heart = Array.from({ length: 60 }, (_, k) => { const t = k / 60 * 2 * Math.PI; return P(16 * Math.sin(t) ** 3, 13 * Math.cos(t) - 5 * Math.cos(2 * t) - 2 * Math.cos(3 * t) - Math.cos(4 * t)); });
+    const Lsh = [P(0, 0), P(40, 0), P(40, 10), P(10, 10), P(10, 40), P(0, 40)];
+    const C = [P(0, 0), P(30, 0), P(30, 6), P(6, 6), P(6, 24), P(30, 24), P(30, 30), P(0, 30)];
+    const shapes = [star(25, 11), heart, Lsh, C, rect(0, 0, 50, 20)].map(p => nestShape({ ids: [], polys: [p] }, 2));
+    const rotI = (qs: any[], a: number) => qs.map((q: any[]) => q.map(v => ({ X: Math.round(v.X * Math.cos(a) - v.Y * Math.sin(a)), Y: Math.round(v.X * Math.sin(a) + v.Y * Math.cos(a)) })));
+    const xorArea = (a: any[], b: any[]) => { const c = new L.Clipper(), o = new L.Paths(); c.AddPaths(a, L.PolyType.ptSubject, true); c.AddPaths(b, L.PolyType.ptClip, true); c.Execute(L.ClipType.ctXor, o, L.PolyFillType.pftNonZero, L.PolyFillType.pftNonZero); return (o as any[]).reduce((t, q) => t + Math.abs(L.Clipper.Area(q)), 0) / 1e6; };
+    const areaOf = (a: any[]) => { const c = new L.Clipper(), o = new L.Paths(); c.AddPaths(a, L.PolyType.ptSubject, true); c.Execute(L.ClipType.ctUnion, o, L.PolyFillType.pftNonZero, L.PolyFillType.pftNonZero); return (o as any[]).reduce((t, q) => t + L.Clipper.Area(q), 0) / 1e6; };
+    for (const A of shapes) for (const B of shapes) for (const a of [0, 0.7, Math.PI / 2]) {
+      const F = rotI(B.grown, a), fast = nfpFast(A.grown, F), slow = nfpClipper(A.grown, F);
+      expect(xorArea(fast, slow)).toBeLessThan(areaOf(slow) * 1e-4 + 0.05);
+    }
+  });
+});

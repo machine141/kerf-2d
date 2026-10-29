@@ -7,7 +7,7 @@ export type ColorKey = 'ink' | 'red' | 'blue' | 'green' | 'magenta' | 'orange' |
 export type LaserMode = 'cut' | 'score' | 'fill' | 'off';
 
 /** group: stack of group ids, outermost last (selecting one member selects the whole outer group). */
-export interface EntBase { id: string; layer: string; color: ColorKey; w: number; group?: string[]; /** made by a tool and rebuilt by it (e.g. 'hinge' = Hinge brush slits) */ gen?: string }
+export interface EntBase { id: string; layer: string; color: ColorKey; w: number; group?: string[]; /** made by a tool and rebuilt by it (e.g. 'hinge' = Hinge brush slits) */ gen?: string; /** whose design this is (class worksheets), e.g. "Mia Jones · 7B" */ owner?: string }
 export interface LineEnt extends EntBase { type: 'line'; a: Point; b: Point }
 /** bulge[i] (optional) makes segment i a true arc: tan(sweep/4), + anticlockwise, − clockwise. */
 export interface PolyEnt extends EntBase { type: 'poly'; pts: Point[]; closed: boolean; bulge?: number[] }
@@ -62,6 +62,26 @@ export interface Doc {
   hingeMade?: boolean;
   /** laser setting per colour (missing = the default) */
   modes?: Partial<Record<ColorKey, LaserMode>>;
+  /** how many sheets (the extra ones sit to the right of the first, SHEET_GAP apart) */
+  sheets?: number;
+  /** set when a student hands the design in */
+  handin?: HandIn;
+  /** class worksheet: whose designs are on it */
+  classList?: ClassEntry[];
+}
+/** What a student fills in when handing in. */
+export interface HandIn { name: string; cls: string; title: string; at: string; warnings: string[] }
+/** One student's design on a class worksheet. */
+export interface ClassEntry { owner: string; name: string; cls: string; title: string; file: string; warnings: string[] }
+/** Space between sheets on the page, mm. */
+export const SHEET_GAP = 20;
+/** Left edge of sheet k (0 = the first). */
+export const sheetX = (doc: { page: { w: number } }, k: number) => k * (doc.page.w + SHEET_GAP);
+/** Which sheet a point is on (-1 = none). */
+export function sheetAt(doc: { page: { w: number; h: number }; sheets?: number }, x: number, y: number): number {
+  const n = Math.max(1, doc.sheets || 1);
+  for (let k = 0; k < n; k++) { const x0 = sheetX(doc, k); if (x >= x0 - 1e-6 && x <= x0 + doc.page.w + 1e-6 && y >= -1e-6 && y <= doc.page.h + 1e-6) return k; }
+  return -1;
 }
 /** Hinge brush pattern: each has its own pastel colour. */
 export type HingePattern = 'straight' | 'wavy' | 'lattice' | 'honeycomb' | 'rings' | 'spokes' | 'fold';

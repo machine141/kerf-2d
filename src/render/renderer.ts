@@ -3,7 +3,7 @@ import { splineSegs } from '../geometry/spline';
 import { type Point, P, TAU } from '../geometry/vec';
 import type { Editor } from '../editor/editor';
 import type { Overlay, GhostStyle } from '../editor/tool';
-import { COLORS, modeOf, type Entity, type Shape } from '../model/types';
+import { COLORS, modeOf, sheetX, type Entity, type Shape } from '../model/types';
 import { hasBulge, segsOf } from '../geometry/path';
 import { keypoints , ext } from '../geometry/entity';
 const isClosed = (e: Shape) => e.type === 'circle' || e.type === 'ellipse' || e.type === 'text' || ((e.type === 'poly' || e.type === 'spline') && e.closed);
@@ -80,14 +80,18 @@ export class Renderer {
     ed.tool.overlay?.(ed, o);
 
     ctx.setLineDash([]); ctx.fillStyle = C['--desk']; ctx.fillRect(0, 0, W, H);
-    const tl = ed.w2s(P(0, h));
-    ctx.save(); ctx.shadowColor = C['--shadow']; ctx.shadowBlur = 14; ctx.shadowOffsetY = 2; ctx.fillStyle = C['--sheet']; ctx.fillRect(tl.x, tl.y, w * k, h * k); ctx.restore();
-    if (A.grid.show) {
-      let g = A.grid.spacing; while (g * k < 6) g *= 2;
-      ctx.save(); ctx.beginPath(); ctx.rect(tl.x, tl.y, w * k, h * k); ctx.clip(); ctx.lineWidth = 1;
-      for (let x = 0; x <= w + 1e-9; x += g) { const s = ed.w2s(P(x, 0)); ctx.strokeStyle = Math.round(x / g) % 5 === 0 ? C['--grid-major'] : C['--grid']; ctx.beginPath(); ctx.moveTo(Math.round(s.x) + .5, tl.y); ctx.lineTo(Math.round(s.x) + .5, tl.y + h * k); ctx.stroke(); }
-      for (let y = 0; y <= h + 1e-9; y += g) { const s = ed.w2s(P(0, y)); ctx.strokeStyle = Math.round(y / g) % 5 === 0 ? C['--grid-major'] : C['--grid']; ctx.beginPath(); ctx.moveTo(tl.x, Math.round(s.y) + .5); ctx.lineTo(tl.x + w * k, Math.round(s.y) + .5); ctx.stroke(); }
-      ctx.restore();
+    const nSheets = Math.max(1, ed.doc.sheets || 1);
+    for (let sk = 0; sk < nSheets; sk++) {
+      const sx = sheetX(ed.doc, sk), tl = ed.w2s(P(sx, h));
+      ctx.save(); ctx.shadowColor = C['--shadow']; ctx.shadowBlur = 14; ctx.shadowOffsetY = 2; ctx.fillStyle = C['--sheet']; ctx.fillRect(tl.x, tl.y, w * k, h * k); ctx.restore();
+      if (A.grid.show) {
+        let g = A.grid.spacing; while (g * k < 6) g *= 2;
+        ctx.save(); ctx.beginPath(); ctx.rect(tl.x, tl.y, w * k, h * k); ctx.clip(); ctx.lineWidth = 1;
+        for (let x = 0; x <= w + 1e-9; x += g) { const s = ed.w2s(P(sx + x, 0)); ctx.strokeStyle = Math.round(x / g) % 5 === 0 ? C['--grid-major'] : C['--grid']; ctx.beginPath(); ctx.moveTo(Math.round(s.x) + .5, tl.y); ctx.lineTo(Math.round(s.x) + .5, tl.y + h * k); ctx.stroke(); }
+        for (let y = 0; y <= h + 1e-9; y += g) { const s = ed.w2s(P(0, y)); ctx.strokeStyle = Math.round(y / g) % 5 === 0 ? C['--grid-major'] : C['--grid']; ctx.beginPath(); ctx.moveTo(tl.x, Math.round(s.y) + .5); ctx.lineTo(tl.x + w * k, Math.round(s.y) + .5); ctx.stroke(); }
+        ctx.restore();
+      }
+      if (nSheets > 1) { ctx.save(); ctx.fillStyle = C['--muted'] || '#666'; ctx.font = '600 12px system-ui, sans-serif'; ctx.textBaseline = 'bottom'; ctx.fillText(`Sheet ${sk + 1}`, tl.x, tl.y - 4); ctx.restore(); }
     }
     // tools that keep something painted on the sheet (Hinge brush areas) draw it under the drawing
     for (const t of Object.values(ed.tools)) t.underlay?.(ctx, ed, C);

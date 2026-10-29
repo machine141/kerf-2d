@@ -13,6 +13,7 @@
  */
 import ClipperLib from 'clipper-lib';
 import { type Point, P } from '../geometry/vec';
+import { convexPieces, sumPieces } from './convex';
 
 const L = ClipperLib, S = 1000;   // 1 µm
 export type IP = { X: number; Y: number }[];
@@ -97,10 +98,23 @@ const shift = (q: IP, dx: number, dy: number): IP => q.map(v => ({ X: v.X + dx, 
 
 /** Positions (of F's origin) where F would overlap the outline set A (both µm). */
 function nfp(A: IP[], F: IP[]): IP[] {
+  // fast: convex pieces (cached per outline set); Clipper's quad method if a shape can't be split
+  const pa = piecesOf(A), pf = piecesOf(F);
+  if (pa && pf) return sumPieces(pa, pf.map(neg));
   const out: IP[] = [];
   for (const f of F) { const m = L.Clipper.MinkowskiSum(neg(f), A, true) as IP[]; out.push(...m); }
   return out;
 }
+const pieceCache = new WeakMap<IP[], IP[] | null>();
+function piecesOf(set: IP[]): IP[] | null {
+  if (pieceCache.has(set)) return pieceCache.get(set)!;
+  let out: IP[] | null = [];
+  for (const q of set) { const p = convexPieces(q); if (!p) { out = null; break; } out.push(...p); }
+  pieceCache.set(set, out); return out;
+}
+/** The no-fit polygon by Clipper's own (slower) method, for checking. */
+export function nfpClipper(A: IP[], F: IP[]): IP[] { const out: IP[] = []; for (const f of F) out.push(...(L.Clipper.MinkowskiSum(neg(f), A, true) as IP[])); return out; }
+export { nfp as nfpFast };
 
 /** A nesting run that places one part per step, so the page can stay responsive. */
 export class Nester {
@@ -108,6 +122,8 @@ export class Nester {
   private order: number[]; private i = 0; placed: Placement[] = []; private placedI: { s: number; a: number; at: { X: number; Y: number } }[] = [];
   private bb: { x0: number; y0: number; x1: number; y1: number } | null = null; private fails = new Set<string>();
   missing: number[]; done = false;
+  /** the parts that did not fit, in order (for the next sheet) */
+  left: number[] = [];
   constructor(job: NestJob, order: number[], nfpCache = new Map<string, IP[]>()) {
     this.job = job; this.order = order; this.nfpCache = nfpCache; this.missing = job.counts.map(() => 0);
   }
@@ -129,7 +145,7 @@ export class Nester {
     if (this.i >= this.order.length) { this.done = true; return false; }
     const s = this.order[this.i++], j = this.job;
     // a part of a kind that has already failed at every angle will fail again
-    if (this.fails.has(j.shapes[s].key)) { this.missing[s]++; return true; }
+    if (this.fails.has(j.shapes[s].key)) { this.missing[s]++; this.left.push(s); return true; }
     let best: { a: number; X: number; Y: number; score: number } | null = null;
     for (const a of j.angles) {
       const F = this.shape(s, a), fb = boxI(F), rb = this.rawBox(s, a);
@@ -164,7 +180,7 @@ export class Nester {
         if (!best || score < best.score) best = { a, X: v.X, Y: v.Y, score };
       }
     }
-    if (!best) { this.missing[s]++; this.fails.add(j.shapes[s].key); return true; }
+    if (!best) { this.missing[s]++; this.left.push(s); this.fails.add(j.shapes[s].key); return true; }
     const F = this.shape(s, best.a), fb = boxI(F), x0 = best.X + fb.x0, x1 = best.X + fb.x1, y0 = best.Y + fb.y0, y1 = best.Y + fb.y1;
     this.bb = this.bb ? { x0: Math.min(this.bb.x0, x0), x1: Math.max(this.bb.x1, x1), y0: Math.min(this.bb.y0, y0), y1: Math.max(this.bb.y1, y1) } : { x0, x1, y0, y1 };
     this.placedI.push({ s, a: best.a, at: { X: best.X, Y: best.Y } });
@@ -199,6 +215,39 @@ export function nestOrder(job: NestJob, rnd?: () => number): number[] {
   return out;
 }
 
+/** A layout over several sheets: each sheet takes what the one before could not fit. */
+export interface MultiResult { sheets: NestResult[]; placed: number; missing: number[]; score: number }
+/** Nest onto as many sheets as needed (up to maxSheets); parts too big for a sheet are reported missing. */
+export class MultiNester {
+  private job: NestJob; private cache: Map<string, IP[]>; private maxSheets: number;
+  private cur: Nester; private done: NestResult[] = []; finished = false;
+  constructor(job: NestJob, order: number[], cache = new Map<string, IP[]>(), maxSheets = 20) {
+    this.job = job; this.cache = cache; this.maxSheets = maxSheets; this.cur = new Nester(job, order, cache);
+  }
+  step(): boolean {
+    if (this.finished) return false;
+    if (this.cur.step()) return true;
+    const r = this.cur.result(); this.done.push(r);
+    const left = this.cur.left;
+    // next sheet: only if something is left and the last sheet managed to take something (else they never fit)
+    if (!left.length || !r.placed.length || this.done.length >= this.maxSheets) { this.finished = true; return false; }
+    // things already on the sheet only matter on the first one
+    this.cur = new Nester({ ...this.job, fixed: undefined }, left, this.cache);
+    return true;
+  }
+  get sheet() { return this.done.length; }
+  get progress() { const total = this.job.counts.reduce((a, b) => a + (b === Infinity ? 0 : b), 0) || 1; return Math.min(1, (this.done.reduce((t, r) => t + r.placed.length, 0) + this.cur.placed.length) / total); }
+  result(): MultiResult {
+    const sheets = this.finished ? this.done.slice() : [...this.done, this.cur.result()];
+    const last = sheets[sheets.length - 1];
+    const missing = this.job.counts.map(() => 0); if (this.finished && last) last.missing.forEach((m, i) => missing[i] = this.job.counts[i] === Infinity ? 0 : m);
+    // with nothing placed on the last sheet, what it reports missing never fits anywhere
+    const used = sheets.filter(r => r.placed.length), placed = used.reduce((t, r) => t + r.placed.length, 0);
+    const lb = used[used.length - 1]?.box, score = -placed * 1e9 + used.length * 1e6 + (lb ? (lb[2] - lb[0]) * 2 + (lb[3] - lb[1]) : 0);
+    return { sheets: used, placed, missing, score };
+  }
+}
+
 /** Run a whole nesting at once (tests, small jobs). */
 export function nestNow(job: NestJob, rnd?: () => number, cache?: Map<string, IP[]>): NestResult {
   const n = new Nester(job, nestOrder(job, rnd), cache); while (n.step()); return n.result();
@@ -208,6 +257,10 @@ export function nestNow(job: NestJob, rnd?: () => number, cache?: Map<string, IP
 export function placeTransform(centre: Point, angle: number, at: Point) {
   const c = Math.cos(angle), s = Math.sin(angle);
   return { a: c, b: -s, c: s, d: c, e: at.x - (c * centre.x - s * centre.y), f: at.y - (s * centre.x + c * centre.y) };
+}
+/** Several sheets at once (tests). */
+export function nestSheets(job: NestJob, rnd?: () => number, maxSheets = 20): MultiResult {
+  const n = new MultiNester(job, nestOrder(job, rnd), new Map(), maxSheets); while (n.step()); return n.result();
 }
 export const fromIP = fromI;
 export const toIP = toI;
