@@ -41,3 +41,33 @@ describe('Soften: pointy shapes are fine', () => {
     const r = softenShape(poly(star), 4.6); expect(r.note).toBeUndefined(); expect(r.shape).toBeTruthy();
   });
 });
+import { planSoften, applyPlan } from '../src/geometry/soften';
+describe('Soften: choose the corners', () => {
+  it('finds the 4 corners of a square, and rounds only the ones left on', () => {
+    const sq = poly([P(0, 0), P(40, 0), P(40, 40), P(0, 40)]), plan = planSoften(sq, 5)!;
+    expect(plan.corners.length).toBe(4);
+    const iTL = plan.corners.findIndex(c => c.tip.x < 1 && c.tip.y > 39), on = plan.corners.map((_, i) => i !== iTL);
+    const s = applyPlan(plan, on)!;
+    expect(near(s, P(0, 40))).toBeLessThan(0.05);                        // the top-left corner stays sharp
+    expect(near(s, P(40, 0))).toBeCloseTo(5 * (Math.SQRT2 - 1), 1);     // the others are rounded
+    expect(near(s, P(20, 0))).toBeLessThan(0.05);
+  });
+  it('an L shape has 5 outside corners and 1 inside corner', () => {
+    const plan = planSoften(poly([P(0, 0), P(40, 0), P(40, 10), P(10, 10), P(10, 40), P(0, 40)]), 3)!;
+    expect(plan.corners.filter(c => c.kind === 'out').length).toBe(5); expect(plan.corners.filter(c => c.kind === 'in').length).toBe(1);
+    const inner = plan.corners.findIndex(c => c.kind === 'in'), s = applyPlan(plan, plan.corners.map((_, i) => i === inner))!;
+    expect(near(s, P(10, 10))).toBeCloseTo(3 * (Math.SQRT2 - 1), 1); expect(near(s, P(0, 0))).toBeLessThan(0.05);
+  });
+});
+describe('Soften: a star with one point kept sharp', () => {
+  it('the other points are fully rounded (no spikes left), the kept one stays sharp', () => {
+    const star: Point[] = []; for (let i = 0; i < 10; i++) { const a = Math.PI / 2 + i * Math.PI / 5, rr = i % 2 ? 18 : 40; star.push(P(rr * Math.cos(a), rr * Math.sin(a))); }
+    const plan = planSoften(poly(star), 4)!, top = plan.corners.findIndex(c => Math.hypot(c.tip.x, c.tip.y - 40) < 0.5);
+    expect(top).toBeGreaterThanOrEqual(0);
+    for (const c of plan.corners) { const v = star.find(q => Math.hypot(q.x - c.tip.x, q.y - c.tip.y) < 0.5); expect(v).toBeTruthy(); }   // every dot sits on a real corner
+    const s = applyPlan(plan, plan.corners.map((_, i) => i !== top))!;
+    expect(near(s, P(0, 40))).toBeLessThan(0.05);
+    for (let i = 2; i < 10; i += 2) { expect(near(s, star[i])).toBeGreaterThan(2); }   // other outer points rounded
+    const b = box(s); expect(b[2]).toBeLessThan(40 * Math.cos(Math.PI / 10) - 1);   // nothing sticks out on the right
+  });
+});

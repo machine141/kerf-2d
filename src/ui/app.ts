@@ -503,7 +503,7 @@ export function startUI(ed: Editor) {
     return `<h3>Soften corners</h3><p class="hint">Rounds every corner — great for friendly key rings and cute shapes. Size stays the same.</p>
       <div class="row"><span class="hint">Roundness</span><input type="range" id="pSoftn" min="0" max="100" value="${ui.soft}" style="flex:1"><span class="mono" id="pSoftnV">${softR(ui.soft)} mm</span></div>
       <div class="row"><span class="hint">Corners</span><span class="segc" id="pSoftnC">${[['both', 'All'], ['outer', 'Outside'], ['inner', 'Inside']].map(([v, l]) => `<button type="button" data-v="${v}" aria-pressed="${ui.softC === v}">${l}</button>`).join('')}</span></div>
-      <p class="hint" id="pSoftnInfo">Move the slider to see it.</p><div class="row"><button class="btn primary" id="pSoftnGo" disabled>Soften</button></div>`;
+      <p class="hint" id="pSoftnInfo">Move the slider to see it.</p><div class="row"><button class="btn primary" id="pSoftnGo" disabled>Soften all corners</button><button class="btn" id="pSoftnPick" title="See every corner as a dot and switch each one on or off before softening">Choose corners…</button></div>`;
   }
   function bindSoften() {
     const r = document.querySelector<HTMLInputElement>('#pSoftn'); if (!r) return;
@@ -516,6 +516,7 @@ export function startUI(ed: Editor) {
     };
     r.oninput = preview;
     document.querySelectorAll<HTMLElement>('#pSoftnC button').forEach(b => b.onclick = () => { ui.softC = b.dataset.v!; document.querySelectorAll('#pSoftnC button').forEach(x => x.setAttribute('aria-pressed', String(x === b))); preview(); });
+    $('#pSoftnPick').onclick = () => { ed.state.simp = null; ed.opt.smMode = 'shape'; ed.opt.smRound = softR(ui.soft); ed.opt.smCorners = ui.softC; ed.setTool('smooth'); ed.changed('tool'); };
     $('#pSoftnGo').onclick = () => { const pv = ed.state.softPv; ed.state.simp = null; ed.state.softPv = null; if (pv) applySoften(ed, pv); };
   }
   /** Point editing extras: soft drag, and the selected point made smooth / sharp / removed (keeping the shape). */
