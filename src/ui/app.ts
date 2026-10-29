@@ -22,6 +22,7 @@ import { isText, editTexts, flipText, optsFromText } from '../tools/text';
 import { cssFont } from './textedit';
 import { textShapes } from '../text/text';
 import { weldShapes } from '../text/place';
+import { simplifyShape, deviation, smoothNode, cornerNode } from '../geometry/fitcurve';
 import { FONTS, FONT_GROUPS } from '../text/fonts';
 import { runSelfTest, type TestResult } from '../selftest';
 
@@ -31,7 +32,7 @@ const esc = (s: string) => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<
 export function startUI(ed: Editor) {
   const cv = $<HTMLCanvasElement>('#cv'), R = new Renderer(cv, ed);
   const prefs = loadPrefs(); if (prefs.joinTol != null) ed.opt.joinTol = prefs.joinTol; if (prefs.pickPx != null) ed.opt.pickPx = prefs.pickPx;
-  const ui = { helpShow: null as string | null, alignTo: 'sel' as 'sel' | 'page', ptsOpen: false, tab: 'props', spaceDown: false, lastTest: null as null | { results: TestResult[]; doc: string | null }, exportOpts: { splitArcs: false, includeHidden: false, curveTol: 0.01, skipDims: true } as DxfOptions };
+  const ui = { simp: 35, helpShow: null as string | null, alignTo: 'sel' as 'sel' | 'page', ptsOpen: false, tab: 'props', spaceDown: false, lastTest: null as null | { results: TestResult[]; doc: string | null }, exportOpts: { splitArcs: false, includeHidden: false, curveTol: 0.01, skipDims: true } as DxfOptions };
   let DL: any = null;
   // ---------- typing text: the box is in the Properties panel; the drawing changes as you type ----------
   /** The text being typed into (one undo step from first key to finishing). */
@@ -101,8 +102,9 @@ export function startUI(ed: Editor) {
   // ---------- change routing ----------
   ed.on(k => {
     if (k === 'view') { R.request(); return; }
-    if (k === 'doc') { renderAttr(); renderPane(); syncButtons(); }
-    if (k === 'sel') {
+    if (k === 'doc') { ed.state.simp = null; renderAttr(); renderPane(); syncButtons(); }
+    if (k === 'prompt' && ui.tab === 'props' && ed.state.node) renderPane();
+    if (k === 'sel') { ed.state.simp = null;
       renderAttr(); if (ui.tab === 'props') renderPane();
       if (ed.tool.id === 'select') { const st = ed.selected(); if (st.length && st.every(isText)) optsFromText(ed, st[0] as TextEntT); renderOptions(); }
     }
@@ -470,6 +472,46 @@ export function startUI(ed: Editor) {
     $('#pWeld').onclick = () => { const t = live(), w = weldShapes(textShapes(t)), n = ed.replaceWith([t], w, t).length; ed.toast(`Letters welded into ${n} outline${n === 1 ? '' : 's'}`); };
     $('#pDel').onclick = () => ed.deleteSel();
   }
+  // ---------- Simplify (fewer, smoother nodes) and point editing ----------
+  const simpTol = (v: number) => +Math.pow(10, Math.log10(2) + (Math.log10(0.02) - Math.log10(2)) * v / 100).toPrecision(2);
+  function simplifyBlock() {
+    return `<h3>Simplify</h3><p class="hint">Rebuild the line from as few smooth curves as it needs — sharp corners stay sharp.</p>
+      <div class="row"><span class="hint">Fewer nodes</span><input type="range" id="pSimp" min="0" max="100" value="${ui.simp}" style="flex:1"><span class="hint">More exact</span></div>
+      <p class="hint" id="pSimpInfo">Move the slider to see it.</p><div class="row"><button class="btn primary" id="pSimpGo" disabled>Simplify</button><button class="btn" id="pSimpNo" hidden>Cancel</button></div>`;
+  }
+  function bindSimplify() {
+    const r = document.querySelector<HTMLInputElement>('#pSimp'); if (!r) return;
+    const preview = () => {
+      ui.simp = +r.value; const tol = simpTol(ui.simp), src = ed.selected().filter(x => x.type === 'poly' || x.type === 'spline');
+      const shapes: Shape[] = [], ids: string[] = []; let before = 0, after = 0, dev = 0;
+      for (const x of src) { const sh = simplifyShape(x as Shape, tol); if (!sh) continue; ids.push(x.id); shapes.push(sh); before += (x as any).pts.length; after += (sh as any).pts.length; dev = Math.max(dev, deviation(x as Shape, sh)); }
+      ed.state.simp = { ids, shapes, tol }; R.request();
+      $('#pSimpInfo').innerHTML = `<b>${before} → ${after} nodes</b> · stays within ${fmt(Math.max(dev, 0.001), 3)} mm of the original`;
+      $<HTMLButtonElement>('#pSimpGo').disabled = !shapes.length; $('#pSimpNo').hidden = false;
+    };
+    r.oninput = preview;
+    $('#pSimpGo').onclick = () => {
+      const sp = ed.state.simp; if (!sp) return; ed.state.simp = null;
+      ed.store.change(() => { sp.ids.forEach((id: string, k: number) => ed.store.replace(id, sp.shapes[k])); }); ed.toast('Simplified — one Undo puts the old line back');
+    };
+    $('#pSimpNo').onclick = () => { ed.state.simp = null; renderPane(); R.request(); };
+  }
+  /** Point editing extras: soft drag, and the selected point made smooth / sharp / removed (keeping the shape). */
+  function nodeBlock(e: any) {
+    const nd = ed.state.node, i = nd && nd.id === e.id ? nd.sel : null;
+    const soft = `<div class="row"><label class="chk" title="Neighbouring points follow when you drag a point, fading with distance — reshape a whole side smoothly"><input type="checkbox" id="pSoft" ${ed.opt.softDrag ? 'checked' : ''}>Soft drag</label><label class="hint">reach <input type="text" id="pSoftR" value="${ed.opt.softR}" style="width:48px" class="mono"> mm</label></div>`;
+    if (!nd || nd.id !== e.id) return `<h3>Points</h3><p class="hint">${e.pts.length} points · <b>Edit points</b> to drag them.</p>` + soft;
+    return `<h3>Points</h3><p class="hint">${i == null ? 'Click a point to choose it.' : `Point ${i + 1} of ${e.pts.length}`}</p>
+      ${i != null && e.type === 'spline' ? `<div class="row"><button class="btn" id="pNSmooth" title="Handles in a straight line: the curve flows through">Smooth point</button><button class="btn" id="pNCorner" title="A crisp corner">Sharp corner</button><button class="btn" id="pNDel" title="Remove the point and refit the curve so the shape stays">Delete point</button></div>` : i != null ? '<div class="row"><button class="btn" id="pNDel">Delete point</button></div>' : ''}` + soft;
+  }
+  function bindNodes(e: any) {
+    const sc = document.querySelector<HTMLInputElement>('#pSoft'); if (sc) sc.onchange = () => { ed.opt.softDrag = sc.checked; R.request(); };
+    const sr = document.querySelector<HTMLInputElement>('#pSoftR'); if (sr) sr.onchange = () => { const v = parseLength(sr.value); if (v > 0) ed.opt.softR = v; };
+    const i = ed.state.node?.sel, live = () => ed.store.byId(e.id) as any;
+    document.querySelector<HTMLElement>('#pNSmooth')?.addEventListener('click', () => ed.store.change(() => { const x = live(), r = smoothNode(x, i); x.h = r.h; }));
+    document.querySelector<HTMLElement>('#pNCorner')?.addEventListener('click', () => ed.store.change(() => { const x = live(), r = cornerNode(x, i); x.h = r.h; }));
+    document.querySelector<HTMLElement>('#pNDel')?.addEventListener('click', () => { ed.tool.onKey?.(ed, 'Delete', { shift: false, alt: false, ctrl: false }); renderPane(); });
+  }
   /** Open the Help tab, optionally at a guide. */
   function openHelp(id: string | null = null) {
     ui.tab = 'help'; ui.helpShow = id && id !== ed.tool.id ? id : null;
@@ -521,7 +563,8 @@ export function startUI(ed: Editor) {
           <div class="row"><button class="btn" id="pGroup" title="Ctrl+G">Group</button><button class="btn" id="pUngroup" title="Ctrl+U" ${grouped ? '' : 'disabled'}>Ungroup</button><button class="btn" id="pPath" title="Join touching lines and arcs into one path (Ctrl+H)">Make path</button><button class="btn" id="pExplode" title="Ctrl+E">Explode</button><button class="btn" id="pDel">Delete</button></div>
           <p class="hint">Explode ungroups one level at a time; on paths it breaks them into lines and arcs.</p>
           <h3>Combine shapes</h3><div class="row"><button class="btn" id="bUnion" title="Join overlapping closed shapes into one outline (Ctrl+Alt+U)">Union</button><button class="btn" id="bSub" title="Cut the smaller shapes out of the largest (Ctrl+Alt+S)">Subtract</button><button class="btn" id="bInt" title="Keep only the overlap (Ctrl+Alt+I)">Intersect</button><button class="btn" id="bTidy" title="Remove duplicates and zero-size objects; join pieces that meet">Tidy</button></div>
-          <p class="hint">Subtract keeps the largest shape and cuts the others out of it. Curves stay true arcs.</p>`;
+          <p class="hint">Subtract keeps the largest shape and cuts the others out of it. Curves stay true arcs.</p>${sel.some(x => x.type === 'poly' || x.type === 'spline') ? simplifyBlock() : ''}`;
+        if (sel.some(x => x.type === 'poly' || x.type === 'spline')) bindSimplify();
         bindFields(sz.fields); bindSize(); $('#pExplode').onclick = () => ed.explodeSel(); $('#pDel').onclick = () => ed.deleteSel(); $('#pGroup').onclick = () => ed.groupSel(); $('#pUngroup').onclick = () => ed.ungroupSel(); $('#pPath').onclick = () => ed.makePathSel();
         $('#bUnion').onclick = () => ed.booleanSel('union'); $('#bSub').onclick = () => ed.booleanSel('subtract'); $('#bInt').onclick = () => ed.booleanSel('intersect'); $('#bTidy').onclick = () => ed.tidySel(); return;
       }
@@ -548,8 +591,9 @@ export function startUI(ed: Editor) {
       const mainF = F.filter(f => !ptsHtml.includes(`id="${f.id}"`));
       pane.innerHTML = `<h3>${title}</h3>
         <div class="row"><button class="btn" id="pNodes" title="Drag points; double-click a shape to do the same">${ed.state.node ? 'Finish editing points' : 'Edit points'}</button>${e.type === 'poly' ? '<button class="btn" id="pExplode" title="Ctrl+E">Explode to lines</button>' : e.type === 'spline' ? '<button class="btn" id="pExplode" title="Turn the curve into a path of short lines (Ctrl+E)">Convert to path</button>' : ''}<button class="btn" id="pDel">Delete</button></div>
-        ${mainF.length ? `<div class="grid2">${mainF.map(f => f.html).join('')}</div>` : ''}${extra}${sz.html}${ptsHtml}
+        ${mainF.length ? `<div class="grid2">${mainF.map(f => f.html).join('')}</div>` : ''}${extra}${e.type === 'poly' || e.type === 'spline' ? nodeBlock(e) + simplifyBlock() : ''}${sz.html}${ptsHtml}
         <p class="hint">Layer ${esc(ed.store.layer(e.layer)?.name || '?')} · ${colorLabel(ed.doc, e.color as ColorKey)} · ${e.w} mm</p>`;
+      if (e.type === 'poly' || e.type === 'spline') { bindSimplify(); bindNodes(e); }
       bindFields(F.concat(sz.fields)); bindSize();
       document.querySelector<HTMLElement>('#pExplode')?.addEventListener('click', () => ed.explodeSel()); $('#pDel').onclick = () => ed.deleteSel();
       document.querySelector<HTMLDetailsElement>('#pPts')?.addEventListener('toggle', ev => { ui.ptsOpen = (ev.target as HTMLDetailsElement).open; });

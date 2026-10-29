@@ -11,6 +11,7 @@ import type { Tool, PointerInfo } from '../editor/tool';
 import type { Editor } from '../editor/editor';
 import type { Entity, Shape } from '../model/types';
 import { ICONS } from './icons';
+import { softMove, deleteNodeKeepShape } from '../geometry/fitcurve';
 import { isText, flipText, slideText, textWheel, pathUnder, attachToPath, textOptions, applyOpt } from './text';
 import { anchorPoint, textShapes } from '../text/text';
 import type { TextEnt } from '../model/types';
@@ -138,10 +139,10 @@ export const selectTool: Tool = {
       if (h && e) {
         if (h.k === 'add' && e.type === 'spline') { ed.store.checkpoint(); const ns = splitSplineAt(e, h.i!); e.pts = ns.pts; e.h = ns.h; S.ndrag = { h: { k: 'v', i: h.i! + 1, p: h.p }, id: e.id, preview: null, pushed: true }; S.node.sel = h.i! + 1; }
         else if (h.k === 'add' && e.type === 'poly') { ed.store.checkpoint(); e.pts.splice(h.i! + 1, 0, cp(h.p)); if (e.bulge) e.bulge.splice(h.i! + 1, 0, 0); S.ndrag = { h: { k: 'v', i: h.i! + 1, p: h.p }, id: e.id, preview: null, pushed: true }; S.node.sel = h.i! + 1; }
-        else { S.ndrag = { h, id: e.id, preview: null }; if (h.k === 'v') S.node.sel = h.i; }
+        else { S.ndrag = { h, id: e.id, preview: null }; if (h.k === 'v') { S.node.sel = h.i; ed.changed('prompt'); } }
         return;
       }
-      const hit2 = ed.pick(raw); if (hit2 && hit2.e.id === S.node.id) { S.node.sel = null; return; }
+      const hit2 = ed.pick(raw); if (hit2 && hit2.e.id === S.node.id) { S.node.sel = null; ed.changed('prompt'); return; }
       S.node = null; ed.changed('prompt');
     }
     const hd = hitHandle(ed, info.sp);
@@ -180,7 +181,11 @@ export const selectTool: Tool = {
       S.slide.snap = slideText(ed, t, raw); ed.snapRes = null; return;
     }
     if (S.box) { S.box.b = raw; ed.snapRes = null; }
-    else if (S.ndrag) { const e = ed.store.byId(S.ndrag.id)!; ed.snapRes = ed.snapAt(raw, { exclude: new Set([e.id]), drawing: true }); S.ndrag.preview = nodeApply(e, S.ndrag.h, ed.snapRes.p, ed.mods); }
+    else if (S.ndrag) {
+      const e = ed.store.byId(S.ndrag.id)!; ed.snapRes = ed.snapAt(raw, { exclude: new Set([e.id]), drawing: true }); S.ndrag.preview = nodeApply(e, S.ndrag.h, ed.snapRes.p, ed.mods);
+      // soft drag: neighbouring points follow, fading with distance
+      if (ed.opt.softDrag && S.ndrag.h.k === 'v' && (e.type === 'poly' || e.type === 'spline')) S.ndrag.preview = softMove(e as any, S.ndrag.preview as any, S.ndrag.h.i!, sub(ed.snapRes.p, (e as any).pts[S.ndrag.h.i!]), Math.max(1, +ed.opt.softR || 20));
+    }
     else if (S.hdrag) { ed.snapRes = S.hdrag.h.k === 'rot' ? null : ed.snapAt(raw, { exclude: ed.sel, drawing: true }); S.hdrag.tx = handleTransform(ed, S.hdrag.h, S.hdrag.start, raw, info); }
     else if (S.drag) {
       ed.snapRes = ed.snapAt(raw, { exclude: ed.sel, drawing: true }); let d = sub(ed.snapRes.p, S.drag.from); S.drag.guides = [];
@@ -222,7 +227,7 @@ export const selectTool: Tool = {
     if (key === 'Enter' && ed.sel.size === 1 && !S.node) { const e = ed.selected()[0]; if (isText(e)) ed.textEditor?.(e.id, false); else enterNodeEdit(ed, e); return true; }
     if ((key === 'Delete' || key === 'Backspace') && S.node && S.node.sel != null) {
       const e = ed.store.byId(S.node.id);
-      if (e && e.type === 'spline') { const min = e.closed ? 3 : 2; if (e.pts.length <= min) { ed.toast(`A curve needs at least ${min} points`); return true; } const i = S.node.sel; ed.store.change(() => { e.pts.splice(i, 1); e.h.splice(i, 1); }); S.node.sel = null; return true; }
+      if (e && e.type === 'spline') { const min = e.closed ? 3 : 2; if (e.pts.length <= min) { ed.toast(`A curve needs at least ${min} points`); return true; } const i = S.node.sel; ed.store.change(() => { const r = deleteNodeKeepShape(e, i); e.pts = r.pts; e.h = r.h; }); S.node.sel = null; ed.changed('prompt'); return true; }
       if (e && e.type === 'poly') { const min = e.closed ? 3 : 2; if (e.pts.length <= min) { ed.toast(`A path needs at least ${min} points`); return true; } const i = S.node.sel; ed.store.change(() => { e.pts.splice(i, 1); if (e.bulge) { e.bulge.splice(i, 1); if (i > 0) e.bulge[i - 1] = 0; else if (e.closed) e.bulge[e.bulge.length - 1] = 0; } }); S.node.sel = null; return true; }
     }
     return false;
@@ -252,6 +257,10 @@ export const selectTool: Tool = {
       o.label(`Δ ${fmt(S.drag.to.x - S.drag.from.x, 3)}, ${fmt(S.drag.to.y - S.drag.from.y, 3)}`, S.drag.to); return; }
     if (S.hdrag?.tx) { o.hide(ed.sel); for (const e of ed.selected()) o.ghost(affEnt(e as Shape, S.hdrag.tx.A), 'selected'); o.label(S.hdrag.tx.label, ed.cur); return; }
     if (S.ndrag?.preview) { o.hide([S.ndrag.id]); o.ghost(S.ndrag.preview, 'selected'); }
+    if (ed.opt.softDrag && S.node) { const R = Math.max(1, +ed.opt.softR || 20), c = S.ndrag?.h?.k === 'v' ? (ed.store.byId(S.ndrag.id) as any)?.pts?.[S.ndrag.h.i] : null; if (c) o.custom((ctx, ed2, C) => { const s = ed2.w2s(c); ctx.strokeStyle = C['--accent']; ctx.setLineDash([4, 4]); ctx.lineWidth = 1; ctx.beginPath(); ctx.arc(s.x, s.y, R * ed2.view.k, 0, TAU); ctx.stroke(); ctx.setLineDash([]); }); }
+    // Simplify preview (from the Properties panel): the new curve and its few nodes
+    const sp = ed.state.simp as { ids: string[]; shapes: Shape[] } | null;
+    if (sp) { o.hide(sp.ids); for (const s of sp.shapes) o.ghost(s, 'selected'); o.custom((ctx, ed2, C) => { ctx.fillStyle = C['--sheet']; ctx.strokeStyle = C['--accent']; ctx.lineWidth = 1.5; for (const s of sp.shapes as any[]) for (const q of s.pts) { const p = ed2.w2s(q); ctx.beginPath(); ctx.arc(p.x, p.y, 4, 0, TAU); ctx.fill(); ctx.stroke(); } }); return; }
     if (S.box) o.custom((ctx, ed2, C) => {
       const a = ed2.w2s(S.box.a), b = ed2.w2s(S.box.b), crossing = S.box.b.x < S.box.a.x;
       ctx.setLineDash(crossing ? [5, 4] : []); ctx.strokeStyle = C['--accent']; ctx.lineWidth = 1; ctx.globalAlpha = .12; ctx.fillStyle = C['--accent']; ctx.fillRect(a.x, a.y, b.x - a.x, b.y - a.y); ctx.globalAlpha = 1; ctx.strokeRect(a.x, a.y, b.x - a.x, b.y - a.y); ctx.setLineDash([]);

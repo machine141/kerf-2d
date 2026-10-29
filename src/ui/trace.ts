@@ -5,7 +5,7 @@
  */
 import { trace, whyEmpty, lastLabelMap, type TraceOpts, type TraceResult, type Img } from '../trace/trace';
 import { P, fmt, parseLength, type Point } from '../geometry/vec';
-import { fitSpline } from '../geometry/spline';
+import { fitPoints } from '../geometry/fitcurve';
 import type { Editor } from '../editor/editor';
 import type { Shape } from '../model/types';
 
@@ -128,16 +128,19 @@ function build(ed: Editor, im: Pic, name: string) {
   function run() {
     clearTimeout(timer); $('#tStat').textContent = 'Tracing…';
     timer = window.setTimeout(() => {
-      const t0 = performance.now(); res = trace(img, opts());
+      const t0 = performance.now(); res = trace(img, opts()); fitCache = new WeakMap();
       if (S.auto && S.mode === 'silhouette') { S.threshold = Math.round(res.threshold); sync(); }
       const many = res.loops.length > 1500;
       const why = whyEmpty(res, opts());
-      $('#tStat').innerHTML = `${res.loops.length} outline${res.loops.length === 1 ? '' : 's'} · ${res.points} points${S.mode === 'colours' ? ` · ${res.palette.length} colours found` : ''} · ${Math.round(performance.now() - t0)} ms${many ? '<br><b>Very many pieces</b> — raise "Ignore specks", noise clean-up, or use the eraser.' : ''}${why ? `<br><b class="warn">${esc(why)}</b>` : ''}`;
+      $('#tStat').innerHTML = `${res.loops.length} outline${res.loops.length === 1 ? '' : 's'} · ${res.points} points${S.curves ? ` → ${res.loops.reduce((a, l) => a + (l.pts.length > 3 ? fitted(l).pts.length : l.pts.length), 0)} curve nodes` : ''}${S.mode === 'colours' ? ` · ${res.palette.length} colours found` : ''} · ${Math.round(performance.now() - t0)} ms${many ? '<br><b>Very many pieces</b> — raise "Ignore specks", noise clean-up, or use the eraser.' : ''}${why ? `<br><b class="warn">${esc(why)}</b>` : ''}`;
       renderPal(); draw();
     }, 90);
   }
   // ---- preview ----
   let fit = { k: 1, ox: 0, oy: 0 };
+  /** traced outline → a few smooth curves (within the Detail tolerance), kept until the next trace */
+  let fitCache = new WeakMap<object, { pts: Point[]; h: [Point, Point][] }>();
+  const fitted = (l: { pts: Point[]; closed?: boolean }) => { let f = fitCache.get(l); if (!f) { f = fitPoints(l.pts, l.closed !== false, tolFromDetail(S.detail) * 0.8, 55); fitCache.set(l, f); } return f; };
   /** zoom (1 = whole picture) and the picture point shown in the middle */
   const zv = { z: 1, cx: NaN, cy: NaN };
   function draw() {
@@ -159,7 +162,7 @@ function build(ed: Editor, im: Pic, name: string) {
       for (const l of res.loops) {
         const cl = l.closed !== false, X = (p: Point) => fit.ox + p.x * k, Y = (p: Point) => fit.oy + p.y * k;
         if (S.curves && l.pts.length > 3) {
-          const f = fitSpline(l.pts, cl), n = f.pts.length; ctx.moveTo(X(f.pts[0]), Y(f.pts[0]));
+          const f = fitted(l), n = f.pts.length; ctx.moveTo(X(f.pts[0]), Y(f.pts[0]));
           for (let i = 0; i < (cl ? n : n - 1); i++) { const j = (i + 1) % n, c1 = f.h[i][1], c2 = f.h[j][0], q = f.pts[j]; ctx.bezierCurveTo(X(c1), Y(c1), X(c2), Y(c2), X(q), Y(q)); }
           if (cl) ctx.closePath();
         } else { l.pts.forEach((p, i) => { i ? ctx.lineTo(X(p), Y(p)) : ctx.moveTo(X(p), Y(p)); }); if (cl) ctx.closePath(); }
@@ -256,7 +259,7 @@ function build(ed: Editor, im: Pic, name: string) {
     const s = S.widthMm / img.w, pg = ed.doc.page, H = img.h * s, ox = (pg.w - S.widthMm) / 2, oy = (pg.h - H) / 2;
     const shapes = res.loops.map(l => {
       const pts = l.pts.map(p => P(+(ox + p.x * s).toFixed(4), +(oy + (img.h - p.y) * s).toFixed(4))), cl = l.closed !== false;
-      if (S.curves && pts.length > 3) { const f = fitSpline(pts, cl); return { type: 'spline', pts: f.pts, h: f.h, closed: cl } as Shape; }
+      if (S.curves && pts.length > 3) { const f = fitted(l), m = (q: Point) => P(+(ox + q.x * s).toFixed(4), +(oy + (img.h - q.y) * s).toFixed(4)); return { type: 'spline', pts: f.pts.map(m), h: f.h.map(([a, b]) => [m(a), m(b)]), closed: cl } as Shape; }
       return { type: 'poly', closed: cl, pts } as Shape;
     });
     const g = 'g' + (ed.doc.seq++);
