@@ -8,7 +8,7 @@ import { openTrace } from './trace';
 import { openElements, saveSelectionAsElement } from './elements';
 import { helpHtml, GUIDES } from './help';
 import { openNest } from './nest';
-import { openHandIn, openClassLoad, openClassList } from './classroom';
+import { openHandIn, openClassLoad, openClassList, dropFiles, looksLikeClass } from './classroom';
 import { sheetDoc } from '../io/sheets';
 import { openBox } from './box';
 import { openHinge } from './hinge';
@@ -342,9 +342,12 @@ export function startUI(ed: Editor) {
   window.addEventListener('dragleave', ev => { if (!ev.relatedTarget) document.body.classList.remove('dropping'); });
   window.addEventListener('drop', ev => {
     document.body.classList.remove('dropping');
-    const all = [...(ev.dataTransfer?.files || [])], f = all[0]; if (!f) return; ev.preventDefault();
-    // several drawings dropped at once: a class's handed-in designs
-    if (all.filter(x => /\.json$/i.test(x.name)).length > 1) { openClassLoad(ed, all); return; }
+    if (![...(ev.dataTransfer?.types || [])].includes('Files') || !ev.dataTransfer) return; ev.preventDefault();
+    // a class's hand-ins: several drawings, a zip (e.g. a Teams folder download) or a whole folder
+    const isDir = [...(ev.dataTransfer.items || [])].some(i => (i as any).webkitGetAsEntry?.()?.isDirectory);
+    const pending = dropFiles(ev.dataTransfer), first = [...(ev.dataTransfer.files || [])];
+    if (isDir || looksLikeClass(first)) { pending.then(all => openClassLoad(ed, all)); return; }
+    const f = first[0]; if (!f) return;
     if (isImage(f)) openTrace(ed, f);
     else { const dt = new DataTransfer(); dt.items.add(f); const inp = $<HTMLInputElement>('#fileIn'); inp.files = dt.files; inp.dispatchEvent(new Event('change')); }
   });

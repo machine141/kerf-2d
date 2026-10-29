@@ -10,7 +10,8 @@ import { affEnt, affMove } from '../geometry/affine';
 import { bbox, unionBox } from '../geometry/entity';
 import { P } from '../geometry/vec';
 import { checkDesign, canHandIn, type Check } from '../classroom/checks';
-import { handInFile, readDesign, newestOnly, designEnts, classEntry, classCsv, type Design } from '../classroom/handin';
+import { handInFile, readDesign, newestOnly, clashes, uniqueOwners, toInitials, okInitials, toClassCode, designEnts, classEntry, classCsv, type Design } from '../classroom/handin';
+import { unzipFiles } from '../io/unzip';
 import { sheetOf } from '../io/sheets';
 import { openNest } from './nest';
 
@@ -42,17 +43,49 @@ function showEnts(ed: Editor, ids: string[]) {
 }
 
 // ---------------------------------------------------------------- pupils
+/**
+ * Where pupils are told to put their file. The teacher can set it with a link to Kerf 2D,
+ * e.g. kerf.html?handin=Upload%20it%20to%20Teams%20›%20D%26T%20›%20Files%20›%20{class}
+ * ({class} becomes the pupil's class code); the text is then remembered on that computer.
+ */
+export function handInWhere(cls: string): string {
+  let t = '';
+  try { const q = new URLSearchParams(location.search).get('handin') || new URLSearchParams(location.hash.slice(1)).get('handin'); if (q) { t = q.slice(0, 200); remember.set('handinWhere', t); } } catch { /* no location */ }
+  t = t || remember.get('handinWhere');
+  const c = cls || 'your class';
+  return t ? esc(t).replace(/\{class\}/gi, '<b>' + esc(c) + '</b>') : `Now upload it to the <b>${esc(c)}</b> folder in Teams (or wherever your teacher asked).`;
+}
+
 export function openHandIn(ed: Editor, save: Save) {
   const checks = checkDesign(ed.doc), ok = canHandIn(checks);
   const title = ed.doc.handin?.title || (ed.doc.name && ed.doc.name !== 'Untitled' ? ed.doc.name : '');
+  const ini0 = toInitials(ed.doc.handin?.name || remember.get('name')), cls0 = toClassCode(ed.doc.handin?.cls || remember.get('cls'));
   const { $, close } = dialog('Hand in your design', `
-    <label class="sl">Your name <input type="text" id="hName" autocomplete="name" value="${esc(ed.doc.handin?.name || remember.get('name'))}"></label>
-    <label class="sl">Class <input type="text" id="hCls" placeholder="e.g. 9B" value="${esc(ed.doc.handin?.cls || remember.get('cls'))}"></label>
+    <div class="hrow">
+      <label class="sl">Your initials <input type="text" id="hName" class="ini" autocomplete="off" spellcheck="false" maxlength="12" placeholder="MJ" value="${esc(ini0)}"></label>
+      <label class="sl">Class code <input type="text" id="hCls" class="ini" autocomplete="off" spellcheck="false" maxlength="12" placeholder="9B" value="${esc(cls0)}"></label>
+    </div>
     <label class="sl">Design name <input type="text" id="hTitle" placeholder="e.g. Star key ring" value="${esc(title)}"></label>
+    <p class="hint">Your file will be called <b class="mono" id="hFile"></b></p>
     <h4>Ready to cut?</h4>
     <ul class="checks">${checks.map((c, i) => `<li class="${c.level}">${mark(c.level)}<span>${esc(c.text)}</span>${c.at ? `<button type="button" class="link" data-i="${i}">Show me</button>` : ''}</li>`).join('')}</ul>
-    <p class="hint" id="hMsg">${ok ? (checks.some(c => c.level === 'warn') ? 'You can still hand it in, but fixing the <b>!</b> items first gives a better cut.' : 'All good!') : 'Fix the <b>✕</b> item before handing in.'} The file is saved to your computer: then upload it to your teacher (Teams, Google Classroom or the shared drive).</p>`,
+    <p class="hint" id="hMsg"></p>`,
     `<button class="btn" id="hCancel">Cancel</button><button class="btn primary" id="hGo" ${ok ? '' : 'disabled'}>Hand in (save file)</button>`);
+  const nameIn = $<HTMLInputElement>('#hName'), clsIn = $<HTMLInputElement>('#hCls'), titleIn = $<HTMLInputElement>('#hTitle');
+  const status = ok ? (checks.some(c => c.level === 'warn') ? 'You can still hand it in, but fixing the <b>!</b> items first gives a better cut.' : 'All good!') : 'Fix the <b>✕</b> item before handing in.';
+  // live: tidy initials and class code as they are typed, and show the file name straight away
+  const iniOf = (v: string) => /\s/.test(v.trim()) ? toInitials(v) : v.trim().toUpperCase();
+  const live = () => {
+    // capitals as they type; a full name ("Mia Jones") is turned into initials when they leave the box
+    if (!/\s/.test(nameIn.value)) { const n = nameIn.value.replace(/[^\p{L}]/gu, '').toUpperCase(); if (n !== nameIn.value) nameIn.value = n; }
+    const c = toClassCode(clsIn.value); if (clsIn.value !== c) clsIn.value = c;
+    const ini = iniOf(nameIn.value), f = handInFile(ed.doc, ini || '??', clsIn.value || '??', titleIn.value, []);
+    $('#hFile').textContent = f.filename;
+    nameIn.classList.toggle('bad', !!nameIn.value && !okInitials(ini));
+    $('#hMsg').innerHTML = `${status} The file is saved to your computer. ${handInWhere(clsIn.value)}`;
+  };
+  nameIn.oninput = live; clsIn.oninput = live; titleIn.oninput = live;
+  nameIn.onchange = () => { nameIn.value = iniOf(nameIn.value); live(); };
   $('#hCancel').onclick = close;
   document.querySelectorAll<HTMLElement>('#boxmaker .checks .link').forEach(b => b.onclick = () => {
     const c = checks[+b.dataset.i!]; if (!c.at) return; close();
@@ -60,48 +93,156 @@ export function openHandIn(ed: Editor, save: Save) {
     ed.toast('Here: ' + c.text);
   });
   $('#hGo').onclick = async () => {
-    const name = $<HTMLInputElement>('#hName').value.trim(), cls = $<HTMLInputElement>('#hCls').value.trim(), t = $<HTMLInputElement>('#hTitle').value.trim();
-    if (!name) { $('#hMsg').textContent = 'Please type your name, so your teacher knows whose it is.'; $<HTMLInputElement>('#hName').focus(); return; }
+    const name = iniOf(nameIn.value), cls = toClassCode(clsIn.value), t = titleIn.value.trim();
+    if (!okInitials(name)) { $('#hMsg').innerHTML = 'Please type your <b>two initials</b> (e.g. <b>MJ</b> for Mia Jones), so your teacher knows whose it is.'; nameIn.focus(); return; }
+    if (!cls) { $('#hMsg').innerHTML = 'Please type your <b>class code</b> (e.g. <b>9B</b>).'; clsIn.focus(); return; }
     remember.set('name', name); remember.set('cls', cls);
     const f = handInFile(ed.doc, name, cls, t, checks);
     // keep who made it with the drawing too, so a plain Save remembers it
     ed.doc.handin = JSON.parse(f.text).handin;
     await save(f.filename, f.text); close();
-    ed.toast(`Saved “${f.filename}” — now upload it to your teacher`);
+    ed.toast(`Saved “${f.filename}”. ${handInWhere(cls).replace(/<[^>]+>/g, '')}`);
   };
-  setTimeout(() => (($('#hName') as HTMLInputElement).value ? $('#hGo') : $('#hName')).focus(), 0);
+  live();
+  setTimeout(() => (nameIn.value && clsIn.value ? $('#hGo') : nameIn.value ? clsIn : nameIn).focus(), 0);
 }
 
+/** Every file in a drop, opening dropped folders (and their sub-folders). Must be called during the drop event. */
+export function dropFiles(dt: DataTransfer | null): Promise<File[]> {
+  if (!dt) return Promise.resolve([]);
+  const entries = [...(dt.items || [])].map(i => (i as any).webkitGetAsEntry?.()).filter(Boolean);
+  if (!entries.length || !entries.some((e: any) => e.isDirectory)) return Promise.resolve([...(dt.files || [])]);
+  const walk = async (e: any): Promise<File[]> => {
+    if (e.isFile) return [await new Promise<File>((res, rej) => e.file(res, rej))];
+    const rd = e.createReader(), kids: any[] = [];
+    for (;;) { const batch: any[] = await new Promise((res, rej) => rd.readEntries(res, rej)); if (!batch.length) break; kids.push(...batch); }
+    return (await Promise.all(kids.map(walk))).flat();
+  };
+  return Promise.all(entries.map(walk)).then(a => a.flat());
+}
+/** True if a list of files holds handed-in designs (several drawings, or a zip). */
+export const looksLikeClass = (fs: File[]) => fs.some(f => /\.zip$/i.test(f.name)) || fs.filter(f => /\.json$/i.test(f.name)).length > 1;
+
 // ---------------------------------------------------------------- teacher: load
+/** A folder the teacher opened (e.g. a Teams folder synced to this computer), remembered between visits. */
+const DB = 'kerf-folders';
+function idb<T>(mode: IDBTransactionMode, f: (st: IDBObjectStore) => IDBRequest<T>): Promise<T | undefined> {
+  return new Promise(res => {
+    try {
+      const o = indexedDB.open(DB, 1); o.onupgradeneeded = () => o.result.createObjectStore('h');
+      o.onsuccess = () => { try { const r = f(o.result.transaction('h', mode).objectStore('h')); r.onsuccess = () => res(r.result); r.onerror = () => res(undefined); } catch { res(undefined); } };
+      o.onerror = () => res(undefined);
+    } catch { res(undefined); }
+  });
+}
+const canOpenFolder = () => typeof (window as any).showDirectoryPicker === 'function';
+/** All .json and .zip files in a folder and its sub-folders, with their path. */
+async function folderFiles(dir: any, pre = ''): Promise<{ path: string; file: File }[]> {
+  const out: { path: string; file: File }[] = [];
+  for await (const [name, h] of dir.entries()) {
+    if (h.kind === 'directory') { if (!name.startsWith('.')) out.push(...await folderFiles(h, pre + name + '/')); }
+    else if (/\.(json|zip)$/i.test(name)) out.push({ path: pre + name, file: await h.getFile() });
+  }
+  return out;
+}
+
 export async function openClassLoad(ed: Editor, files: File[]) {
   let designs: Design[] = [];
-  const read = async (fs: File[]) => { for (const f of fs) if (/\.json$/i.test(f.name)) designs.push(readDesign(f.name, await f.text(), f.lastModified)); };
+  const seen = new Map<string, Design[]>();   // source (file or folder path + date) → its designs, so re-checking a folder only adds what changed
+  const skipped: string[] = [];
+  /** Read files (designs, or zips of designs); `key` identifies where they came from. */
+  const read = async (fs: File[], keyOf: (f: File) => string = f => 'file:' + f.name + ':' + f.lastModified + ':' + f.size) => {
+    let added = 0;
+    for (const f of fs) {
+      const key = keyOf(f), stamp = ':' + f.lastModified + ':' + f.size, base = key.endsWith(stamp) ? key.slice(0, -stamp.length) : key;
+      if (seen.has(key)) continue;
+      // a newer version of the same file (Teams/OneDrive replace it in place): drop the old reading
+      for (const [k, ds] of seen) if (k !== key && k.startsWith(base + ':')) { designs = designs.filter(d => !ds.includes(d)); seen.delete(k); }
+      const got: Design[] = [];
+      if (/\.zip$/i.test(f.name)) {
+        try { for (const z of await unzipFiles(f)) { if (/\.json$/i.test(z.name)) got.push(readDesign(z.name, await z.text(), z.lastModified)); else skipped.push(f.name + ' › ' + z.name); } }
+        catch (e: any) { got.push({ ...readDesign(f.name, '', 0), error: 'Could not open the zip: ' + (e?.message || e) }); }
+      } else if (/\.json$/i.test(f.name)) got.push(readDesign(f.name, await f.text(), f.lastModified));
+      else skipped.push(f.name);
+      seen.set(key, got); designs.push(...got); added += got.length;
+    }
+    return added;
+  };
   await read(files);
+  const folderBtns = canOpenFolder() ? `<button class="btn" id="cFolder" title="Open a folder on this computer — e.g. your Teams class folder synced with OneDrive — and keep watching it for new hand-ins">Open folder…</button>` : '';
   const { root, $, close } = dialog('Load class designs', `
-    <p class="hint">Choose all the handed-in files at once (Ctrl+A in the file box), or drop them on this window. The newest file from each pupil is used. Designs are added beside the sheet, then Nest packs them onto as many sheets as needed.</p>
-    <div class="ctable"><table><thead><tr><th></th><th>Name</th><th>Class</th><th>Design</th><th>Checks</th></tr></thead><tbody id="cRows"></tbody></table></div>`,
-    `<p class="hint" id="cSum"></p><button class="btn" id="cMore">Add files…</button><input type="file" id="cFiles" accept=".json" multiple hidden><button class="btn" id="cCancel">Cancel</button><button class="btn primary" id="cGo">Add and nest</button>`, true);
+    <p class="hint">Choose the handed-in files, or the <b>.zip</b> that Teams gives you when you download a whole folder, or drop files, zips or a folder on this window.${canOpenFolder() ? ' Or <b>Open folder</b> (e.g. your Teams folder synced to this computer): new hand-ins then appear here by themselves.' : ''} The newest file from each pupil is used, then Nest packs them onto as many sheets as needed.</p>
+    <p class="hint" id="cWatch" hidden></p>
+    <div class="ctable"><table><thead><tr><th></th><th>Initials</th><th>Class</th><th>Design</th><th>Checks</th></tr></thead><tbody id="cRows"></tbody></table></div>`,
+    `<p class="hint" id="cSum"></p>${folderBtns}<button class="btn" id="cMore">Add files…</button><input type="file" id="cFiles" accept=".json,.zip" multiple hidden><button class="btn" id="cCancel">Cancel</button><button class="btn primary" id="cGo">Add and nest</button>`, true);
   const on = new Set<Design>();
   const resetOn = () => { on.clear(); for (const d of newestOnly(designs)) if (!d.error && canHandIn(d.checks)) on.add(d); };
+  /** After re-checking a folder: keep the teacher's ticks, tick what is new, untick what was replaced. */
+  const mergeOn = (before: Set<Design>) => { const now = newestOnly(designs); for (const d of [...on]) if (!now.has(d)) on.delete(d); for (const d of now) if (!before.has(d) && !d.error && canHandIn(d.checks)) on.add(d); };
   const render = () => {
-    const newest = newestOnly(designs), sorted = designs.slice().sort((a, b) => (a.cls + a.name).localeCompare(b.cls + b.name));
+    const newest = newestOnly(designs), clash = clashes(designs), sorted = designs.slice().sort((a, b) => (a.cls + a.name + a.title).localeCompare(b.cls + b.name + b.title));
     $('#cRows').innerHTML = sorted.map(d => {
       const i = designs.indexOf(d), warn = d.checks.filter(c => c.level === 'warn'), stop = d.checks.filter(c => c.level === 'stop');
       const note = d.error ? `<span class="stop">${esc(d.error)}</span>` : stop.length ? `${mark('stop')} ${esc(stop[0].text)}` : warn.length ? `<span title="${esc(warn.map(c => c.text).join('\n'))}">${mark('warn')} ${warn.length} to look at: ${esc(warn[0].text.split(/[.—(]/)[0])}…</span>` : mark('ok') + ' Ready';
-      return `<tr class="${newest.has(d) ? '' : 'old'}"><td><input type="checkbox" data-i="${i}" ${on.has(d) ? 'checked' : ''} ${d.error ? 'disabled' : ''}></td><td>${esc(d.name)}${newest.has(d) || d.error ? '' : ' <i>(older copy)</i>'}</td><td>${esc(d.cls)}</td><td>${esc(d.title)}</td><td>${note}</td></tr>`;
+      const twin = newest.has(d) && clash.has(d.owner.toLowerCase()) ? ` <span class="warn" title="More than one design from ${esc(d.owner)}: two pupils with the same initials, or one pupil who renamed their design. Untick any you don't want.">⚠ same initials</span>` : '';
+      return `<tr class="${newest.has(d) ? '' : 'old'}"><td><input type="checkbox" data-i="${i}" ${on.has(d) ? 'checked' : ''} ${d.error ? 'disabled' : ''}></td><td>${esc(d.name)}${newest.has(d) || d.error ? '' : ' <i>(older copy)</i>'}${twin}</td><td>${esc(d.cls)}</td><td>${esc(d.title)}</td><td>${note}</td></tr>`;
     }).join('') || '<tr><td colspan="5" class="hint">No files yet — press Add files…</td></tr>';
     root.querySelectorAll<HTMLInputElement>('#cRows input').forEach(c => c.onchange = () => { const d = designs[+c.dataset.i!]; if (c.checked) on.add(d); else on.delete(d); sum(); });
     sum();
   };
-  const sum = () => { const n = on.size, pupils = new Set(designs.filter(d => !d.error).map(d => d.owner.toLowerCase())).size; $('#cSum').textContent = `${designs.length} file${designs.length === 1 ? '' : 's'} · ${pupils} pupil${pupils === 1 ? '' : 's'} · ${n} chosen`; ($('#cGo') as HTMLButtonElement).disabled = !n; ($('#cGo') as HTMLElement).textContent = `Add ${n} and nest`; };
+  const sum = () => {
+    const n = on.size, cur = newestOnly(designs).size, files = designs.length;
+    $('#cSum').textContent = `${files} file${files === 1 ? '' : 's'} · ${cur} design${cur === 1 ? '' : 's'} · ${n} chosen` + (skipped.length ? ` · ${skipped.length} other file${skipped.length === 1 ? '' : 's'} skipped` : '');
+    $('#cSum').title = skipped.length ? 'Skipped (not Kerf 2D designs):\n' + skipped.slice(0, 30).join('\n') : '';
+    ($('#cGo') as HTMLButtonElement).disabled = !n; ($('#cGo') as HTMLElement).textContent = `Add ${n} and nest`;
+  };
   const addFiles = async (fs: File[]) => { await read(fs); resetOn(); render(); };
   $('#cMore').onclick = () => $('#cFiles').click();
   $<HTMLInputElement>('#cFiles').onchange = e => { const inp = e.target as HTMLInputElement; const fs = [...(inp.files || [])]; inp.value = ''; addFiles(fs); };
   root.addEventListener('dragover', e => { e.preventDefault(); e.stopPropagation(); });
-  root.addEventListener('drop', e => { e.preventDefault(); e.stopPropagation(); document.body.classList.remove('dropping'); addFiles([...(e.dataTransfer?.files || [])]); });
-  $('#cCancel').onclick = close;
+  root.addEventListener('drop', e => { e.preventDefault(); e.stopPropagation(); document.body.classList.remove('dropping'); dropFiles(e.dataTransfer).then(addFiles); });
+
+  // ---- a watched folder (Chrome / Edge): re-read every 10 s while this window is open, and on "Check now"
+  let dir: any = null, timer = 0, busy = false;
+  const check = async (quiet = false) => {
+    if (!dir || busy) return; busy = true;
+    try {
+      const before = new Set(newestOnly(designs)), list = await folderFiles(dir), byFile = new Map(list.map(x => [x.file, x.path]));
+      const added = await read(list.map(x => x.file), f => 'dir:' + byFile.get(f) + ':' + f.lastModified + ':' + f.size);
+      // files deleted from the folder disappear here too
+      const live = new Set(list.map(x => 'dir:' + x.path + ':' + x.file.lastModified + ':' + x.file.size));
+      for (const [k, ds] of seen) if (k.startsWith('dir:') && !live.has(k)) { designs = designs.filter(d => !ds.includes(d)); seen.delete(k); }
+      mergeOn(before); render();
+      $('#cWatch').innerHTML = `Watching <b>${esc(dir.name)}</b> · checked ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}${added ? ` · <b>${added} new</b>` : ''} <button type="button" class="link" id="cCheck">Check now</button>`;
+      $('#cCheck').onclick = () => check();
+      if (added && !quiet) ed.toast(`${added} new design${added === 1 ? '' : 's'} in ${dir.name}`);
+    } catch (e: any) { $('#cWatch').innerHTML = `<span class="stop">Can't read ${esc(dir?.name || 'the folder')}: ${esc(e?.message || e)}</span>`; }
+    finally { busy = false; }
+  };
+  const watch = async (h: any) => {
+    dir = h; $('#cWatch').hidden = false; await idb('readwrite', st => st.put(h, 'class'));
+    await check(true); clearInterval(timer); timer = window.setInterval(() => { if (!root.isConnected) clearInterval(timer); else check(); }, 10000);
+  };
+  if (canOpenFolder()) {
+    $('#cFolder').onclick = async () => {
+      try { await watch(await (window as any).showDirectoryPicker({ id: 'kerf-class', mode: 'read' })); }
+      catch (e: any) { if (e?.name !== 'AbortError') ed.toast('Could not open the folder: ' + (e?.message || e)); }
+    };
+    // offer the folder used last time (the browser asks once more before reading it)
+    const last: any = await idb('readonly', st => st.get('class'));
+    if (last && root.isConnected) {
+      $('#cWatch').hidden = false;
+      $('#cWatch').innerHTML = `Last time: <b>${esc(last.name)}</b> <button type="button" class="btn" id="cReopen">Open ${esc(last.name)} again</button>`;
+      $('#cReopen').onclick = async () => {
+        try { if ((await last.requestPermission?.({ mode: 'read' })) === 'denied') throw new Error('permission refused'); await watch(last); }
+        catch (e: any) { ed.toast('Could not open ' + last.name + ': ' + (e?.message || e) + ' — use Open folder…'); }
+      };
+    }
+  }
+  $('#cCancel').onclick = () => { clearInterval(timer); close(); };
   $('#cGo').onclick = () => {
-    const chosen = designs.filter(d => on.has(d)); if (!chosen.length) return;
+    const chosen = uniqueOwners(designs.filter(d => on.has(d))); if (!chosen.length) return;
+    clearInterval(timer);
     const ids = addDesigns(ed, chosen); close();
     ed.toast(`Added ${chosen.length} design${chosen.length > 1 ? 's' : ''} — now nesting them`);
     ed.setSelection(ids); openNest(ed, { classMode: true });

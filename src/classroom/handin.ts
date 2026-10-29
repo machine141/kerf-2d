@@ -6,6 +6,16 @@ import { checkDesign, type Check } from './checks';
 const clean = (t: string) => t.replace(/[\\/:*?"<>|]+/g, '').replace(/\s+/g, ' ').trim();
 export const ownerName = (name: string, cls: string) => clean(name) + (clean(cls) ? ' · ' + clean(cls) : '');
 
+/** Two capital letters from whatever a pupil typed: "mj" → "MJ", "Mia Jones" → "MJ", "Mia van Dijk" → "MD". */
+export function toInitials(t: string): string {
+  const words = String(t || '').trim().split(/[\s.]+/).map(w => w.replace(/[^\p{L}]/gu, '')).filter(Boolean);
+  if (words.length >= 2) return (words[0][0] + words[words.length - 1][0]).toUpperCase();
+  return (words[0] || '').slice(0, 2).toUpperCase();
+}
+export const okInitials = (t: string) => /^\p{L}{2}$/u.test(t);
+/** Class codes are written in capitals without spaces: " 9b " → "9B", "10 dt2" → "10DT2". */
+export const toClassCode = (t: string) => String(t || '').replace(/[^\p{L}\p{N}\-]/gu, '').toUpperCase().slice(0, 12);
+
 /** The file a pupil hands in: their drawing plus who made it and what the checks said. */
 export function handInFile(doc: Doc, name: string, cls: string, title: string, checks: Check[]): { filename: string; text: string } {
   const d: Doc = JSON.parse(JSON.stringify(doc));
@@ -30,11 +40,27 @@ export function readDesign(file: string, text: string, modified = 0): Design {
     return { file, doc: null as any, name: base, cls: '', title: '', at: '', checks: [], owner: base, error: 'Could not read: ' + (e?.message || e) };
   }
 }
-/** The newest file for each pupil wins; older copies are marked. */
+/**
+ * The newest file for each pupil and design wins; older copies are marked.
+ * Initials can clash ("MJ · 9B" may be two pupils), so the same initials with a *different*
+ * design are kept as separate designs (see `clashes`); the same initials and design keep the newest.
+ */
+const designKey = (d: Design) => d.owner.toLowerCase() + '\u0000' + clean(d.title).toLowerCase();
 export function newestOnly(ds: Design[]): Set<Design> {
   const best = new Map<string, Design>();
-  for (const d of ds) { if (d.error) continue; const k = d.owner.toLowerCase(), b = best.get(k); if (!b || d.at > b.at) best.set(k, d); }
+  for (const d of ds) { if (d.error) continue; const k = designKey(d), b = best.get(k); if (!b || d.at > b.at) best.set(k, d); }
   return new Set(best.values());
+}
+/** Owners ("MJ · 9B") with more than one current design: two pupils with the same initials, or one pupil who renamed a design. */
+export function clashes(ds: Design[]): Set<string> {
+  const n = new Map<string, number>();
+  for (const d of newestOnly(ds)) n.set(d.owner.toLowerCase(), (n.get(d.owner.toLowerCase()) || 0) + 1);
+  return new Set([...n].filter(([, c]) => c > 1).map(([k]) => k));
+}
+/** Chosen designs with owners made unique for the worksheet: a clash becomes "MJ · 9B · Star" and "MJ · 9B · Moon". */
+export function uniqueOwners(chosen: Design[]): Design[] {
+  const n = new Map<string, number>(); for (const d of chosen) n.set(d.owner.toLowerCase(), (n.get(d.owner.toLowerCase()) || 0) + 1);
+  return chosen.map(d => (n.get(d.owner.toLowerCase())! > 1 ? { ...d, owner: d.owner + ' · ' + (clean(d.title) || d.file) } : d));
 }
 /** The objects of a design that go on the worksheet (visible layers, no dimensions). */
 export function designEnts(d: Design): Entity[] {
