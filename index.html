@@ -102,6 +102,21 @@ header{grid-area:head;display:flex;align-items:center;gap:12px;padding-block:8px
 .grid2 input[type=text],.grid2 select{width:100%;min-width:0;background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:3px 6px;font-family:var(--f-mono);font-size:12px}
 .row{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
 .chk{display:flex;align-items:center;gap:4px;font-size:12px}
+/* on/off switch (a checkbox styled as a toggle) */
+.tog{display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer}
+.tog input{appearance:none;-webkit-appearance:none;width:34px;height:20px;border-radius:10px;background:var(--line);position:relative;margin:0;cursor:pointer;transition:background .15s;flex:none}
+.tog input::after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.3);transition:left .15s}
+.tog input:checked{background:var(--accent)}
+.tog input:checked::after{left:16px}
+.tog input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+#lxSum{flex-basis:100%;font-size:12.5px;line-height:1.5}
+#lxSum .ok{color:#1a7f37;font-weight:600}
+#lxSum .bad{color:#c62828;font-weight:600}
+#lxSum table{border-collapse:collapse;margin:6px 0}
+#lxSum td{padding:2px 8px 2px 0;vertical-align:middle}
+#lxSum .sw{display:inline-block;width:12px;height:12px;border-radius:2px;border:1px solid rgba(0,0,0,.25);vertical-align:-2px;margin-right:4px}
+#lxSum details{margin-top:4px}
+#lxSum ol{margin:4px 0 0 18px;padding:0}
 .hint{color:var(--muted);font-size:12px;line-height:1.5;margin:0}
 .layer{display:grid;grid-template-columns:auto minmax(0,1fr) auto auto auto;gap:6px;align-items:center;padding:4px 6px;border-radius:5px}
 .layer.cur{background:var(--panel-2)}
@@ -406,7 +421,7 @@ body.dropping #main{outline:3px dashed var(--accent);outline-offset:-6px}
 </head>
 <body>
 <header>
-  <div class="brand"><b>Kerf 2D</b><span>precision drafting · v1.3</span></div>
+  <div class="brand"><b>Kerf 2D</b><span>precision drafting · v1.4</span></div>
   <input id="docName" aria-label="Drawing name" value="Glasses front">
   <div class="actions">
     <button class="btn" id="bNew">New</button>
@@ -431,6 +446,7 @@ body.dropping #main{outline:3px dashed var(--accent);outline-offset:-6px}
     <button class="btn" id="bRedo" title="Redo (Ctrl+Y)">Redo</button>
     <button class="btn" id="bFit" title="Zoom to page (F)">Fit page</button>
     <button class="btn" id="bHelp" title="How to use the tool you have picked, with pictures">? Help</button>
+    <button class="btn primary" id="bLaser" title="Export in a good cut order with LightBurn's layer colours">Export for laser</button>
     <button class="btn primary" id="bSvg">Export SVG</button>
     <button class="btn primary" id="bDxf">Export DXF</button>
  <input type="file" id="classIn" accept=".json,.zip" multiple hidden>
