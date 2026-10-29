@@ -17,7 +17,7 @@ describe('Hinge brush', () => {
     for (const s of a.slits) expect(Math.abs(dir(s).x)).toBeLessThan(0.05);           // across the stroke (vertical)
     for (const p of allPts(a.slits)) { expect(p.y).toBeGreaterThan(set.edge - 0.01); expect(p.y).toBeLessThan(60 - set.edge + 0.01); }
     // rows a pitch apart
-    const xs = [...new Set(a.slits.map(s => +s[0].x.toFixed(2)))].sort((p, q) => p - q);
+    const xs = [...new Set(a.slits.map(s => Math.round(s[0].x * 4) / 4))].sort((p, q) => p - q);
     expect(xs[1] - xs[0]).toBeCloseTo(set.pitch, 1);
   });
   it('paint outside the part makes no slits', () => {

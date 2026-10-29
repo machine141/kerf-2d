@@ -4,12 +4,13 @@
  * the picture (drag to remove flakes and background; Alt-drag restores).
  */
 import { trace, whyEmpty, lastLabelMap, type TraceOpts, type TraceResult, type Img } from '../trace/trace';
-import { P, fmt } from '../geometry/vec';
+import { P, fmt, parseLength, type Point } from '../geometry/vec';
+import { fitSpline } from '../geometry/spline';
 import type { Editor } from '../editor/editor';
 import type { Shape } from '../model/types';
 
-interface Settings { mode: 'silhouette' | 'colours'; threshold: number; auto: boolean; invert: boolean; flatten: boolean; fillHoles: boolean; colours: number; merge: boolean; clean: number; smooth: number; detail: number; speckMm: number; widthMm: number; res: number; showImg: boolean; brush: number }
-const DEFAULTS: Settings = { mode: 'silhouette', threshold: 128, auto: true, invert: false, flatten: false, fillHoles: false, colours: 4, merge: false, clean: 1, smooth: 2, detail: 6, speckMm: 1, widthMm: 100, res: 800, showImg: true, brush: 12 };
+interface Settings { mode: 'silhouette' | 'colours'; threshold: number; auto: boolean; invert: boolean; flatten: boolean; fillHoles: boolean; colours: number; merge: boolean; clean: number; smooth: number; detail: number; speckMm: number; widthMm: number; res: number; showImg: boolean; brush: number; curves: boolean }
+const DEFAULTS: Settings = { mode: 'silhouette', threshold: 128, auto: true, invert: false, flatten: false, fillHoles: false, colours: 4, merge: false, clean: 1, smooth: 2, detail: 6, speckMm: 1, widthMm: 100, res: 800, showImg: true, brush: 12, curves: true };
 const S: Settings = { ...DEFAULTS };
 
 const esc = (s: string) => s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' } as any)[c]);
@@ -48,7 +49,7 @@ function build(ed: Editor, im: Pic, name: string) {
   root.innerHTML = `<div class="box" role="dialog" aria-modal="true" aria-labelledby="tTitle">
     <div class="head"><strong id="tTitle">Trace image · ${esc(name)}</strong><button class="x" id="tClose" aria-label="Close">✕</button></div>
     <div class="body">
-      <div class="view"><canvas id="tCv" aria-label="Trace preview"></canvas><div class="vbar"><span class="segc" role="group" aria-label="Brush"><button type="button" id="tErase" aria-pressed="false" title="Drag to remove flakes, detail or background · Alt-drag restores · wheel = brush size">Erase</button><button type="button" id="tFillB" aria-pressed="false" title="Drag to paint solid shape — fills holes and gaps (Colours: paints the colour where you start) · Alt-drag restores · wheel = brush size">Fill</button></span><span class="hint" id="tBrush"></span><button class="btn" id="tClear" title="Remove all erase and fill painting">Clear brush</button>
+      <div class="view"><canvas id="tCv" aria-label="Trace preview"></canvas><div class="vbar"><span class="segc" role="group" aria-label="Brush"><button type="button" id="tErase" aria-pressed="false" title="Drag to remove flakes, detail or background · Alt-drag restores · wheel = brush size">Erase</button><button type="button" id="tFillB" aria-pressed="false" title="Drag to paint solid shape — fills holes and gaps (Colours: paints the colour where you start) · Alt-drag restores · wheel = brush size">Fill</button></span><label class="hint bsz">Brush size <input type="text" id="tBrush" class="mono" inputmode="decimal" style="width:52px"> mm</label><button class="btn" id="tClear" title="Remove all erase and fill painting">Clear brush</button>
         <label class="chk">Line <select id="tLine"><option value="#ff1493">Pink</option><option value="#00b4d8">Cyan</option><option value="#ff7a00">Orange</option><option value="#12b886">Green</option><option value="#000000">Black</option></select></label><label class="chk"><input type="checkbox" id="tShow">Show picture</label></div></div>
       <div class="ctl">
         <div class="row"><button class="btn" id="tUndo" title="Undo (Ctrl/Cmd+Z)">Undo</button><button class="btn" id="tRedo" title="Redo (Ctrl/Cmd+Y)">Redo</button><button class="btn" id="tReset" title="Back to the starting settings and clear erasing">Reset</button></div>
@@ -69,6 +70,7 @@ function build(ed: Editor, im: Pic, name: string) {
         <label class="sl">Ignore specks under <input type="text" id="tSpeck" class="mono" inputmode="decimal"> mm</label>
         <label class="sl">Detail <input type="range" id="tDet" min="1" max="10"><output id="tDetO"></output></label>
         <label class="sl">Smoothness <input type="range" id="tSm" min="0" max="4"><output id="tSmO"></output></label>
+        <label class="chk" title="Lines become smooth curves (sharp corners stay sharp). Untick for straight-line segments."><input type="checkbox" id="tCurves">Smooth curves</label>
         <label class="sl">Width <input type="text" id="tW" class="mono" inputmode="decimal"> mm <span class="hint" id="tH"></span></label>
         <label class="sl">Working size <select id="tRes"><option value="400">400 px (fast)</option><option value="800">800 px</option><option value="1200">1200 px (fine)</option></select></label>
         <p class="stat" id="tStat">Tracing…</p>
@@ -150,11 +152,18 @@ function build(ed: Editor, im: Pic, name: string) {
     }
     if (res) {
       ctx.beginPath();
-      for (const l of res.loops) { l.pts.forEach((p, i) => { const X = fit.ox + p.x * k, Y = fit.oy + p.y * k; i ? ctx.lineTo(X, Y) : ctx.moveTo(X, Y); }); if (l.closed !== false) ctx.closePath(); }
+      for (const l of res.loops) {
+        const cl = l.closed !== false, X = (p: Point) => fit.ox + p.x * k, Y = (p: Point) => fit.oy + p.y * k;
+        if (S.curves && l.pts.length > 3) {
+          const f = fitSpline(l.pts, cl), n = f.pts.length; ctx.moveTo(X(f.pts[0]), Y(f.pts[0]));
+          for (let i = 0; i < (cl ? n : n - 1); i++) { const j = (i + 1) % n, c1 = f.h[i][1], c2 = f.h[j][0], q = f.pts[j]; ctx.bezierCurveTo(X(c1), Y(c1), X(c2), Y(c2), X(q), Y(q)); }
+          if (cl) ctx.closePath();
+        } else { l.pts.forEach((p, i) => { i ? ctx.lineTo(X(p), Y(p)) : ctx.moveTo(X(p), Y(p)); }); if (cl) ctx.closePath(); }
+      }
       ctx.lineJoin = 'round'; ctx.strokeStyle = lineCol === '#000000' ? '#ffffff' : 'rgba(255,255,255,.9)'; ctx.lineWidth = 4; ctx.stroke();
       ctx.strokeStyle = lineCol; ctx.lineWidth = 1.8; ctx.stroke();
     }
-    $('#tBrush').textContent = `brush ${fmt(S.brush / pxPerMm(), 1)} mm`;
+    const bi = $<HTMLInputElement>('#tBrush'); if (document.activeElement !== bi) bi.value = fmt(S.brush / pxPerMm(), 1);
   }
   const toImg = (ev: PointerEvent | WheelEvent) => { const r = cv.getBoundingClientRect(); return P((ev.clientX - r.left - fit.ox) / fit.k, (ev.clientY - r.top - fit.oy) / fit.k); };
   function paint(ev: PointerEvent) {
@@ -196,7 +205,7 @@ function build(ed: Editor, im: Pic, name: string) {
     $('#tSil').hidden = S.mode !== 'silhouette'; $('#tCol').hidden = S.mode !== 'colours';
     const set = (id: string, v: any) => { const el = $<HTMLInputElement>(id); if (el.type === 'checkbox') el.checked = !!v; else if (document.activeElement !== el) el.value = String(v); };
     set('#tTh', S.threshold); $('#tThO').textContent = S.auto ? `${S.threshold} (auto)` : String(S.threshold);
-    set('#tAuto', S.auto); set('#tInv', S.invert); set('#tFlat', S.flatten); set('#tFill', S.fillHoles); set('#tMerge', S.merge); set('#tShow', S.showImg);
+    set('#tAuto', S.auto); set('#tInv', S.invert); set('#tFlat', S.flatten); set('#tFill', S.fillHoles); set('#tMerge', S.merge); set('#tShow', S.showImg); set('#tCurves', S.curves);
     set('#tK', S.colours); $('#tKO').textContent = String(S.colours);
     set('#tClean', S.clean); $('#tCleanO').textContent = String(S.clean);
     set('#tDet', S.detail); $('#tDetO').textContent = `${S.detail} · ±${fmt(tolFromDetail(S.detail) / pxPerMm(), 2)} mm`;
@@ -215,6 +224,9 @@ function build(ed: Editor, im: Pic, name: string) {
   bind('#tW', e => { const v = parseFloat(e.value); if (v > 0) { S.widthMm = Math.min(3000, Math.max(5, v)); if (v < 5) ed.toast('Smallest width is 5 mm'); } }, 'change');
   $<HTMLSelectElement>('#tRes').onchange = e => { S.res = +(e.target as HTMLSelectElement).value; load(); sync(); run(); commit(true); };
   $<HTMLInputElement>('#tShow').onchange = e => { S.showImg = (e.target as HTMLInputElement).checked; draw(); };
+  $<HTMLInputElement>('#tCurves').onchange = e => { S.curves = (e.target as HTMLInputElement).checked; draw(); };
+  // brush size: type it (mm), or roll the wheel over the picture while Erase / Fill is on
+  $<HTMLInputElement>('#tBrush').onchange = e => { const v = parseLength((e.target as HTMLInputElement).value); if (v > 0) S.brush = Math.max(1, Math.min(200, Math.round(v * pxPerMm()))); draw(); };
   const setBrush = (b: typeof brush) => { brush = brush === b ? 'off' : b; $('#tErase').setAttribute('aria-pressed', String(brush === 'erase')); $('#tFillB').setAttribute('aria-pressed', String(brush === 'fill')); cv.style.cursor = erasing() ? 'crosshair' : ''; draw(); };
   $('#tErase').onclick = () => setBrush('erase'); $('#tFillB').onclick = () => setBrush('fill');
   $<HTMLSelectElement>('#tLine').onchange = e => { lineCol = (e.target as HTMLSelectElement).value; draw(); };
@@ -225,7 +237,11 @@ function build(ed: Editor, im: Pic, name: string) {
   $('#tPlace').onclick = () => {
     if (!res || !res.loops.length) { ed.toast('Nothing traced yet'); return; }
     const s = S.widthMm / img.w, pg = ed.doc.page, H = img.h * s, ox = (pg.w - S.widthMm) / 2, oy = (pg.h - H) / 2;
-    const shapes = res.loops.map(l => ({ type: 'poly', closed: l.closed !== false, pts: l.pts.map(p => P(+(ox + p.x * s).toFixed(4), +(oy + (img.h - p.y) * s).toFixed(4))) }) as Shape);
+    const shapes = res.loops.map(l => {
+      const pts = l.pts.map(p => P(+(ox + p.x * s).toFixed(4), +(oy + (img.h - p.y) * s).toFixed(4))), cl = l.closed !== false;
+      if (S.curves && pts.length > 3) { const f = fitSpline(pts, cl); return { type: 'spline', pts: f.pts, h: f.h, closed: cl } as Shape; }
+      return { type: 'poly', closed: cl, pts } as Shape;
+    });
     const g = 'g' + (ed.doc.seq++);
     const ids = ed.store.change(() => shapes.map(sh => { const e = ed.store.add(sh); if (shapes.length > 1) e.group = [g]; return e.id; }));
     ed.setSelection(ids); close();

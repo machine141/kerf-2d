@@ -55,14 +55,16 @@ export interface Doc {
   ents: Entity[];
   /** Hinge brush: painted areas, in the order they were made (not exported; turned into slits by Make cuts) */
   hinge?: HingeMark[];
+  /** Make cuts has been used: changes to the painted areas rebuild the slits straight away */
+  hingeMade?: boolean;
 }
 /** Hinge brush pattern: each has its own pastel colour. */
 export type HingePattern = 'straight' | 'wavy' | 'rings' | 'spokes' | 'fold';
 /** One painted area: a brush stroke, a fold line, a clicked area, or an eraser stroke. */
 export type HingeMark =
-  | { kind: 'brush'; pattern: HingePattern; pts: Point[]; r: number; over?: boolean; c?: Point }
-  | { kind: 'fold'; pattern: HingePattern; a: Point; b: Point; w: number; over?: boolean; c?: Point }
-  | { kind: 'area'; pattern: HingePattern; pts: Point[]; at?: Point; over?: boolean; c?: Point }
+  | { kind: 'brush'; pattern: HingePattern; pts: Point[]; r: number; over?: boolean; c?: Point; angle?: number; follow?: boolean }
+  | { kind: 'fold'; pattern: HingePattern; a: Point; b: Point; w: number; over?: boolean; c?: Point; angle?: number }
+  | { kind: 'area'; pattern: HingePattern; pts: Point[]; at?: Point; over?: boolean; c?: Point; angle?: number }
   | { kind: 'erase'; pts: Point[]; r: number };
 
 export const COLORS: Record<ColorKey, { label: string; hex: string; aci: number; tok: string }> = {

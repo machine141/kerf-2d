@@ -39,7 +39,7 @@ export const BRUSH_DEFAULTS: BrushSettings = { pitch: 2.5, slit: 15, bridge: 3, 
 /** What the painting is checked against: every drawn line (kept clear of) and the closed outlines (the part). */
 export interface HingeEnv { lines: { pts: Point[]; closed: boolean }[] }
 
-export interface HingeArea { index: number; pattern: HingePattern; mask: Point[][]; slits: Point[][]; arrow: { p: Point; d: Point } | null; centre?: Point }
+export interface HingeArea { index: number; marks: number[]; angle?: number; pattern: HingePattern; mask: Point[][]; slits: Point[][]; arrow: { p: Point; d: Point } | null; centre?: Point }
 
 // ---------------- clipper helpers ----------------
 function offsetOpen(paths: Point[][], d: number, end: number): IP[] {
@@ -95,7 +95,7 @@ function insidePart(mask: IP[], closed: IP[], holes: IP[] = [], at?: Point): IP[
   const visit = (node: any) => {
     for (const outer of node.Childs()) {
       const ct = outer.Contour() as IP, q = ct[0];
-      const inside = at ? L.Clipper.PointInPolygon(toI([at])[0], ct) === 1 && !outer.Childs().some((h: any) => L.Clipper.PointInPolygon(toI([at])[0], h.Contour()) === 1)
+      const inside = at ? L.Clipper.PointInPolygon(toI([at])[0], ct) === 1 && !outer.Childs().some((h: any) => L.Clipper.PointInPolygon(toI([at])[0], h.Contour()) === 1) && closed.some(cp => L.Clipper.PointInPolygon(q, cp) !== 0)
         : closed.some(cp => L.Clipper.PointInPolygon(q, cp) !== 0) && !holes.some(h => L.Clipper.PointInPolygon(q, h) !== 0);
       if (inside) { out.push(ct); for (const hole of outer.Childs()) { out.push(hole.Contour()); visit(hole); } }
       else for (const hole of outer.Childs()) visit(hole);
@@ -153,12 +153,7 @@ function rowsFor(m: Exclude<HingeMark, { kind: 'erase' }>, mask: Point[][], set:
     for (let k = 0; k < n; k++) { const a = 2 * Math.PI * k / n, d = P(Math.cos(a), Math.sin(a)); rows.push({ pts: [add(centre, mul(d, Math.max(0, rmin - 1))), add(centre, mul(d, rmax + 1))], u0: Math.max(0, rmin - 1), odd: k % 2 === 1, P: Pd, D: set.slit }); }
     const c = centroid(mask), rd = unit(sub(c, centre)); return { rows, arrow: { p: c, d: P(-rd.y, rd.x) } };
   }
-  if (m.kind === 'fold') {
-    const d = unit(sub(m.b, m.a)), n = P(-d.y, d.x), K = Math.ceil((m.w / 2) / pitch) + 1, ext = m.w + 2, Lab = dist(m.a, m.b);
-    for (let k = -K; k <= K; k++) rows.push({ pts: [add(add(m.a, mul(d, -ext)), mul(n, k * pitch)), add(add(m.a, mul(d, Lab + ext)), mul(n, k * pitch))], u0: -ext, odd: (k & 1) === 1, P: Pd, D: set.slit });
-    return { rows, arrow: { p: mul(add(m.a, m.b), 0.5), d: n } };
-  }
-  if (m.kind === 'brush' && m.pts.length > 1) {
+  if (m.kind === 'brush' && m.follow && m.pts.length > 1) {
     const st = smooth(m.pts), s = cum(st), T = s[s.length - 1];
     if (T >= pitch) {
       const R = m.r + 1;
@@ -182,14 +177,20 @@ function rowsFor(m: Exclude<HingeMark, { kind: 'erase' }>, mask: Point[][], set:
       return { rows, arrow: { p: mid, d: unit(sub(b, a)) } };
     }
   }
-  // clicked area (or a dot): rows across the area's long direction, so it bends along its length
-  const c = centroid(mask); let sxx = 0, syy = 0, sxy = 0;
-  for (const q of all) { const dx = q.x - c.x, dy = q.y - c.y; sxx += dx * dx; syy += dy * dy; sxy += dx * dy; }
-  const ang = 0.5 * Math.atan2(2 * sxy, sxx - syy), e1 = P(Math.cos(ang), Math.sin(ang)), e2 = P(-e1.y, e1.x);
+  // one direction for the whole area: the angle chosen, the fold line's, or across the area's long direction
+  const th = (m.angle ?? (m.kind === 'fold' ? Math.atan2(m.b.y - m.a.y, m.b.x - m.a.x) * 180 / Math.PI : autoAngle(mask))) * Math.PI / 180;
+  const d = P(Math.cos(th), Math.sin(th)), n = P(-d.y, d.x), o = m.kind === 'fold' && m.angle == null ? m.a : centroid(mask);
   let lo = Infinity, hi = -Infinity, lo2 = Infinity, hi2 = -Infinity;
-  for (const q of all) { const d = sub(q, c), a = d.x * e1.x + d.y * e1.y, b = d.x * e2.x + d.y * e2.y; lo = Math.min(lo, a); hi = Math.max(hi, a); lo2 = Math.min(lo2, b); hi2 = Math.max(hi2, b); }
-  for (let k = Math.floor(lo / pitch); k * pitch <= hi; k++) rows.push({ pts: [add(c, add(mul(e1, k * pitch), mul(e2, lo2 - 1))), add(c, add(mul(e1, k * pitch), mul(e2, hi2 + 1)))], u0: lo2 - 1, odd: (k & 1) === 1, P: Pd, D: set.slit });
-  return { rows, arrow: { p: c, d: e1 } };
+  for (const q of all) { const v = sub(q, o), a = v.x * n.x + v.y * n.y, b = v.x * d.x + v.y * d.y; lo = Math.min(lo, a); hi = Math.max(hi, a); lo2 = Math.min(lo2, b); hi2 = Math.max(hi2, b); }
+  for (let k = Math.floor(lo / pitch); k * pitch <= hi + 1e-9; k++) rows.push({ pts: [add(o, add(mul(n, k * pitch), mul(d, lo2 - 1))), add(o, add(mul(n, k * pitch), mul(d, hi2 + 1)))], u0: lo2 - 1, odd: (k & 1) === 1, P: Pd, D: set.slit });
+  return { rows, arrow: { p: centroid(mask), d: n } };
+}
+/** Slit direction (degrees) that makes an area bend along its length: across its long axis. */
+export function autoAngle(mask: Point[][]): number {
+  const all = mask.flat(), c = centroid(mask); let sxx = 0, syy = 0, sxy = 0;
+  for (const q of all) { const dx = q.x - c.x, dy = q.y - c.y; sxx += dx * dx; syy += dy * dy; sxy += dx * dy; }
+  const a = 0.5 * Math.atan2(2 * sxy, sxx - syy) * 180 / Math.PI + 90;
+  return ((a % 180) + 180) % 180;
 }
 const unit = (v: Point) => { const l = len(v) || 1; return P(v.x / l, v.y / l); };
 function circleR(a: Point, b: Point, c: Point): number {
@@ -215,7 +216,7 @@ export function computeHinge(marks: HingeMark[], env: HingeEnv, set: BrushSettin
   const lines = env.lines.filter(l => l.pts.length > 1);
   const buffer = lines.length ? union([...offsetOpen(lines.filter(l => !l.closed).map(l => l.pts), set.edge, L.EndType.etOpenRound), ...offsetOpenClosed(lines.filter(l => l.closed).map(l => l.pts), set.edge)]) : [];
   const closed = lines.filter(l => l.closed && l.pts.length > 2).map(l => toI(l.pts)), holes = holesOf(lines);
-  const out: HingeArea[] = [];
+  const excl: { i: number; mask: IP[] }[] = [];
   marks.forEach((m, i) => {
     if (m.kind === 'erase' || !eff[i].length) return;
     const block: IP[] = [];
@@ -224,14 +225,33 @@ export function computeHinge(marks: HingeMark[], env: HingeEnv, set: BrushSettin
     if (m.kind === 'area') { const kept = m.at ? insidePart(mask, closed, [], m.at) : []; mask = kept.length ? kept : insidePart(mask, closed, holes); }
     else mask = insidePart(mask, closed, holes);
     mask = mask.filter(p => p.length > 2 && Math.abs(L.Clipper.Area(p)) > 0.5 * S * S);
-    if (!mask.length) return;
-    const pm = mask.map(fromI), centre = m.c ?? defaultCentre;
-    const { rows, arrow } = rowsFor(m, pm, set, centre);
-    const wavy = m.pattern === 'wavy' ? set.pitch * 0.28 : 0;
-    const raw = rows.flatMap(r => dashes(r, wavy));
-    const slits = clipOpen(raw, mask).filter(p => { let l = 0; for (let k = 1; k < p.length; k++) l += dist(p[k - 1], p[k]); return l >= Math.max(1.5, set.slit * 0.2); });
-    out.push({ index: i, pattern: m.pattern, mask: pm, slits, arrow, centre: m.pattern === 'rings' || m.pattern === 'spokes' ? centre : undefined });
+    if (mask.length) excl.push({ i, mask });
   });
+  // the same colour joins up: each connected piece is one area with one direction (set by its newest paint) — no seams, no overlaps
+  const out: HingeArea[] = [];
+  const pats = [...new Set(excl.map(x => (marks[x.i] as any).pattern as HingePattern))];
+  for (const pat of pats) {
+    const items = excl.filter(x => (marks[x.i] as any).pattern === pat);
+    const tree = new L.PolyTree(), c = new L.Clipper();
+    c.AddPaths(items.flatMap(x => x.mask), L.PolyType.ptSubject, true); c.Execute(L.ClipType.ctUnion, tree, L.PolyFillType.pftNonZero, L.PolyFillType.pftNonZero);
+    const pieces: IP[][] = [];
+    const visit = (node: any) => { for (const outer of node.Childs()) { pieces.push([outer.Contour(), ...outer.Childs().map((h: any) => h.Contour())]); for (const h of outer.Childs()) visit(h); } };
+    visit(tree);
+    for (const piece of pieces) {
+      if (Math.abs(L.Clipper.Area(piece[0])) < 0.5 * S * S) continue;
+      const mine = items.filter(x => clip(L.ClipType.ctIntersection, x.mask, piece).some(q => Math.abs(L.Clipper.Area(q)) > 0.05 * S * S)).map(x => x.i);
+      if (!mine.length) continue;
+      const newest = Math.max(...mine), withAngle = [...mine].reverse().find(i => (marks[i] as any).angle != null);
+      const m = { ...(marks[newest] as Exclude<HingeMark, { kind: 'erase' }>) } as any;
+      if (m.angle == null && withAngle != null) m.angle = (marks[withAngle] as any).angle;
+      const pm = piece.map(fromI), centre = m.c ?? defaultCentre;
+      const { rows, arrow } = rowsFor(m, pm, set, centre);
+      const wavy = pat === 'wavy' ? set.pitch * 0.28 : 0;
+      const slits = clipOpen(rows.flatMap(r => dashes(r, wavy)), piece).filter(p => { let l = 0; for (let k = 1; k < p.length; k++) l += dist(p[k - 1], p[k]); return l >= Math.max(1.5, set.slit * 0.2); });
+      const angle = pat === 'rings' || pat === 'spokes' || (m.kind === 'brush' && m.follow) ? undefined : (m.angle ?? (m.kind === 'fold' ? ((Math.atan2(m.b.y - m.a.y, m.b.x - m.a.x) * 180 / Math.PI) + 180) % 180 : autoAngle(pm)));
+      out.push({ index: newest, marks: mine, angle, pattern: pat, mask: pm, slits, arrow, centre: pat === 'rings' || pat === 'spokes' ? centre : undefined });
+    }
+  }
   return out;
 }
 function offsetOpenClosed(paths: Point[][], d: number): IP[] {

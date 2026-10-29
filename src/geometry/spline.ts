@@ -24,6 +24,21 @@ export function autoHandles(pts: Point[], closed: boolean, tension = 1): [Point,
   });
 }
 
+/**
+ * Smooth curve through traced points: round where the outline flows, sharp where
+ * it turns more than `cornerDeg` (corners of letters, points of a leaf stay crisp).
+ */
+export function fitSpline(pts: Point[], closed: boolean, cornerDeg = 55): { pts: Point[]; h: [Point, Point][] } {
+  const n = pts.length, h = autoHandles(pts, closed, 1);
+  for (let i = 0; i < n; i++) {
+    const a = closed ? pts[(i - 1 + n) % n] : pts[i - 1], b = closed ? pts[(i + 1) % n] : pts[i + 1]; if (!a || !b) continue;
+    const u = sub(pts[i], a), v = sub(b, pts[i]), lu = len(u), lv = len(v); if (lu < 1e-9 || lv < 1e-9) continue;
+    const turn = Math.acos(Math.max(-1, Math.min(1, (u.x * v.x + u.y * v.y) / (lu * lv)))) * 180 / Math.PI;
+    if (turn > cornerDeg) h[i] = [pts[i], pts[i]];
+  }
+  return { pts, h };
+}
+
 /** Bézier segments as [p0, c1, c2, p3]. */
 export function splineSegs(s: SplineLike): [Point, Point, Point, Point][] {
   const n = s.pts.length, out: [Point, Point, Point, Point][] = [], m = s.closed ? n : n - 1;
