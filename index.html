@@ -153,6 +153,13 @@ table.res td:last-child{text-align:right;white-space:nowrap}
 #boxmaker .ctl{overflow:auto;padding:12px 14px;border-left:1px solid var(--line);display:flex;flex-direction:column;gap:9px}
 #boxmaker .sl{display:grid;grid-template-columns:1fr 70px auto;gap:6px;align-items:center;font-size:12.5px}
 #boxmaker .stat{font-size:12px;color:var(--muted);margin:6px 0 0}
+#boxmaker svg .sheet{fill:var(--panel);stroke:var(--line);stroke-width:1;vector-effect:non-scaling-stroke}
+#boxmaker svg .marg{fill:none;stroke:var(--muted);stroke-dasharray:4 3;stroke-width:.6;vector-effect:non-scaling-stroke}
+#boxmaker svg .fixed{fill:color-mix(in srgb,var(--muted) 18%,transparent);stroke:var(--muted)}
+#boxmaker .nparts{display:flex;flex-direction:column;gap:4px;max-height:220px;overflow:auto}
+#boxmaker .np{display:grid;grid-template-columns:38px 1fr auto;gap:8px;align-items:center;font-size:12px;color:var(--muted)}
+#boxmaker .np svg{width:38px;height:28px;flex:none}
+#boxmaker .np input{width:48px}
 @media (max-width:760px){#boxmaker .body{grid-template-columns:1fr;grid-template-rows:45% 1fr}#boxmaker .ctl{border-left:0;border-top:1px solid var(--line)}}
 #hinge{position:fixed;inset:0;background:rgba(10,15,12,.45);display:grid;place-items:center;z-index:21;padding:12px}
 #hinge .box{background:var(--panel);border:1px solid var(--line);border-radius:8px;width:min(1180px,100%);height:min(820px,calc(100dvh - 24px));display:flex;flex-direction:column;box-shadow:0 10px 40px var(--shadow)}
@@ -368,7 +375,7 @@ body.dropping #main{outline:3px dashed var(--accent);outline-offset:-6px}
 </head>
 <body>
 <header>
-  <div class="brand"><b>Kerf 2D</b><span>precision drafting · v0.14.3</span></div>
+  <div class="brand"><b>Kerf 2D</b><span>precision drafting · v1.0</span></div>
   <input id="docName" aria-label="Drawing name" value="Glasses front">
   <div class="actions">
     <button class="btn" id="bNew">New</button>
@@ -379,6 +386,7 @@ body.dropping #main{outline:3px dashed var(--accent);outline-offset:-6px}
         <button role="menuitem" id="bBox"><b>Box maker…</b><span>Finger-jointed box, kerf compensated</span></button>
         <button role="menuitem" id="bHinge"><b>Living hinge…</b><span>Bendy wood: wrap a shape, or test strips</span></button>
         <button role="menuitem" id="bBend"><b>Bend to a profile…</b><span>Leaf, face, wing: bend wood to a curve you draw</span></button>
+        <button role="menuitem" id="bNest"><b>Nest on sheet…</b><span>Fit lots of parts (e.g. 30 key rings) with little waste</span></button>
         <button role="menuitem" id="bElements"><b>Elements…</b><span>Hearts, animals, key-ring blanks… and your own</span></button>
         <button role="menuitem" id="bSaveEl"><b>Save selection as element…</b><span>Keep your design to use again</span></button>
         <button role="menuitem" id="bTrace"><b>Trace image…</b><span>Turn a picture into outlines (or drop / paste one)</span></button>

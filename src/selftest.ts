@@ -6,6 +6,8 @@
 import { type Point, P, sub, dist, normA, rotP, polar, fmt, DEG, parseLength } from './geometry/vec';
 import { prims, distPrim, bbox, flatten } from './geometry/entity';
 import { affEnt } from './geometry/affine';
+import { nestNow } from './nest/nest';
+import { nestShape } from './nest/parts';
 import { Editor } from './editor/editor';
 import { ALL_TOOLS } from './tools';
 import { trimAt } from './tools/trim';
@@ -284,6 +286,14 @@ export function runSelfTest(): { results: TestResult[]; doc: string | null } {
     ok('SVG export → re-import (incl. ellipses)', ds <= 0.001, `${fromSvg.length}/${geo.length} entities, max deviation ${ds === Infinity ? 'mismatch' : ds.toExponential(2)} mm`);
     ok('SVG physical size', /width="600mm" height="400mm" viewBox="0 0 600 400"/.test(svg), 'width 600mm, height 400mm, 1 unit = 1 mm');
     d.layers[1].visible = true;
+    // 12b · nesting: 30 key rings on A4, real gap kept, all inside the margin
+    {
+      const ring = nestShape({ ids: [], polys: [Array.from({ length: 48 }, (_, i) => P(15 * Math.cos(i * Math.PI / 24), 15 * Math.sin(i * Math.PI / 24)))] }, 2);
+      const res = nestNow({ shapes: [ring], counts: [30], W: 297, H: 210, margin: 5, gap: 2, angles: [0] });
+      const cs = res.placed.map(p => p.at); let gapMin = Infinity, inside = true;
+      for (let i = 0; i < cs.length; i++) { if (cs[i].x < 20 - 0.01 || cs[i].y < 20 - 0.01 || cs[i].x > 277.01 || cs[i].y > 190.01) inside = false; for (let k = i + 1; k < cs.length; k++) gapMin = Math.min(gapMin, dist(cs[i], cs[k]) - 30); }
+      ok('Nesting: 30 key rings on A4 with a 2 mm gap', res.placed.length === 30 && inside && gapMin > 1.95, `${res.placed.length}/30 placed, closest gap ${fmt(gapMin, 2)} mm, all within the 5 mm margin`);
+    }
     // 13 · undo restores exactly
     const snapshot = JSON.stringify(ed.doc.ents); ed.setSelection([r2.id]); ed.deleteSel(); ed.store.undo();
     ok('Undo restores the drawing exactly', JSON.stringify(ed.doc.ents) === snapshot, `${ed.doc.ents.length} objects restored`);

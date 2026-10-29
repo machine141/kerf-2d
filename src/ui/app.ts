@@ -7,6 +7,7 @@ import type { BoolOp } from '../geometry/boolean';
 import { openTrace } from './trace';
 import { openElements, saveSelectionAsElement } from './elements';
 import { helpHtml, GUIDES } from './help';
+import { openNest } from './nest';
 import { openBox } from './box';
 import { openHinge } from './hinge';
 import { openBend } from './profile';
@@ -315,6 +316,7 @@ export function startUI(ed: Editor) {
   $('#bSaveEl').onclick = () => { closeMake(); saveSelectionAsElement(ed); };
   $('#bHelp').onclick = () => openHelp();
   $('#bBox').onclick = () => { closeMake(); openBox(ed); };
+  $('#bNest').onclick = () => { closeMake(); openNest(ed); };
   $('#bHinge').onclick = () => { closeMake(); openHinge(ed); };
   $('#bBend').onclick = () => { closeMake(); openBend(ed); };
   const makePop = () => document.querySelector<HTMLElement>('#mkMenu .pop')!;
