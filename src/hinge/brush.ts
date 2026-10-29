@@ -27,6 +27,8 @@ export interface PatternInfo { id: HingePattern; label: string; fill: string; ed
 export const HINGE_PATTERNS: PatternInfo[] = [
   { id: 'straight', label: 'Straight', fill: '#8fb8ff', edge: '#4a7fd6', note: 'straight slits — bends one way, like rolling a tube' },
   { id: 'wavy', label: 'Wavy', fill: '#8fe0bf', edge: '#3fa27a', note: 'wavy slits — bends more smoothly, less likely to crack' },
+  { id: 'lattice', label: 'Lattice', fill: '#c9b6ff', edge: '#7b5cd6', note: 'criss-cross slits — bends both ways, can dome and twist' },
+  { id: 'honeycomb', label: 'Honeycomb', fill: '#ffc49e', edge: '#d9763a', note: 'three-armed stars — very floppy in every direction' },
   { id: 'rings', label: 'Circles', fill: '#ffaac4', edge: '#d65f86', note: 'circles round a centre — petals curl out' },
   { id: 'spokes', label: 'Spokes', fill: '#f4b0f0', edge: '#b85ab3', note: 'spokes out from a centre — curls round the centre' },
   { id: 'fold', label: 'Fold', fill: '#ffe680', edge: '#c9a400', note: 'a few tight rows — a crisp fold along a line' },
@@ -185,6 +187,32 @@ function rowsFor(m: Exclude<HingeMark, { kind: 'erase' }>, mask: Point[][], set:
   for (let k = Math.floor(lo / pitch); k * pitch <= hi + 1e-9; k++) rows.push({ pts: [add(o, add(mul(n, k * pitch), mul(d, lo2 - 1))), add(o, add(mul(n, k * pitch), mul(d, hi2 + 1)))], u0: lo2 - 1, odd: (k & 1) === 1, P: Pd, D: set.slit });
   return { rows, arrow: { p: centroid(mask), d: n } };
 }
+/**
+ * Two-way patterns, laid on a grid turned by `ang`:
+ *  • lattice — short slits in a chequerboard, alternately along and across
+ *    (squares that rotate as it bends: bends both ways, domes and twists);
+ *  • honeycomb — three-armed stars on a triangle grid (floppy in every direction).
+ * Neighbouring cuts never touch.
+ */
+function gridCuts(pat: HingePattern, mask: Point[][], set: BrushSettings, ang: number): Point[][] {
+  const c = centroid(mask), u = P(Math.cos(ang), Math.sin(ang)), v = P(-u.y, u.x), out: Point[][] = [];
+  let r = 0; for (const q of mask.flat()) r = Math.max(r, dist(q, c));
+  const at = (x: number, y: number) => add(c, add(mul(u, x), mul(v, y)));
+  if (pat === 'lattice') {
+    const cell = Math.max(2 * set.bridge + 1, set.pitch * 4), half = cell * 0.4, n = Math.ceil(r / cell) + 1;
+    for (let i = -n; i <= n; i++) for (let j = -n; j <= n; j++) {
+      const x = i * cell, y = j * cell, along = ((i + j) & 1) === 0;
+      out.push(along ? [at(x - half, y), at(x + half, y)] : [at(x, y - half), at(x, y + half)]);
+    }
+    return out;
+  }
+  const sp = Math.max(2 * set.bridge + 1, set.pitch * 4), arm = sp * 0.36, rowH = sp * Math.sqrt(3) / 2, n = Math.ceil(r / rowH) + 1;
+  for (let j = -n; j <= n; j++) for (let i = -n; i <= n; i++) {
+    const x = i * sp + ((j & 1) ? sp / 2 : 0), y = j * rowH, a0 = ((j & 1) ? -Math.PI / 2 : Math.PI / 2);
+    for (let k = 0; k < 3; k++) { const a = a0 + k * 2 * Math.PI / 3; out.push([at(x, y), at(x + arm * Math.cos(a), y + arm * Math.sin(a))]); }
+  }
+  return out;
+}
 /** Slit direction (degrees) that makes an area bend along its length: across its long axis. */
 export function autoAngle(mask: Point[][]): number {
   const all = mask.flat(), c = centroid(mask); let sxx = 0, syy = 0, sxy = 0;
@@ -244,11 +272,13 @@ export function computeHinge(marks: HingeMark[], env: HingeEnv, set: BrushSettin
       const newest = Math.max(...mine), withAngle = [...mine].reverse().find(i => (marks[i] as any).angle != null);
       const m = { ...(marks[newest] as Exclude<HingeMark, { kind: 'erase' }>) } as any;
       if (m.angle == null && withAngle != null) m.angle = (marks[withAngle] as any).angle;
-      const pm = piece.map(fromI), centre = m.c ?? defaultCentre;
-      const { rows, arrow } = rowsFor(m, pm, set, centre);
+      const pm = piece.map(fromI), centre = m.c ?? defaultCentre, twoWay = pat === 'lattice' || pat === 'honeycomb';
+      const { rows, arrow } = twoWay ? { rows: [], arrow: null } : rowsFor(m, pm, set, centre);
       const wavy = pat === 'wavy' ? set.pitch * 0.28 : 0;
-      const slits = clipOpen(rows.flatMap(r => dashes(r, wavy)), piece).filter(p => { let l = 0; for (let k = 1; k < p.length; k++) l += dist(p[k - 1], p[k]); return l >= Math.max(1.5, set.slit * 0.2); });
-      const angle = pat === 'rings' || pat === 'spokes' || (m.kind === 'brush' && m.follow) ? undefined : (m.angle ?? (m.kind === 'fold' ? ((Math.atan2(m.b.y - m.a.y, m.b.x - m.a.x) * 180 / Math.PI) + 180) % 180 : autoAngle(pm)));
+      const raw = twoWay ? gridCuts(pat, pm, set, (m.angle ?? 0) * Math.PI / 180) : rows.flatMap(r => dashes(r, wavy));
+      const minL = twoWay ? 1.5 : Math.max(1.5, set.slit * 0.2);
+      const slits = clipOpen(raw, piece).filter(p => { let l = 0; for (let k = 1; k < p.length; k++) l += dist(p[k - 1], p[k]); return l >= minL; });
+      const angle = pat === 'rings' || pat === 'spokes' || twoWay ? (twoWay ? m.angle ?? 0 : undefined) : (m.kind === 'brush' && m.follow) ? undefined : (m.angle ?? (m.kind === 'fold' ? ((Math.atan2(m.b.y - m.a.y, m.b.x - m.a.x) * 180 / Math.PI) + 180) % 180 : autoAngle(pm)));
       out.push({ index: newest, marks: mine, angle, pattern: pat, mask: pm, slits, arrow, centre: pat === 'rings' || pat === 'spokes' ? centre : undefined });
     }
   }
@@ -267,4 +297,30 @@ function clipOpen(lines: Point[][], area: IP[]): Point[][] {
   c.AddPaths(lines.map(toI), L.PolyType.ptSubject, false); c.AddPaths(area, L.PolyType.ptClip, true);
   c.Execute(L.ClipType.ctIntersection, tree, L.PolyFillType.pftNonZero, L.PolyFillType.pftNonZero);
   return (L.Clipper.OpenPathsFromPolyTree(tree) as IP[]).filter(p => p.length > 1).map(fromI);
+}
+
+// ---------------- material: suggested settings and the bend check ----------------
+import { MATERIALS, minRadius, bestPitch, pitchRange, type HMat } from './hinge';
+export { MATERIALS };
+export interface MaterialSet { mat: HMat; t: number; kerf: number }
+/** Settings to start from for a material: bridge ≈ 1.2 × thickness, slits up to 15 × thickness, spacing to reach `R` (if given). */
+export function suggest(ms: MaterialSet, R?: number): BrushSettings & { ok: boolean } {
+  const { mat, t, kerf } = ms, bridge = Math.round(Math.min(8, Math.max(1.5, 1.2 * t)) * 10) / 10, slit = Math.round(Math.max(10, Math.min(30, 6 * t + 6)));
+  const { lo, hi } = pitchRange(t, kerf, mat), D = R ? bestPitch(R, slit, t, kerf, mat, 1.5) : Math.min(hi, Math.max(lo, Math.round(t * 10) / 10));
+  return { pitch: Math.round((D ?? lo) * 10) / 10, slit, bridge, edge: Math.max(2, Math.round(t * 10) / 10), ok: D != null };
+}
+export type BendState = 'ok' | 'tight' | 'bad';
+/**
+ * How tightly an area's slits let it bend, and whether that's safe:
+ * bad = the wood left between slits is thinner than the material can take (it may snap);
+ * tight = it can't bend as tightly as the radius asked for.
+ */
+export function bendCheck(pat: HingePattern, set: BrushSettings, ms: MaterialSet, R?: number): { Rmin: number; state: BendState; why: string } {
+  const { mat, t, kerf } = ms;
+  const pitch = pat === 'lattice' || pat === 'honeycomb' ? set.pitch * 4 * 0.2 : set.pitch * (pat === 'fold' ? 0.6 : 1);
+  const L = pat === 'lattice' ? set.pitch * 3.2 : pat === 'honeycomb' ? set.pitch * 1.44 : set.slit;
+  const Rmin = minRadius(pitch, L, t, kerf, mat.gamma), link = pitch - kerf;
+  if (pat !== 'lattice' && pat !== 'honeycomb' && link < mat.wMin) return { Rmin, state: 'bad', why: `the wood between slits is only ${link.toFixed(1)} mm — ${mat.name} needs ${mat.wMin} mm or it may snap: make the spacing bigger` };
+  if (R && Rmin > R) return { Rmin, state: 'tight', why: `bends to about R${Math.round(Rmin)} mm, not R${Math.round(R)}: closer spacing or longer slits` };
+  return { Rmin, state: 'ok', why: `bends to about R${Math.round(Rmin)} mm` };
 }

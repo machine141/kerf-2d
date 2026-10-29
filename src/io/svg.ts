@@ -4,7 +4,7 @@ import { splineSegs } from '../geometry/spline';
 import { type Point, P, add, sub, mul, dist, normA, angOf, polar, clean, cp, fmt, DEG } from '../geometry/vec';
 import { dimGeom } from '../geometry/dims';
 import { hasBulge, segsOf } from '../geometry/path';
-import { COLORS, type Doc, type Shape, type ColorKey } from '../model/types';
+import { COLORS, modeOf, type Doc, type Shape, type ColorKey } from '../model/types';
 
 const nf = (v: number) => fmt(clean(v), 6);
 const esc = (s: string) => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' } as any)[c]);
@@ -19,10 +19,21 @@ export function exportSVG(doc: Doc, opt: SvgOptions = {}): string {
     `<!-- ${esc(doc.name)} · 1 user unit = 1 mm -->`);
   for (const L of doc.layers) {
     if (!L.visible && !opt.includeHidden) continue;
-    const ents = expandText(doc.ents).filter(e => e.layer === L.id && !(opt.skipDims && e.type === 'dim')); if (!ents.length) continue;
+    // colours set to "Don't cut" are left out (dimensions follow the "Include dimensions" setting instead)
+    const keep = (e: any) => e.layer === L.id && !(opt.skipDims && e.type === 'dim') && (e.type === 'dim' || modeOf(doc, e.color) !== 'off');
+    // text in an "Engrave area" colour: all its letters as one filled path, so the middles of o, e, a stay clear
+    const fillText = doc.ents.filter(e => e.type === 'text' && keep(e) && modeOf(doc, e.color) === 'fill');
+    const ents = expandText(doc.ents.filter(e => !fillText.includes(e))).filter(keep); if (!ents.length && !fillText.length) continue;
     out.push(`<g id="${esc(slug(L.name))}" inkscape:groupmode="layer" inkscape:label="${esc(L.name)}" fill="none" stroke-linecap="round" stroke-linejoin="round"${L.visible ? '' : ' style="display:none"'}>`);
+    for (const t of fillText) {
+      const hx = COLORS[t.color]?.hex || '#000000';
+      const d = expandText([t]).map((e: any) => e.type === 'spline' ? (() => { const sg = splineSegs(e); return sg.length ? `M ${nf(sg[0][0].x)} ${Y(sg[0][0].y)} ${sg.map(b => `C ${nf(b[1].x)} ${Y(b[1].y)} ${nf(b[2].x)} ${Y(b[2].y)} ${nf(b[3].x)} ${Y(b[3].y)}`).join(' ')}${e.closed ? ' Z' : ''}` : ''; })() : e.type === 'poly' ? `M ${e.pts.map((p: Point) => nf(p.x) + ' ' + Y(p.y)).join(' L ')}${e.closed ? ' Z' : ''}` : '').join(' ');
+      out.push(`<path d="${d}" stroke="${hx}" stroke-width="${nf(t.w)}" fill="${hx}" fill-rule="evenodd"/>`);
+    }
     for (const e of ents) {
-      const st = `stroke="${COLORS[e.color]?.hex || '#000000'}" stroke-width="${nf(e.w)}"`;
+      const hx = COLORS[e.color]?.hex || '#000000', closedE = e.type === 'circle' || e.type === 'ellipse' || ((e.type === 'poly' || e.type === 'spline') && e.closed);
+      // "Engrave area" colours: the shape is filled, which laser software engraves as an area
+      const st = `stroke="${hx}" stroke-width="${nf(e.w)}"${modeOf(doc, e.color) === 'fill' && closedE ? ` fill="${hx}" fill-rule="evenodd"` : ''}`;
       if (e.type === 'line') out.push(`<line x1="${nf(e.a.x)}" y1="${Y(e.a.y)}" x2="${nf(e.b.x)}" y2="${Y(e.b.y)}" ${st}/>`);
       else if (e.type === 'poly' && hasBulge(e)) {
         let d = `M ${nf(e.pts[0].x)} ${Y(e.pts[0].y)}`;

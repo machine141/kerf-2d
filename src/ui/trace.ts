@@ -49,7 +49,7 @@ function build(ed: Editor, im: Pic, name: string) {
   root.innerHTML = `<div class="box" role="dialog" aria-modal="true" aria-labelledby="tTitle">
     <div class="head"><strong id="tTitle">Trace image · ${esc(name)}</strong><button class="x" id="tClose" aria-label="Close">✕</button></div>
     <div class="body">
-      <div class="view"><canvas id="tCv" aria-label="Trace preview"></canvas><div class="vbar"><span class="segc" role="group" aria-label="Brush"><button type="button" id="tErase" aria-pressed="false" title="Drag to remove flakes, detail or background · Alt-drag restores · wheel = brush size">Erase</button><button type="button" id="tFillB" aria-pressed="false" title="Drag to paint solid shape — fills holes and gaps (Colours: paints the colour where you start) · Alt-drag restores · wheel = brush size">Fill</button></span><label class="hint bsz">Brush size <input type="text" id="tBrush" class="mono" inputmode="decimal" style="width:52px"> mm</label><button class="btn" id="tClear" title="Remove all erase and fill painting">Clear brush</button>
+      <div class="view"><canvas id="tCv" aria-label="Trace preview"></canvas><div class="vbar"><span class="segc" role="group" aria-label="Brush"><button type="button" id="tErase" aria-pressed="false" title="Drag to remove flakes, detail or background · Alt-drag restores · wheel = brush size">Erase</button><button type="button" id="tFillB" aria-pressed="false" title="Drag to paint solid shape — fills holes and gaps (Colours: paints the colour where you start) · Alt-drag restores · wheel = brush size">Fill</button></span><label class="hint bsz">Brush size <input type="text" id="tBrush" class="mono" inputmode="decimal" style="width:52px"> mm</label><button class="btn" id="tClear" title="Remove all erase and fill painting">Clear brush</button><span class="segc zoomc" role="group" aria-label="Zoom"><button type="button" id="tZout" title="Zoom out">−</button><button type="button" id="tZfit" title="Whole picture"><span id="tZoomO">100%</span></button><button type="button" id="tZin" title="Zoom in (or roll the mouse wheel over the picture; drag to move round)">+</button></span>
         <label class="chk">Line <select id="tLine"><option value="#ff1493">Pink</option><option value="#00b4d8">Cyan</option><option value="#ff7a00">Orange</option><option value="#12b886">Green</option><option value="#000000">Black</option></select></label><label class="chk"><input type="checkbox" id="tShow">Show picture</label></div></div>
       <div class="ctl">
         <div class="row"><button class="btn" id="tUndo" title="Undo (Ctrl/Cmd+Z)">Undo</button><button class="btn" id="tRedo" title="Redo (Ctrl/Cmd+Y)">Redo</button><button class="btn" id="tReset" title="Back to the starting settings and clear erasing">Reset</button></div>
@@ -138,11 +138,15 @@ function build(ed: Editor, im: Pic, name: string) {
   }
   // ---- preview ----
   let fit = { k: 1, ox: 0, oy: 0 };
+  /** zoom (1 = whole picture) and the picture point shown in the middle */
+  const zv = { z: 1, cx: NaN, cy: NaN };
   function draw() {
     const r = cv.parentElement!.getBoundingClientRect(), dpr = devicePixelRatio || 1, W = Math.max(100, r.width), H = Math.max(100, r.height - 44);
     cv.width = W * dpr; cv.height = H * dpr; cv.style.width = W + 'px'; cv.style.height = H + 'px';
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, W, H);
-    const k = Math.min(W / img.w, H / img.h) * 0.96; fit = { k, ox: (W - img.w * k) / 2, oy: (H - img.h * k) / 2 };
+    if (!isFinite(zv.cx)) { zv.cx = img.w / 2; zv.cy = img.h / 2; }
+    const k = Math.min(W / img.w, H / img.h) * 0.96 * zv.z; fit = { k, ox: W / 2 - zv.cx * k, oy: H / 2 - zv.cy * k };
+    $('#tZoomO').textContent = Math.round(zv.z * 100) + '%';
     ctx.fillStyle = '#fff'; ctx.fillRect(fit.ox, fit.oy, img.w * k, img.h * k);
     if (S.showImg) { ctx.globalAlpha = .45; ctx.drawImage(im.src, fit.ox, fit.oy, img.w * k, img.h * k); ctx.globalAlpha = 1; }
     // brush painting: erased (red) and filled (green)
@@ -176,8 +180,10 @@ function build(ed: Editor, im: Pic, name: string) {
     if (!erasing()) return; const r = cv.getBoundingClientRect(), x = ev.clientX - r.left, y = ev.clientY - r.top;
     ctx.strokeStyle = brush === 'fill' ? '#12b886' : '#e03131'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(x, y, S.brush * fit.k, 0, Math.PI * 2); ctx.stroke();
   }
+  let pan: { x: number; y: number; cx: number; cy: number } | null = null;
   cv.addEventListener('pointerdown', ev => {
-    if (!erasing()) return;
+    // no brush (or middle button): drag to move round the zoomed picture
+    if (!erasing() || ev.button === 1) { if (zv.z > 1 || ev.button === 1) { pan = { x: ev.clientX, y: ev.clientY, cx: zv.cx, cy: zv.cy }; cv.setPointerCapture(ev.pointerId); cv.style.cursor = 'grabbing'; } return; }
     paintVal = 1;
     if (brush === 'fill') {
       paintVal = 2;
@@ -189,9 +195,19 @@ function build(ed: Editor, im: Pic, name: string) {
       }
     }
     painting = true; erase = erase.slice(); cv.setPointerCapture(ev.pointerId); paint(ev); });
-  cv.addEventListener('pointermove', ev => { if (painting) paint(ev); else if (erasing()) { draw(); brushRing(ev); } });
-  cv.addEventListener('pointerup', () => { if (painting) { painting = false; run(); commit(true); } });
-  cv.addEventListener('wheel', ev => { if (!erasing()) return; ev.preventDefault(); S.brush = Math.max(1, Math.min(200, Math.round(S.brush * (ev.deltaY < 0 ? 1.15 : 1 / 1.15)))); draw(); brushRing(ev); }, { passive: false });
+  cv.addEventListener('pointermove', ev => { if (pan) { zv.cx = pan.cx - (ev.clientX - pan.x) / fit.k; zv.cy = pan.cy - (ev.clientY - pan.y) / fit.k; draw(); return; } if (painting) paint(ev); else if (erasing()) { draw(); brushRing(ev); } });
+  cv.addEventListener('pointerup', () => { if (pan) { pan = null; cv.style.cursor = erasing() ? 'crosshair' : zv.z > 1 ? 'grab' : ''; return; } if (painting) { painting = false; run(); commit(true); } });
+  /** zoom about a screen point (keeps the picture point under it still) */
+  function zoomAt(f: number, sx?: number, sy?: number) {
+    const r = cv.getBoundingClientRect(), x = sx ?? r.width / 2, y = sy ?? r.height / 2, px = (x - fit.ox) / fit.k, py = (y - fit.oy) / fit.k;
+    const z = Math.max(1, Math.min(40, zv.z * f)); if (z === 1) { zv.z = 1; zv.cx = img.w / 2; zv.cy = img.h / 2; draw(); return; }
+    const k = fit.k * z / zv.z; zv.z = z; zv.cx = px - (x - r.width / 2) / k; zv.cy = py - (y - (r.height) / 2) / k; draw();
+    if (!erasing()) cv.style.cursor = 'grab';
+  }
+  cv.addEventListener('wheel', ev => {
+    // wheel zooms the preview; with Erase / Fill on it sizes the brush (Ctrl+wheel still zooms)
+    if (!erasing() || ev.ctrlKey) { ev.preventDefault(); const r = cv.getBoundingClientRect(); zoomAt(Math.exp(-Math.max(-200, Math.min(200, ev.deltaY)) * 0.003), ev.clientX - r.left, ev.clientY - r.top); return; }
+    ev.preventDefault(); S.brush = Math.max(1, Math.min(200, Math.round(S.brush * (ev.deltaY < 0 ? 1.15 : 1 / 1.15)))); draw(); brushRing(ev); }, { passive: false });
 
   // ---- controls ----
   function renderPal() {
@@ -224,6 +240,7 @@ function build(ed: Editor, im: Pic, name: string) {
   bind('#tW', e => { const v = parseFloat(e.value); if (v > 0) { S.widthMm = Math.min(3000, Math.max(5, v)); if (v < 5) ed.toast('Smallest width is 5 mm'); } }, 'change');
   $<HTMLSelectElement>('#tRes').onchange = e => { S.res = +(e.target as HTMLSelectElement).value; load(); sync(); run(); commit(true); };
   $<HTMLInputElement>('#tShow').onchange = e => { S.showImg = (e.target as HTMLInputElement).checked; draw(); };
+  $('#tZin').onclick = () => zoomAt(1.5); $('#tZout').onclick = () => zoomAt(1 / 1.5); $('#tZfit').onclick = () => zoomAt(0);
   $<HTMLInputElement>('#tCurves').onchange = e => { S.curves = (e.target as HTMLInputElement).checked; draw(); };
   // brush size: type it (mm), or roll the wheel over the picture while Erase / Fill is on
   $<HTMLInputElement>('#tBrush').onchange = e => { const v = parseLength((e.target as HTMLInputElement).value); if (v > 0) S.brush = Math.max(1, Math.min(200, Math.round(v * pxPerMm()))); draw(); };

@@ -9,7 +9,7 @@ import { type Point, P, add, sub, mul, len, dist, normA, angOf, clean, cp, fmt, 
 import { flatten } from '../geometry/entity';
 import { dimGeom } from '../geometry/dims';
 import { hasBulge, flattenPath } from '../geometry/path';
-import { COLORS, type Doc, type Shape } from '../model/types';
+import { COLORS, modeOf, type Doc, type Shape } from '../model/types';
 
 const nf = (v: number) => fmt(clean(v), 6);
 export interface DxfOptions { splitArcs?: boolean; includeHidden?: boolean; curveTol?: number; skipDims?: boolean }
@@ -30,7 +30,7 @@ export function exportDXF(doc: Doc, opt: DxfOptions = {}): string {
   g(0, 'ENDTAB'); g(0, 'ENDSEC');
   g(0, 'SECTION'); g(2, 'ENTITIES');
   for (const e of expandText(doc.ents)) {
-    if (!include.has(e.layer) || (opt.skipDims && e.type === 'dim')) continue;
+    if (!include.has(e.layer) || (opt.skipDims && e.type === 'dim') || (e.type !== 'dim' && modeOf(doc, e.color) === 'off')) continue;
     const head = (t: string) => { g(0, t); g(8, layerName(e.layer)); g(62, COLORS[e.color]?.aci ?? 7); };
     const line = (a: Point, b: Point) => { head('LINE'); g(10, nf(a.x)); g(20, nf(a.y)); g(30, 0); g(11, nf(b.x)); g(21, nf(b.y)); g(31, 0); };
     const poly = (pts: Point[], closed: boolean, bulge?: number[]) => {

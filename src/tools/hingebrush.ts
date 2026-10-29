@@ -9,7 +9,8 @@ import { findRegion } from '../geometry/region';
 import type { Tool, OptionSpec } from '../editor/tool';
 import type { Editor } from '../editor/editor';
 import type { HingeMark, HingePattern, Shape } from '../model/types';
-import { computeHinge, autoAngle, HINGE_PATTERNS, patternInfo, type HingeArea, type BrushSettings } from '../hinge/brush';
+import { computeHinge, autoAngle, HINGE_PATTERNS, patternInfo, MATERIALS, suggest, bendCheck, type HingeArea, type BrushSettings, type MaterialSet } from '../hinge/brush';
+import { laserTime } from '../hinge/hinge';
 
 export const HB_ICON = '<path d="M4 20c3 0 5-2 5-5l9-9a2 2 0 0 0-3-3l-9 9c-3 0-5 2-5 5"/><path d="M12 15h2M10 18h2M15 12h2" />';
 
@@ -75,7 +76,8 @@ export function makeCuts(ed: Editor) {
   let total = 0; for (const s of slits) for (let i = 1; i < s.length; i++) total += dist(s[i - 1], s[i]);
   if (!slits.length) { ed.toast('These areas are too small for slits — make them bigger or the slits shorter'); return; }
   ed.store.change(() => { placeSlits(ed, areas); ed.doc.hingeMade = true; });
-  ed.toast(`Made ${slits.length} slits in ${areas.length} area${areas.length > 1 ? 's' : ''} · ${fmt(total / 1000, 2)} m of cutting · click an area to change it — the slits follow`);
+  const secs = laserTime(total, slits.length, 15, 1), bad = areas.filter(a => bendCheck(a.pattern, settings(ed), matSet(ed), bendR(ed)).state === 'bad').length;
+  ed.toast(`Made ${slits.length} slits in ${areas.length} area${areas.length > 1 ? 's' : ''} · ${fmt(total / 1000, 2)} m of cutting ≈ ${Math.max(1, Math.round(secs / 60))} min at 15 mm/s` + (bad ? ` · ⚠ ${bad} area${bad > 1 ? 's' : ''} may snap (red) — widen the spacing` : ' · click an area to change it — the slits follow'));
 }
 
 /** The area (painted piece) under a point, if any. */
@@ -92,7 +94,7 @@ function selectArea(ed: Editor, a: HingeArea | null) {
   if (a) { const m: any = (ed.doc.hinge || [])[a.index]; ed.opt.hbPattern = a.pattern; ed.opt.hbAngle = m?.angle != null ? m.angle : ''; }
   ed.changed('opts'); ed.changed('prompt'); ed.changed('tool');
 }
-const normA = (x: number) => +(((x % 180) + 180) % 180).toFixed(1);
+const normA = (x: number) => Math.round(((x % 180) + 180) % 180) % 180;
 /** Turn the selected area's slits (or the next fill's) by `step` degrees. */
 function rotate(ed: Editor, step: number) {
   const sel = selArea(ed);
@@ -129,21 +131,44 @@ function previewFill(ed: Editor, raw: Point) {
 }
 
 const isSel = (ed: Editor) => !!ed.state.hbSel;
+const matSet = (ed: Editor): MaterialSet => ({ mat: MATERIALS.find(m => m.id === ed.opt.hbMat) || MATERIALS[0], t: Math.max(0.5, +ed.opt.hbT || 3), kerf: Math.max(0, +ed.opt.hbKerf || 0.2) });
+const bendR = (ed: Editor) => +ed.opt.hbBendR > 0 ? +ed.opt.hbBendR : undefined;
+/** Spacing, slit, bridge and edge gap to suit the material (and the bend asked for). */
+function recommend(ed: Editor) {
+  const ms = matSet(ed), r = suggest(ms, bendR(ed));
+  Object.assign(ed.opt, { hbPitch: r.pitch, hbSlit: r.slit, hbBridge: r.bridge, hbEdge: r.edge }); ed.changed('opts');
+  ed.toast((r.ok ? `For ${ms.t} mm ${ms.mat.name.toLowerCase()}: spacing ${r.pitch}, slit ${r.slit}, bridge ${r.bridge} mm` : `R${bendR(ed)} mm is too tight for ${ms.t} mm ${ms.mat.name.toLowerCase()} — set to the closest it can do`) + (ms.mat.note ? ' · ' + ms.mat.note : ''));
+}
+/** A small sample of this pattern to cut from scrap first. */
+function testStrip(ed: Editor) {
+  let x1 = -Infinity, y0 = Infinity; for (const e of ed.doc.ents) { if (e.gen === 'hinge' || !ed.store.visible(e)) continue; const b = ed.bbox(e); x1 = Math.max(x1, b.x1); y0 = Math.min(y0, b.y0); }
+  const x = isFinite(x1) ? x1 + 10 : 10, y = isFinite(y0) ? y0 : 10, W = 90, H = 30, pts = [P(x, y), P(x + W, y), P(x + W, y + H), P(x, y + H)];
+  const pattern = ed.opt.hbPattern as HingePattern;
+  mutate(ed, () => { ed.store.add({ type: 'poly', closed: true, pts } as Shape); (ed.doc.hinge ??= []).push({ kind: 'area', pattern, pts, at: P(x + W / 2, y + H / 2), angle: angleOpt(ed), c: centred(pattern) ? P(x + W / 2, y + H / 2) : undefined }); });
+  ed.toast('Test strip added (90 × 30 mm) — Make cuts, cut it from scrap, and check the bend before cutting your real part');
+}
 const OPTIONS: OptionSpec[] = [
   { key: 'hbMode', label: 'Mark by', type: 'seg', choices: [['area', 'Fill an area'], ['paint', 'Paint'], ['fold', 'Fold line'], ['erase', 'Eraser']] },
   { key: 'hbPattern', label: 'Pattern', type: 'swatch', choices: HINGE_PATTERNS.map(p => [p.id, p.label, p.fill, p.edge] as [string, string, string, string]) },
-  { key: 'hbAngle', label: 'Slits at', type: 'number', min: 0, max: 180, step: 15, unit: '°', placeholder: 'auto', show: ed => !centred(ed.opt.hbPattern) },
-  { key: 'hbAuto', label: 'Auto angle', type: 'button', run: ed => { ed.opt.hbAngle = ''; applyOpt(ed, 'hbAngle'); ed.changed('opts'); ed.changed('tool'); }, show: ed => !centred(ed.opt.hbPattern) && ed.opt.hbAngle !== '' && ed.opt.hbAngle != null },
+  { key: 'hbAngle', label: 'Angle of slits', type: 'number', min: 0, max: 180, step: 15, unit: '°', placeholder: 'best', show: ed => !centred(ed.opt.hbPattern) },
+  { key: 'hbTurn', label: 'Turn 90°', type: 'button', run: ed => { rotate(ed, 90); ed.changed('tool'); }, show: ed => !centred(ed.opt.hbPattern) },
+  { key: 'hbAuto', label: 'Best angle', type: 'button', run: ed => { ed.opt.hbAngle = ''; applyOpt(ed, 'hbAngle'); ed.changed('opts'); ed.changed('tool'); ed.toast('Slits set across the area’s length, so it bends along it'); }, show: ed => !centred(ed.opt.hbPattern) && ed.opt.hbAngle !== '' && ed.opt.hbAngle != null },
   { key: 'hbR', label: 'Brush size', type: 'number', min: 1, step: 1, unit: 'mm', show: ed => ed.opt.hbMode !== 'area' },
   { key: 'hbFollow', label: 'Slits follow the stroke (snake)', type: 'check', show: ed => ed.opt.hbMode === 'paint' && !centred(ed.opt.hbPattern) },
   { key: 'hbOver', label: 'Paint over', type: 'check', show: ed => ed.opt.hbMode !== 'erase' },
   { key: 'hbPick', label: 'Pick centre', type: 'button', run: ed => { ed.state.pickCentre = true; ed.toast('Click where the centre should be'); ed.changed('prompt'); }, show: ed => centred(ed.opt.hbPattern) },
+  { key: 'hbMat', label: 'Material', type: 'select', choices: MATERIALS.map(m => [m.id, m.name] as [string, string]) },
+  { key: 'hbT', label: 'Thickness', type: 'number', min: 0.5, step: 0.5, unit: 'mm' },
+  { key: 'hbKerf', label: 'Kerf', type: 'number', min: 0, step: 0.05, unit: 'mm' },
+  { key: 'hbBendR', label: 'Bend to R', type: 'number', min: 1, step: 5, unit: 'mm', placeholder: 'any' },
+  { key: 'hbSuggest', label: '★ Recommend', type: 'button', run: recommend },
   { key: 'hbPitch', label: 'Spacing', type: 'number', min: 0.5, step: 0.5, unit: 'mm' },
   { key: 'hbSlit', label: 'Slit', type: 'number', min: 1, step: 1, unit: 'mm' },
   { key: 'hbBridge', label: 'Bridge', type: 'number', min: 0.5, step: 0.5, unit: 'mm' },
   { key: 'hbEdge', label: 'Edge gap', type: 'number', min: 0, step: 0.5, unit: 'mm' },
   { key: 'hbPreview', label: 'Show slits', type: 'check' },
   { key: 'hbDel', label: 'Remove this area', type: 'button', run: ed => removeSel(ed), show: isSel },
+  { key: 'hbTest', label: 'Test strip', type: 'button', run: testStrip },
   { key: 'hbMake', label: 'Make cuts', type: 'button', run: makeCuts },
   { key: 'hbClear', label: 'Clear paint', type: 'button', run: ed => { if (!(ed.doc.hinge || []).length) return; ed.state.hbSel = null; ed.store.change(() => { ed.doc.hinge = []; ed.doc.hingeMade = false; }); ed.toast('Paint cleared (the slits already made stay — undo to bring the paint back)'); } },
 ];
@@ -265,6 +290,14 @@ export const hingeBrushTool: Tool = {
         if (made && a !== sel) continue;
         if (a.arrow) arrow2(ctx, ed2.w2s(a.arrow.p), P(a.arrow.d.x, -a.arrow.d.y), patternInfo(a.pattern).edge);
         if (a.centre) target(ctx, ed2.w2s(a.centre), patternInfo(a.pattern).edge);
+      }
+      // bend check on each area: green fine, orange not as tight as asked, red may snap
+      for (const a of areas) {
+        const bc = bendCheck(a.pattern, settings(ed2), matSet(ed2), bendR(ed2)), two = a.pattern === 'lattice' || a.pattern === 'honeycomb';
+        const at = a.arrow?.p ?? (() => { let x = 0, y = 0, n = 0; for (const q of a.mask[0]) { x += q.x; y += q.y; n++; } return P(x / n, y / n); })(), s0 = ed2.w2s(at), txt = (bc.state === 'bad' ? '⚠ may snap' : two ? 'bends both ways' : `≈ R${Math.round(bc.Rmin)} mm`) + (bc.state === 'tight' ? ' (too loose)' : '');
+        ctx.save(); ctx.font = '600 11px system-ui, sans-serif'; const w = ctx.measureText(txt).width + 12, x = s0.x - w / 2, y = s0.y + 16;
+        ctx.fillStyle = 'rgba(255,255,255,.92)'; ctx.strokeStyle = bc.state === 'ok' ? '#2b8a3e' : bc.state === 'tight' ? '#e67700' : '#e03131'; ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.roundRect(x, y, w, 18, 9); ctx.fill(); ctx.stroke(); ctx.fillStyle = ctx.strokeStyle; ctx.fillText(txt, x + 6, y + 13); ctx.restore();
       }
       if (centred(ed2.opt.hbPattern) && ed2.hover && !sel) target(ctx, ed2.w2s(defaultCentre(ed2, ed2.cur)), pat.edge);
       // the stroke being painted, the fold line being drawn, the brush

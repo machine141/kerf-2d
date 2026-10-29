@@ -1,7 +1,10 @@
 import type { Point } from '../geometry/vec';
 
 /** Colour keys double as laser conventions (red = cut, blue = engrave). */
-export type ColorKey = 'ink' | 'red' | 'blue' | 'green' | 'magenta' | 'orange' | 'grey';
+export type ColorKey = 'ink' | 'red' | 'blue' | 'green' | 'magenta' | 'orange' | 'grey'
+  | 'yellow' | 'gold' | 'brown' | 'coral' | 'pink' | 'maroon' | 'purple' | 'violet' | 'navy' | 'sky' | 'cyan' | 'teal' | 'mint' | 'lime' | 'olive' | 'slate';
+/** What the laser does with a colour: cut through, engrave the line, engrave (fill) the area inside, or nothing (left out of exports). */
+export type LaserMode = 'cut' | 'score' | 'fill' | 'off';
 
 /** group: stack of group ids, outermost last (selecting one member selects the whole outer group). */
 export interface EntBase { id: string; layer: string; color: ColorKey; w: number; group?: string[]; /** made by a tool and rebuilt by it (e.g. 'hinge' = Hinge brush slits) */ gen?: string }
@@ -57,9 +60,11 @@ export interface Doc {
   hinge?: HingeMark[];
   /** Make cuts has been used: changes to the painted areas rebuild the slits straight away */
   hingeMade?: boolean;
+  /** laser setting per colour (missing = the default) */
+  modes?: Partial<Record<ColorKey, LaserMode>>;
 }
 /** Hinge brush pattern: each has its own pastel colour. */
-export type HingePattern = 'straight' | 'wavy' | 'rings' | 'spokes' | 'fold';
+export type HingePattern = 'straight' | 'wavy' | 'lattice' | 'honeycomb' | 'rings' | 'spokes' | 'fold';
 /** One painted area: a brush stroke, a fold line, a clicked area, or an eraser stroke. */
 export type HingeMark =
   | { kind: 'brush'; pattern: HingePattern; pts: Point[]; r: number; over?: boolean; c?: Point; angle?: number; follow?: boolean }
@@ -69,13 +74,35 @@ export type HingeMark =
 
 export const COLORS: Record<ColorKey, { label: string; hex: string; aci: number; tok: string }> = {
   ink: { label: 'Black', hex: '#000000', aci: 7, tok: '--ink' },
-  red: { label: 'Red · cut', hex: '#FF0000', aci: 1, tok: '--c-red' },
-  blue: { label: 'Blue · engrave', hex: '#0000FF', aci: 5, tok: '--c-blue' },
+  red: { label: 'Red', hex: '#FF0000', aci: 1, tok: '--c-red' },
+  blue: { label: 'Blue', hex: '#0000FF', aci: 5, tok: '--c-blue' },
   green: { label: 'Green', hex: '#00FF00', aci: 3, tok: '--c-green' },
   magenta: { label: 'Magenta', hex: '#FF00FF', aci: 6, tok: '--c-magenta' },
   orange: { label: 'Orange', hex: '#FF8000', aci: 30, tok: '--c-orange' },
-  grey: { label: 'Grey · dimensions', hex: '#808080', aci: 8, tok: '--c-grey' },
+  grey: { label: 'Grey', hex: '#808080', aci: 8, tok: '--c-grey' },
+  yellow: { label: 'Yellow', hex: '#E6C200', aci: 2, tok: '' },
+  gold: { label: 'Gold', hex: '#B8860B', aci: 42, tok: '' },
+  brown: { label: 'Brown', hex: '#8B4513', aci: 24, tok: '' },
+  coral: { label: 'Coral', hex: '#FF6F61', aci: 20, tok: '' },
+  pink: { label: 'Pink', hex: '#FF69B4', aci: 221, tok: '' },
+  maroon: { label: 'Maroon', hex: '#800000', aci: 14, tok: '' },
+  purple: { label: 'Purple', hex: '#7B2CBF', aci: 200, tok: '' },
+  violet: { label: 'Violet', hex: '#A685E2', aci: 191, tok: '' },
+  navy: { label: 'Navy', hex: '#000080', aci: 178, tok: '' },
+  sky: { label: 'Sky blue', hex: '#3FA9F5', aci: 140, tok: '' },
+  cyan: { label: 'Cyan', hex: '#00B7C7', aci: 4, tok: '' },
+  teal: { label: 'Teal', hex: '#008080', aci: 134, tok: '' },
+  mint: { label: 'Mint', hex: '#3EB489', aci: 110, tok: '' },
+  lime: { label: 'Lime', hex: '#7CB518', aci: 82, tok: '' },
+  olive: { label: 'Olive', hex: '#6B7A1E', aci: 54, tok: '' },
+  slate: { label: 'Slate', hex: '#4A5A6A', aci: 250, tok: '' },
 };
+/** Laser settings each colour starts with: most cut; blues engrave the line; yellow and gold engrave the area. */
+export const DEFAULT_MODES: Record<ColorKey, LaserMode> = Object.fromEntries((Object.keys(COLORS) as ColorKey[]).map(k => [k, k === 'blue' || k === 'sky' || k === 'navy' ? 'score' : k === 'yellow' || k === 'gold' ? 'fill' : 'cut'])) as any;
+export const MODE_LABEL: Record<LaserMode, string> = { cut: 'Cut', score: 'Engrave line', fill: 'Engrave area', off: 'Don’t cut' };
+export const modeOf = (doc: { modes?: Partial<Record<ColorKey, LaserMode>> }, k: ColorKey): LaserMode => doc.modes?.[k] ?? DEFAULT_MODES[k] ?? 'cut';
+/** e.g. "Red · Cut" */
+export const colorLabel = (doc: { modes?: Partial<Record<ColorKey, LaserMode>> }, k: ColorKey) => `${COLORS[k]?.label ?? k} · ${MODE_LABEL[modeOf(doc, k)]}`;
 export const WIDTHS = [0.01, 0.1, 0.25, 0.35, 0.5, 0.75, 1];
 export const PAGES: Record<string, [number, number, string]> = {
   A4L: [297, 210, 'A4 landscape'], A4P: [210, 297, 'A4 portrait'], A3L: [420, 297, 'A3 landscape'], A3P: [297, 420, 'A3 portrait'],

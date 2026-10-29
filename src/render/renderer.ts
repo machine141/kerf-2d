@@ -3,9 +3,10 @@ import { splineSegs } from '../geometry/spline';
 import { type Point, P, TAU } from '../geometry/vec';
 import type { Editor } from '../editor/editor';
 import type { Overlay, GhostStyle } from '../editor/tool';
-import { COLORS, type Entity, type Shape } from '../model/types';
+import { COLORS, modeOf, type Entity, type Shape } from '../model/types';
 import { hasBulge, segsOf } from '../geometry/path';
 import { keypoints , ext } from '../geometry/entity';
+const isClosed = (e: Shape) => e.type === 'circle' || e.type === 'ellipse' || e.type === 'text' || ((e.type === 'poly' || e.type === 'spline') && e.closed);
 
 const TOKENS = ['--desk', '--sheet', '--grid', '--grid-major', '--ink', '--sel', '--snap', '--muted', '--accent', '--shadow', '--node-start', '--node-end', '--node', '--source', ...Object.values(COLORS).map(c => c.tok)];
 const SNAP_NAMES: Record<string, string> = { end: 'Endpoint', mid: 'Midpoint', centre: 'Centre', quad: 'Quadrant', inter: 'Intersection', nearest: 'Nearest', perp: 'Perpendicular', tangent: 'Tangent', close: 'Close shape' };
@@ -94,7 +95,11 @@ export class Renderer {
 
     for (const e of ed.doc.ents as Entity[]) {
       if (!ed.store.visible(e) || hidden.has(e.id)) continue;
-      const st = hi.get(e.id), col = st === 'selected' ? C['--sel'] : st === 'source' ? C['--source'] : (C[COLORS[e.color]?.tok] || C['--ink']);
+      const base = C[COLORS[e.color]?.tok] || COLORS[e.color]?.hex || C['--ink'], mode = modeOf(ed.doc, e.color);
+      const st = hi.get(e.id), col = st === 'selected' ? C['--sel'] : st === 'source' ? C['--source'] : base;
+      // "Engrave area" colours show their area lightly filled; "Don't cut" colours are drawn faint
+      if (mode === 'fill' && e.type !== 'dim' && isClosed(e as Shape)) { this.path(e as Shape); ctx.save(); ctx.globalAlpha = .22; ctx.fillStyle = base; ctx.fill('evenodd'); ctx.restore(); }
+      if (mode === 'off' && !st && e.type !== 'dim') { ctx.save(); ctx.globalAlpha = .4; this.stroke(e as Shape, col, 1, [2, 3]); ctx.restore(); continue; }
       // selected text: a thin solid line in the selection colour (dashes make small letters hard to read)
       if (st && e.type === 'text') this.stroke(e as Shape, col, Math.max(1.1, e.w * k), undefined);
       else this.stroke(e as Shape, col, Math.max(1.1, e.w * k) + (st ? 1 : 0), st ? [6, 3] : undefined);

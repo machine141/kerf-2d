@@ -71,7 +71,7 @@ header{grid-area:head;display:flex;align-items:center;gap:12px;padding-block:8px
 .tool kbd{position:absolute;right:3px;bottom:1px;font-family:var(--f-mono);font-size:9px;color:var(--muted)}
 .sep{height:1px;background:var(--line);margin:3px 4px;flex:none;grid-column:1/-1;align-self:center}
 #tools .sep{height:1px}
-#attr{grid-area:attr;display:flex;align-items:center;gap:10px;padding:6px 0 6px 8px;border-bottom:1px solid var(--line);min-width:0;min-height:42px;overflow-x:auto;white-space:nowrap}
+#attr{grid-area:attr;display:flex;align-items:center;flex-wrap:wrap;gap:6px 10px;padding:6px 0 6px 8px;border-bottom:1px solid var(--line);min-width:0;min-height:42px;white-space:nowrap}
 #attr .vsep{width:1px;align-self:stretch;background:var(--line);margin:0 2px}
 #attr .bedin{width:58px;background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:2px 4px;color:var(--fg)}
 #attr label,#opts label{display:flex;align-items:center;gap:5px;color:var(--muted);font-size:12px}
@@ -276,6 +276,17 @@ table.res td:last-child{text-align:right;white-space:nowrap}
 /* first-time tip card */
 .swatches button i{display:inline-block;width:12px;height:12px;border-radius:3px;margin-right:5px;vertical-align:-1px;background:color-mix(in srgb,var(--sw) 70%,transparent);border:1.5px solid var(--swe)}
 .swatches button[aria-pressed="true"]{background:color-mix(in srgb,var(--sw) 45%,var(--panel));color:var(--fg);border-color:var(--swe)}
+.colpick{position:relative;display:inline-flex;align-items:center;gap:6px}
+.colbtn{display:inline-flex;align-items:center;gap:6px;font:inherit;padding:4px 8px;border:1px solid var(--line);border-radius:6px;background:var(--sheet);color:var(--fg);cursor:pointer;white-space:nowrap}
+.colbtn i,.colpop .sw i{display:inline-block;width:14px;height:14px;border-radius:4px;border:1px solid rgba(0,0,0,.25)}
+.colpop{position:fixed;z-index:60;background:var(--panel);border:1px solid var(--line);border-radius:10px;box-shadow:0 8px 28px var(--shadow);padding:10px;width:min(420px,calc(100vw - 16px))}
+.colpop .grid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:4px}
+.colpop .sw{display:flex;flex-direction:column;align-items:center;gap:2px;padding:4px 2px;border:1px solid transparent;border-radius:6px;background:none;color:var(--fg);font-size:10px;cursor:pointer}
+.colpop .sw i{width:24px;height:24px;border-radius:6px}
+.colpop .sw[aria-pressed="true"]{border-color:var(--accent);background:var(--panel-2)}
+.colpop .sw small{font-size:9.5px;color:var(--muted)}
+.colpop h4{margin:10px 0 6px;font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
+.colpop .segc{flex-wrap:wrap}
 .fontgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(92px,1fr));gap:6px;margin:6px 0}
 .fontgrid button{font-size:17px;padding:6px 4px;border:1px solid var(--line);border-radius:8px;background:var(--sheet);color:var(--fg);cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .fontgrid button[aria-pressed="true"]{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent) inset}
@@ -357,7 +368,7 @@ body.dropping #main{outline:3px dashed var(--accent);outline-offset:-6px}
 </head>
 <body>
 <header>
-  <div class="brand"><b>Kerf 2D</b><span>precision drafting · v0.13.1</span></div>
+  <div class="brand"><b>Kerf 2D</b><span>precision drafting · v0.14</span></div>
   <input id="docName" aria-label="Drawing name" value="Glasses front">
   <div class="actions">
     <button class="btn" id="bNew">New</button>
@@ -386,7 +397,7 @@ body.dropping #main{outline:3px dashed var(--accent);outline-offset:-6px}
 <nav id="tools" aria-label="Drawing tools"></nav>
 <div id="attr">
   <label>Layer <select id="aLayer"></select></label>
-  <label>Colour <select id="aColor"></select></label>
+  <span class="colpick"><span class="clab">Colour</span> <button type="button" id="aColorBtn" class="colbtn" aria-haspopup="true" aria-expanded="false" title="Colour palette — and what the laser does with each colour"><i id="aColorSw"></i><span id="aColorTxt"></span> ▾</button><div class="colpop" id="aColorPop" hidden></div></span>
   <label>Width <select id="aWidth"></select></label>
   <span class="vsep"></span>
   <label title="Bed / material size (the white sheet)">Bed <select id="aBed"></select></label>

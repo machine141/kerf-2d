@@ -13,7 +13,7 @@ import { openBend } from './profile';
 import { DEFAULT_OPTS, type Editor, type CoordMode } from '../editor/editor';
 import type { OptionSpec, PointerInfo } from '../editor/tool';
 import { Renderer } from '../render/renderer';
-import { COLORS, WIDTHS, PAGES, newDoc, type Entity, type Shape, type ColorKey, type TextEnt as TextEntT } from '../model/types';
+import { COLORS, WIDTHS, PAGES, MODE_LABEL, modeOf, colorLabel, newDoc, type Entity, type Shape, type ColorKey, type LaserMode, type TextEnt as TextEntT } from '../model/types';
 import { exportSVG, importSVG } from '../io/svg';
 import { exportDXF, importDXF, type DxfOptions } from '../io/dxf';
 import { zipOne } from '../io/zip';
@@ -164,7 +164,7 @@ export function startUI(ed: Editor) {
     const dash = (cond: boolean) => cond ? '<option value="">—</option>' : '';
     const lv = one(e => e.layer, ed.doc.current), cv2 = one(e => e.color, ed.doc.attrs.color), wv = one(e => e.w, ed.doc.attrs.w);
     $('#aLayer').innerHTML = dash(lv === '') + ed.doc.layers.map(l => `<option value="${l.id}">${esc(l.name)}</option>`).join(''); ($('#aLayer') as HTMLSelectElement).value = lv;
-    $('#aColor').innerHTML = dash(cv2 === '') + Object.entries(COLORS).map(([k, c]) => `<option value="${k}">${c.label}</option>`).join(''); ($('#aColor') as HTMLSelectElement).value = cv2;
+    renderColor(cv2);
     $('#aWidth').innerHTML = dash(wv === '') + WIDTHS.map(w => `<option value="${w}">${w} mm</option>`).join(''); ($('#aWidth') as HTMLSelectElement).value = String(wv);
     renderBed();
   }
@@ -182,7 +182,28 @@ export function startUI(ed: Editor) {
     else { if (key === 'layer') ed.doc.current = val; else (ed.doc.attrs as any)[key] = val; renderAttr(); renderPane(); }
   };
   ($('#aLayer') as HTMLSelectElement).onchange = e => { const v = (e.target as HTMLSelectElement).value; if (v) applyAttr('layer', v); };
-  ($('#aColor') as HTMLSelectElement).onchange = e => { const v = (e.target as HTMLSelectElement).value; if (v) applyAttr('color', v as ColorKey); };
+  // ---------- colour palette ----------
+  /** The colour button: a swatch and "Red · Cut" (or "Mixed" for a selection of several colours). */
+  function renderColor(cur: ColorKey | '') {
+    const c = cur ? COLORS[cur] : null;
+    $('#aColorSw').style.background = c ? c.hex : 'linear-gradient(135deg,#e03131 50%,#1c4fd8 50%)';
+    $('#aColorTxt').textContent = cur ? colorLabel(ed.doc, cur) : 'Mixed';
+    if (!$('#aColorPop').hidden) renderPalette(cur);
+  }
+  function renderPalette(cur: ColorKey | '') {
+    const pop = $('#aColorPop'), k = (cur || ed.doc.attrs.color) as ColorKey, m = modeOf(ed.doc, k);
+    pop.innerHTML = `<div class="grid">${(Object.keys(COLORS) as ColorKey[]).map(key => `<button type="button" class="sw" data-c="${key}" aria-pressed="${key === cur}" title="${esc(colorLabel(ed.doc, key))}"><i style="background:${COLORS[key].hex}"></i>${esc(COLORS[key].label)}<small>${esc(MODE_LABEL[modeOf(ed.doc, key)])}</small></button>`).join('')}</div>
+      <h4>What the laser does with ${esc(COLORS[k].label.toLowerCase())}</h4>
+      <span class="segc" role="group">${(['cut', 'score', 'fill', 'off'] as LaserMode[]).map(md => `<button type="button" data-m="${md}" aria-pressed="${md === m}">${MODE_LABEL[md]}</button>`).join('')}</span>
+      <p class="hint" style="margin:8px 0 0">${m === 'cut' ? 'Cuts right through the material.' : m === 'score' ? 'Engraves along the line (marks, faces, labels).' : m === 'fill' ? 'Engraves the whole area inside the shape (shown lightly filled).' : 'Left out of SVG / DXF exports — for guide lines and notes.'} Every drawing keeps its own settings.</p>`;
+    pop.querySelectorAll<HTMLElement>('[data-c]').forEach(b => b.onclick = () => { applyAttr('color', b.dataset.c as ColorKey); renderAttr(); renderPalette(b.dataset.c as ColorKey); });
+    pop.querySelectorAll<HTMLElement>('[data-m]').forEach(b => b.onclick = () => { ed.store.change(() => { (ed.doc.modes ??= {})[k] = b.dataset.m as LaserMode; }); renderAttr(); renderPalette(k); });
+  }
+  $('#aColorBtn').onclick = ev => {
+    ev.stopPropagation(); const pop = $('#aColorPop'); pop.hidden = !pop.hidden; $('#aColorBtn').setAttribute('aria-expanded', String(!pop.hidden));
+    if (!pop.hidden) { const r = $('#aColorBtn').getBoundingClientRect(); pop.style.top = (r.bottom + 4) + 'px'; pop.style.left = Math.max(8, Math.min(r.left, innerWidth - 430)) + 'px'; renderAttr(); }
+  };
+  document.addEventListener('click', ev => { if (!(ev.target as HTMLElement).closest?.('.colpick')) { $('#aColorPop').hidden = true; $('#aColorBtn').setAttribute('aria-expanded', 'false'); } });
   ($('#aWidth') as HTMLSelectElement).onchange = e => { const v = (e.target as HTMLSelectElement).value; if (v) applyAttr('w', +v); };
 
   // ---------- toggles / prompt / readout ----------
@@ -528,7 +549,7 @@ export function startUI(ed: Editor) {
       pane.innerHTML = `<h3>${title}</h3>
         <div class="row"><button class="btn" id="pNodes" title="Drag points; double-click a shape to do the same">${ed.state.node ? 'Finish editing points' : 'Edit points'}</button>${e.type === 'poly' ? '<button class="btn" id="pExplode" title="Ctrl+E">Explode to lines</button>' : e.type === 'spline' ? '<button class="btn" id="pExplode" title="Turn the curve into a path of short lines (Ctrl+E)">Convert to path</button>' : ''}<button class="btn" id="pDel">Delete</button></div>
         ${mainF.length ? `<div class="grid2">${mainF.map(f => f.html).join('')}</div>` : ''}${extra}${sz.html}${ptsHtml}
-        <p class="hint">Layer ${esc(ed.store.layer(e.layer)?.name || '?')} · ${COLORS[e.color as ColorKey]?.label || e.color} · ${e.w} mm</p>`;
+        <p class="hint">Layer ${esc(ed.store.layer(e.layer)?.name || '?')} · ${colorLabel(ed.doc, e.color as ColorKey)} · ${e.w} mm</p>`;
       bindFields(F.concat(sz.fields)); bindSize();
       document.querySelector<HTMLElement>('#pExplode')?.addEventListener('click', () => ed.explodeSel()); $('#pDel').onclick = () => ed.deleteSel();
       document.querySelector<HTMLDetailsElement>('#pPts')?.addEventListener('toggle', ev => { ui.ptsOpen = (ev.target as HTMLDetailsElement).open; });
