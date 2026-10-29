@@ -222,3 +222,7 @@ export function softMove<T extends { pts: Point[]; h?: [Point, Point][] }>(orig:
   });
   return out;
 }
+/** Fit Bézier curves to one run of points with fixed end directions (t1 leaving the start, t2 arriving back from the end). */
+export function fitRun(d: Point[], t1: Point, t2: Point, tol: number): [Point, Point, Point, Point][] {
+  const out: Bez[] = []; if (d.length < 2) return out; fitPart(d, 0, d.length - 1, unit(t1), unit(t2), tol, out); return out;
+}

@@ -23,6 +23,7 @@ import { cssFont } from './textedit';
 import { textShapes } from '../text/text';
 import { weldShapes } from '../text/place';
 import { simplifyShape, deviation, smoothNode, cornerNode } from '../geometry/fitcurve';
+import { softenPreview, applySoften } from '../tools/smooth';
 import { FONTS, FONT_GROUPS } from '../text/fonts';
 import { runSelfTest, type TestResult } from '../selftest';
 
@@ -32,7 +33,7 @@ const esc = (s: string) => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<
 export function startUI(ed: Editor) {
   const cv = $<HTMLCanvasElement>('#cv'), R = new Renderer(cv, ed);
   const prefs = loadPrefs(); if (prefs.joinTol != null) ed.opt.joinTol = prefs.joinTol; if (prefs.pickPx != null) ed.opt.pickPx = prefs.pickPx;
-  const ui = { simp: 35, helpShow: null as string | null, alignTo: 'sel' as 'sel' | 'page', ptsOpen: false, tab: 'props', spaceDown: false, lastTest: null as null | { results: TestResult[]; doc: string | null }, exportOpts: { splitArcs: false, includeHidden: false, curveTol: 0.01, skipDims: true } as DxfOptions };
+  const ui = { soft: 50, softC: 'both', simp: 35, helpShow: null as string | null, alignTo: 'sel' as 'sel' | 'page', ptsOpen: false, tab: 'props', spaceDown: false, lastTest: null as null | { results: TestResult[]; doc: string | null }, exportOpts: { splitArcs: false, includeHidden: false, curveTol: 0.01, skipDims: true } as DxfOptions };
   let DL: any = null;
   // ---------- typing text: the box is in the Properties panel; the drawing changes as you type ----------
   /** The text being typed into (one undo step from first key to finishing). */
@@ -496,6 +497,27 @@ export function startUI(ed: Editor) {
     };
     $('#pSimpNo').onclick = () => { ed.state.simp = null; renderPane(); R.request(); };
   }
+  /** Soften: round every corner of the selected shapes (live preview; thin parts that would be lost are left alone). */
+  const softR = (v: number) => +(0.2 * Math.pow(100, v / 100)).toPrecision(2);   // 0.2 … 20 mm
+  function softenBlock() {
+    return `<h3>Soften corners</h3><p class="hint">Rounds every corner — great for friendly key rings and cute shapes. Size stays the same.</p>
+      <div class="row"><span class="hint">Roundness</span><input type="range" id="pSoftn" min="0" max="100" value="${ui.soft}" style="flex:1"><span class="mono" id="pSoftnV">${softR(ui.soft)} mm</span></div>
+      <div class="row"><span class="hint">Corners</span><span class="segc" id="pSoftnC">${[['both', 'All'], ['outer', 'Outside'], ['inner', 'Inside']].map(([v, l]) => `<button type="button" data-v="${v}" aria-pressed="${ui.softC === v}">${l}</button>`).join('')}</span></div>
+      <p class="hint" id="pSoftnInfo">Move the slider to see it.</p><div class="row"><button class="btn primary" id="pSoftnGo" disabled>Soften</button></div>`;
+  }
+  function bindSoften() {
+    const r = document.querySelector<HTMLInputElement>('#pSoftn'); if (!r) return;
+    const preview = () => {
+      ui.soft = +r.value; const rad = softR(ui.soft); $('#pSoftnV').textContent = rad + ' mm';
+      const pv = softenPreview(ed, [...ed.sel], rad, ui.softC as any);
+      ed.state.simp = { ids: pv.ids, shapes: pv.shapes }; ed.state.softPv = pv; R.request();
+      $('#pSoftnInfo').innerHTML = pv.ids.length ? `<b>${pv.ids.length} shape${pv.ids.length > 1 ? 's' : ''}</b> softened${pv.kept.length ? ` · <b class="warn">${pv.kept.length} would lose a thin part</b> — left as ${pv.kept.length > 1 ? 'they are' : 'it is'}; try less roundness` : ''}` : pv.kept.length ? '<b class="warn">A thin part would be lost</b> — try less roundness' : 'Nothing to soften here (circles are already round)';
+      $<HTMLButtonElement>('#pSoftnGo').disabled = !pv.ids.length;
+    };
+    r.oninput = preview;
+    document.querySelectorAll<HTMLElement>('#pSoftnC button').forEach(b => b.onclick = () => { ui.softC = b.dataset.v!; document.querySelectorAll('#pSoftnC button').forEach(x => x.setAttribute('aria-pressed', String(x === b))); preview(); });
+    $('#pSoftnGo').onclick = () => { const pv = ed.state.softPv; ed.state.simp = null; ed.state.softPv = null; if (pv) applySoften(ed, pv); };
+  }
   /** Point editing extras: soft drag, and the selected point made smooth / sharp / removed (keeping the shape). */
   function nodeBlock(e: any) {
     const nd = ed.state.node, i = nd && nd.id === e.id ? nd.sel : null;
@@ -563,8 +585,8 @@ export function startUI(ed: Editor) {
           <div class="row"><button class="btn" id="pGroup" title="Ctrl+G">Group</button><button class="btn" id="pUngroup" title="Ctrl+U" ${grouped ? '' : 'disabled'}>Ungroup</button><button class="btn" id="pPath" title="Join touching lines and arcs into one path (Ctrl+H)">Make path</button><button class="btn" id="pExplode" title="Ctrl+E">Explode</button><button class="btn" id="pDel">Delete</button></div>
           <p class="hint">Explode ungroups one level at a time; on paths it breaks them into lines and arcs.</p>
           <h3>Combine shapes</h3><div class="row"><button class="btn" id="bUnion" title="Join overlapping closed shapes into one outline (Ctrl+Alt+U)">Union</button><button class="btn" id="bSub" title="Cut the smaller shapes out of the largest (Ctrl+Alt+S)">Subtract</button><button class="btn" id="bInt" title="Keep only the overlap (Ctrl+Alt+I)">Intersect</button><button class="btn" id="bTidy" title="Remove duplicates and zero-size objects; join pieces that meet">Tidy</button></div>
-          <p class="hint">Subtract keeps the largest shape and cuts the others out of it. Curves stay true arcs.</p>${sel.some(x => x.type === 'poly' || x.type === 'spline') ? simplifyBlock() : ''}`;
-        if (sel.some(x => x.type === 'poly' || x.type === 'spline')) bindSimplify();
+          <p class="hint">Subtract keeps the largest shape and cuts the others out of it. Curves stay true arcs.</p>${sel.some(x => x.type === 'poly' || x.type === 'spline') ? softenBlock() + simplifyBlock() : ''}`;
+        if (sel.some(x => x.type === 'poly' || x.type === 'spline')) { bindSimplify(); bindSoften(); }
         bindFields(sz.fields); bindSize(); $('#pExplode').onclick = () => ed.explodeSel(); $('#pDel').onclick = () => ed.deleteSel(); $('#pGroup').onclick = () => ed.groupSel(); $('#pUngroup').onclick = () => ed.ungroupSel(); $('#pPath').onclick = () => ed.makePathSel();
         $('#bUnion').onclick = () => ed.booleanSel('union'); $('#bSub').onclick = () => ed.booleanSel('subtract'); $('#bInt').onclick = () => ed.booleanSel('intersect'); $('#bTidy').onclick = () => ed.tidySel(); return;
       }
@@ -591,9 +613,9 @@ export function startUI(ed: Editor) {
       const mainF = F.filter(f => !ptsHtml.includes(`id="${f.id}"`));
       pane.innerHTML = `<h3>${title}</h3>
         <div class="row"><button class="btn" id="pNodes" title="Drag points; double-click a shape to do the same">${ed.state.node ? 'Finish editing points' : 'Edit points'}</button>${e.type === 'poly' ? '<button class="btn" id="pExplode" title="Ctrl+E">Explode to lines</button>' : e.type === 'spline' ? '<button class="btn" id="pExplode" title="Turn the curve into a path of short lines (Ctrl+E)">Convert to path</button>' : ''}<button class="btn" id="pDel">Delete</button></div>
-        ${mainF.length ? `<div class="grid2">${mainF.map(f => f.html).join('')}</div>` : ''}${extra}${e.type === 'poly' || e.type === 'spline' ? nodeBlock(e) + simplifyBlock() : ''}${sz.html}${ptsHtml}
+        ${mainF.length ? `<div class="grid2">${mainF.map(f => f.html).join('')}</div>` : ''}${extra}${e.type === 'poly' || e.type === 'spline' ? nodeBlock(e) + softenBlock() + simplifyBlock() : ''}${sz.html}${ptsHtml}
         <p class="hint">Layer ${esc(ed.store.layer(e.layer)?.name || '?')} · ${colorLabel(ed.doc, e.color as ColorKey)} · ${e.w} mm</p>`;
-      if (e.type === 'poly' || e.type === 'spline') { bindSimplify(); bindNodes(e); }
+      if (e.type === 'poly' || e.type === 'spline') { bindSimplify(); bindSoften(); bindNodes(e); }
       bindFields(F.concat(sz.fields)); bindSize();
       document.querySelector<HTMLElement>('#pExplode')?.addEventListener('click', () => ed.explodeSel()); $('#pDel').onclick = () => ed.deleteSel();
       document.querySelector<HTMLDetailsElement>('#pPts')?.addEventListener('toggle', ev => { ui.ptsOpen = (ev.target as HTMLDetailsElement).open; });
