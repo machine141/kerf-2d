@@ -274,6 +274,8 @@ table.res td:last-child{text-align:right;white-space:nowrap}
 .hbtn.on,.htopic.on{border-color:var(--accent);box-shadow:0 0 0 2px color-mix(in srgb,var(--accent) 25%,transparent)}
 .hbtn:hover,.htopic:hover{border-color:var(--accent)}
 /* first-time tip card */
+.swatches button i{display:inline-block;width:12px;height:12px;border-radius:3px;margin-right:5px;vertical-align:-1px;background:color-mix(in srgb,var(--sw) 70%,transparent);border:1.5px solid var(--swe)}
+.swatches button[aria-pressed="true"]{background:color-mix(in srgb,var(--sw) 45%,var(--panel));color:var(--fg);border-color:var(--swe)}
 .fontgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(92px,1fr));gap:6px;margin:6px 0}
 .fontgrid button{font-size:17px;padding:6px 4px;border:1px solid var(--line);border-radius:8px;background:var(--sheet);color:var(--fg);cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .fontgrid button[aria-pressed="true"]{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent) inset}
@@ -355,7 +357,7 @@ body.dropping #main{outline:3px dashed var(--accent);outline-offset:-6px}
 </head>
 <body>
 <header>
-  <div class="brand"><b>Kerf 2D</b><span>precision drafting · v0.12.2</span></div>
+  <div class="brand"><b>Kerf 2D</b><span>precision drafting · v0.13</span></div>
   <input id="docName" aria-label="Drawing name" value="Glasses front">
   <div class="actions">
     <button class="btn" id="bNew">New</button>

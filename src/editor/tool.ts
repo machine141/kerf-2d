@@ -13,7 +13,9 @@ export type OptionSpec =
   | { key: string; label: string; type: 'check'; show?: (ed: Editor) => boolean }
   | { key: string; label: string; type: 'select'; choices: [string, string][]; show?: (ed: Editor) => boolean }
   | { key: string; label: string; type: 'button'; run: (ed: Editor) => void; show?: (ed: Editor) => boolean }
-  | { key: string; label: string; type: 'hint'; show?: (ed: Editor) => boolean };
+  | { key: string; label: string; type: 'hint'; show?: (ed: Editor) => boolean }
+  /** colour swatches: [value, label, fill colour, edge colour] */
+  | { key: string; label: string; type: 'swatch'; choices: [string, string, string, string][]; show?: (ed: Editor) => boolean };
 
 export interface PointerInfo { sp: Point; shift: boolean; alt: boolean; ctrl: boolean }
 
@@ -63,6 +65,8 @@ export interface Tool {
   cancel?(ed: Editor): boolean;
   overlay?(ed: Editor, o: Overlay): void;
   cursor?(ed: Editor, sp: Point): string;
+  /** drawn under the drawing every frame, whichever tool is active */
+  underlay?(ctx: CanvasRenderingContext2D, ed: Editor, colors: Record<string, string>): void;
   /** an option in the strip was changed (e.g. apply it to the selected text) */
   onOpt?(ed: Editor, key: string): void;
 }

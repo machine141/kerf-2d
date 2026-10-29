@@ -140,12 +140,13 @@ export function startUI(ed: Editor) {
     if (o.type === 'check') return `<label><input type="checkbox" data-opt="${o.key}" ${v ? 'checked' : ''}> ${esc(o.label)}</label>`;
     if (o.type === 'select') return `<label>${esc(o.label)} <select data-opt="${o.key}">${o.choices.map(([cv, l]) => `<option value="${cv}" ${String(v) === cv ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select></label>`;
     if (o.type === 'button') return `<button class="btn" data-opt="${o.key}">${esc(o.label)}</button>`;
+    if (o.type === 'swatch') return `<label>${esc(o.label)} <span class="segc swatches" role="group" data-opt="${o.key}">${o.choices.map(([cv, l, fill, edge]) => `<button type="button" data-v="${cv}" aria-pressed="${String(v) === cv}" style="--sw:${fill};--swe:${edge}"><i></i>${esc(l)}</button>`).join('')}</span></label>`;
     return `<span class="hint">${esc(o.label)}</span>`;
   }
   function bindOpt(o: OptionSpec) {
     const el = document.querySelector<HTMLElement>(`#toolOpts [data-opt="${o.key}"]`); if (!el) return;
     const told = () => ed.tool.onOpt?.(ed, o.key);
-    if (o.type === 'seg') el.querySelectorAll<HTMLElement>('button').forEach(b => b.onclick = () => { ed.opt[o.key] = b.dataset.v; told(); renderOptions(); ed.changed('opts'); R.request(); });
+    if (o.type === 'seg' || o.type === 'swatch') el.querySelectorAll<HTMLElement>('button').forEach(b => b.onclick = () => { ed.opt[o.key] = b.dataset.v; told(); renderOptions(); ed.changed('opts'); R.request(); });
     else if (o.type === 'number') { const inp = el as HTMLInputElement; inp.oninput = () => { const v = o.unit === 'mm' ? parseLength(inp.value) : parseFloat(inp.value); if (inp.value.trim() === '') { ed.opt[o.key] = ''; } else if (isFinite(v)) { ed.opt[o.key] = v; if (o.key === 'offD') ed.opt.offFollow = false; told(); } R.request(); }; inp.onkeydown = e => { if (e.key === 'Enter' || e.key === 'Escape') { inp.blur(); syncOptions(); } }; inp.onchange = () => refreshOptions(); }
     else if (o.type === 'check') (el as HTMLInputElement).onchange = () => { ed.opt[o.key] = (el as HTMLInputElement).checked; told(); refreshOptions(); R.request(); };
     else if (o.type === 'select') (el as HTMLSelectElement).onchange = () => { ed.opt[o.key] = (el as HTMLSelectElement).value; told(); R.request(); };

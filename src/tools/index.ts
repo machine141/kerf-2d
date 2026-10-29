@@ -10,5 +10,6 @@ import { arrayTool } from './array';
 import { filletTool } from './fillet';
 import { moveTool, rotateTool, mirrorTool } from './transform';
 import { textTool } from './text';
+import { hingeBrushTool } from './hingebrush';
 
-export const ALL_TOOLS: Tool[] = [selectTool, lineTool, rectTool, polygonTool, circleTool, arcTool, splineTool, spiralTool, textTool, dimTool, offsetTool, filletTool, trimTool, ringTool, eraserTool, moveTool, rotateTool, mirrorTool, arrayTool];
+export const ALL_TOOLS: Tool[] = [selectTool, lineTool, rectTool, polygonTool, circleTool, arcTool, splineTool, spiralTool, textTool, dimTool, offsetTool, filletTool, trimTool, ringTool, hingeBrushTool, eraserTool, moveTool, rotateTool, mirrorTool, arrayTool];

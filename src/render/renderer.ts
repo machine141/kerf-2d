@@ -88,6 +88,8 @@ export class Renderer {
       for (let y = 0; y <= h + 1e-9; y += g) { const s = ed.w2s(P(0, y)); ctx.strokeStyle = Math.round(y / g) % 5 === 0 ? C['--grid-major'] : C['--grid']; ctx.beginPath(); ctx.moveTo(tl.x, Math.round(s.y) + .5); ctx.lineTo(tl.x + w * k, Math.round(s.y) + .5); ctx.stroke(); }
       ctx.restore();
     }
+    // tools that keep something painted on the sheet (Hinge brush areas) draw it under the drawing
+    for (const t of Object.values(ed.tools)) t.underlay?.(ctx, ed, C);
     const or = ed.w2s(P(0, 0)); ctx.strokeStyle = C['--accent']; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(or.x, or.y); ctx.lineTo(or.x + 18, or.y); ctx.moveTo(or.x, or.y); ctx.lineTo(or.x, or.y - 18); ctx.stroke();
 
     for (const e of ed.doc.ents as Entity[]) {
