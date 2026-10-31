@@ -481,6 +481,25 @@ body.dropping #main{outline:3px dashed var(--accent);outline-offset:-6px}
 #laserWs .tog.sm input::after{width:12px;height:12px}
 #laserWs .tog.sm input:checked::after{left:14px}
 #laserWs .lw-row.small{font-size:12px;gap:14px}
+#laserWs .lw-grid{display:grid;grid-template-columns:max-content 1fr;gap:6px 10px;align-items:center}
+#laserWs .lw-grid>label,#laserWs .lw-grid>.lw-lab{color:var(--muted);font-size:12.5px}
+#laserWs .lw-in{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+#laserWs .lw-in input[type=text]{width:70px;text-align:right}
+#laserWs #lwName{width:170px;text-align:left}
+#laserWs .lw-sub{color:var(--muted);font-size:12px;display:inline-flex;align-items:center;gap:4px}
+#laserWs .lw-sub input[type=text]{width:50px}
+#laserWs .segc.icons button{padding:3px 6px;line-height:0}
+#laserWs .segc.icons svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.5}
+#laserWs .segc.icons svg rect{fill:currentColor;stroke:none;opacity:.8}
+#laserWs .segc button:hover{color:var(--accent)}
+#laserWs .btn.sm{padding:3px 10px}
+#laserWs .lw-quick{border:1px solid var(--line);border-radius:8px;padding:8px 10px;display:flex;flex-direction:column;gap:6px;background:var(--panel)}
+#laserWs .lw-qh{display:flex;gap:12px;align-items:baseline}
+#laserWs .lw-qh b{margin-right:auto}
+#laserWs .lw-howto{margin:0;padding-left:18px;font-size:12.5px;line-height:1.5;display:flex;flex-direction:column;gap:4px}
+#laserWs .lw-arrow{position:absolute;transform:translate(-50%,-50%);width:34px;height:34px;border-radius:50%;border:2px solid var(--accent);background:var(--sheet);color:var(--accent);font-size:18px;line-height:1;display:grid;place-items:center;box-shadow:0 2px 8px var(--shadow);cursor:pointer;z-index:2}
+#laserWs .lw-arrow:hover{background:var(--accent);color:var(--accent-fg)}
+#laserWs .lw-arrow[hidden]{display:none}
 #laserWs .lw-cut{display:flex;flex-direction:column;gap:6px;border-top:1px dashed var(--line);padding-top:8px}
 #laserWs .lw-set th{font-size:11.5px;font-weight:500;color:var(--muted);text-align:left;padding:2px 4px;line-height:1.2}
 #laserWs .lw-set td{padding:5px 4px;border-top:1px solid var(--line);vertical-align:middle}
@@ -501,7 +520,7 @@ body.dropping #main{outline:3px dashed var(--accent);outline-offset:-6px}
 </head>
 <body>
 <header>
-  <div class="brand"><b>Kerf 2D</b><span>precision drafting · v1.6</span></div>
+  <div class="brand"><b>Kerf 2D</b><span>precision drafting · v1.7</span></div>
   <div class="files">
     <button class="btn" id="bNew" title="Start a new drawing">New</button>
     <button class="btn" id="bOpen" title="Open a Kerf drawing, or bring in an SVG, DXF or picture">Open…</button>

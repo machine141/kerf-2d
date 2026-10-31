@@ -19,7 +19,7 @@ export interface Machine {
 /** A material saved by the user: settings for each colour (and for any other colour, by what it does). */
 export interface MyMaterial { id: string; name: string; colors: Record<string, PhaseSet>; phase: JobSettings }
 /** Where something was already cut on this sheet of material (bed coordinates), so the next job can go beside it. */
-export interface Trace { when: string; name: string; parts: Point[][]; box: { x0: number; y0: number; x1: number; y1: number }; start: Point }
+export interface Trace { when: string; name: string; parts: Point[][]; box: { x0: number; y0: number; x1: number; y1: number }; /** where the laser started cutting, and where the head was when it finished */ start: Point; end?: Point }
 export interface LaserState {
   machine: Machine;
   /** chosen material: '' (none), 'ex:…' (an example) or one of mine by id */

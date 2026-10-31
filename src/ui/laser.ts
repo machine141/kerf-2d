@@ -11,12 +11,26 @@ import { sheetDoc } from '../io/sheets';
 import { cutOrder, type LPath, type Phase, PHASES } from '../laser/order';
 import { exportLaserSVG } from '../laser/export';
 import { simulate, placement, fmtTime, clock, DEFAULT_MOTION, type Sim, type Step, type PhaseSet } from '../laser/sim';
-import { loadState, saveState, cornerPt, fitsBed, overlapsTraces, EXAMPLES, type LaserState, type Corner } from '../laser/machine';
-import { buildJob, colsThatFit, thin } from '../laser/job';
+import { loadState, saveState, cornerPt, fitsBed, overlapsTraces, inside as insidePoly, EXAMPLES, type LaserState, type Corner } from '../laser/machine';
+import { buildJob, colsThatFit, thin, laserBox } from '../laser/job';
+import { laserPaths } from '../laser/order';
+import { findParts } from '../nest/parts';
+import { affEnt, affMove, affScale } from '../geometry/affine';
+import type { Entity, Shape } from '../model/types';
 
 const PH_LABEL: Record<Phase, string> = { engrave: 'Engrave area', score: 'Engrave line', cut: 'Cut' };
 const esc = (s: string) => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' } as any)[c]);
 const r1 = (v: number) => (Math.round(v * 10) / 10).toString();
+type Box = { x0: number; y0: number; x1: number; y1: number };
+const boxOf = (pts: Point[]): Box => pts.reduce((b, p) => ({ x0: Math.min(b.x0, p.x), y0: Math.min(b.y0, p.y), x1: Math.max(b.x1, p.x), y1: Math.max(b.y1, p.y) }), { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity });
+const ALIGN_ICON: Record<string, string> = {
+  left: '<path d="M3 2v16"/><rect x="6" y="5" width="9" height="3"/><rect x="6" y="11" width="5" height="3"/>',
+  centre: '<path d="M10 2v16" stroke-dasharray="2 1.5"/><rect x="4" y="5" width="12" height="3"/><rect x="6.5" y="11" width="7" height="3"/>',
+  right: '<path d="M17 2v16"/><rect x="5" y="5" width="9" height="3"/><rect x="9" y="11" width="5" height="3"/>',
+  back: '<path d="M2 3h16"/><rect x="5" y="6" width="3" height="9"/><rect x="11" y="6" width="3" height="5"/>',
+  middle: '<path d="M2 10h16" stroke-dasharray="2 1.5"/><rect x="5" y="4" width="3" height="12"/><rect x="11" y="6.5" width="3" height="7"/>',
+  front: '<path d="M2 17h16"/><rect x="5" y="5" width="3" height="9"/><rect x="11" y="9" width="3" height="5"/>',
+};
 const hexOf = (k: string) => k === 'paint' ? '#E58FB0' : (COLORS[k as ColorKey]?.hex || '#000');
 
 export function openLaser(ed: Editor, saveFile: (name: string, text: string) => void) {
@@ -25,6 +39,10 @@ export function openLaser(ed: Editor, saveFile: (name: string, text: string) => 
   const nS = Math.max(1, ed.doc.sheets || 1); let sheet = 0;
   let base: Doc, doc: Doc, paths: LPath[] = [], box = { x0: 0, y0: 0, x1: 0, y1: 0 }, sim: Sim | null = null;
   let addingMat = false, matDirty = false;
+  // quick changes on the bed: picked parts (by object id), parts left out of this cut, the parts themselves (bed coords)
+  const sel = new Set<string>(), left = new Set<string>();
+  let parts: { ids: string[]; polys: Point[][]; box: Box }[] = [], cbOff = { dx: 0, dy: 0, w: 0, h: 0 };
+  let selDrag: Point | null = null, boxSel: { a: Point; b: Point } | null = null, setupAnim: number | null = null;
   let ruler: Point | null = null, rulerOn = false, tPlay = 0, playing = false, speed = 10, showTravel = true, frameAnim: number | null = null;
   const save = () => saveState(S);
 
@@ -39,7 +57,9 @@ export function openLaser(ed: Editor, saveFile: (name: string, text: string) => 
     <div class="lw-body">
       <aside class="lw-steps" id="lwSteps"></aside>
       <main class="lw-main">
-        <div class="lw-bedwrap"><canvas id="lwBed" aria-label="The laser bed, as you stand at the front"></canvas></div>
+        <div class="lw-bedwrap"><canvas id="lwBed" aria-label="The laser bed, as you stand at the front"></canvas>
+          <button type="button" class="lw-arrow" id="lwArrFB" title="Flip front ↕ back" aria-label="Flip front and back" hidden>⇅</button>
+          <button type="button" class="lw-arrow" id="lwArrLR" title="Flip left ↔ right" aria-label="Flip left and right" hidden>⇆</button></div>
         <div class="lw-player">
           <button class="btn primary" id="lwPlay" title="Play the job: watch the order the laser will follow">▶ Play</button>
           <input type="range" id="lwScrub" min="0" max="1000" value="0" aria-label="Where in the job">
@@ -61,21 +81,30 @@ export function openLaser(ed: Editor, saveFile: (name: string, text: string) => 
     const one = buildJob(base, { turns: S.turns, copies: 1, gap: S.gap, cols: 1 });
     const x = S.placeMode === 'bed' ? S.at.x : S.head.x - (S.anchor === 'centre' ? one.W / 2 : 0);
     const j = S.copies > 1 ? buildJob(base, { turns: S.turns, copies: S.copies, gap: S.gap, cols: colsThatFit(S.machine.bedW, x, one.one.w, S.gap) }) : one;
-    doc = j.doc; box = { x0: 0, y0: 0, x1: j.W, y1: j.H };
+    doc = j.doc; box = { x0: 0, y0: 0, x1: j.W, y1: j.H }; sel.clear(); left.clear();
     rebuild();
   }
   /** settings for a colour: its own row, or (until it has one) what its kind of job starts with */
   const setFor = (k: string, ph: Phase): PhaseSet => S.colors[k] ?? S.phase[ph];
-  const jobW = () => box.x1 - box.x0, jobH = () => box.y1 - box.y0;
-  /** where the job's top-left goes on the bed */
-  const jobAt = (): Point => S.placeMode === 'bed' ? S.at : S.anchor === 'centre' ? P(S.head.x - jobW() / 2, S.head.y - jobH() / 2) : S.head;
+  const refW = () => box.x1 - box.x0, refH = () => box.y1 - box.y0;
+  /** where the job's frame (as it was made) has its top-left on the bed */
+  const jobAt = (): Point => S.placeMode === 'bed' ? S.at : S.anchor === 'centre' ? P(S.head.x - refW() / 2, S.head.y - refH() / 2) : S.head;
   const startPt = (): Point => S.placeMode === 'bed' ? cornerPt(S.machine) : S.head;
-  const jobBox = () => { const a = jobAt(); return { x0: a.x, y0: a.y, x1: a.x + jobW(), y1: a.y + jobH() }; };
+  /** what will actually be cut, on the bed (after quick changes and leaving parts out) */
+  const jobBox = (): Box => { const a = jobAt(); return { x0: a.x + cbOff.dx, y0: a.y + cbOff.dy, x1: a.x + cbOff.dx + cbOff.w, y1: a.y + cbOff.dy + cbOff.h }; };
+  const jobW = () => cbOff.w, jobH = () => cbOff.h;
+  const cutDoc = (): Doc => left.size ? { ...doc, ents: doc.ents.filter(e => !left.has(e.id)) } : doc;
   function rebuild() {
     const pl = placement(box, jobAt());
     // order again from where the head really starts, then simulate
-    const st = pl.toDoc(startPt()); paths = cutOrder(doc, { start: st }).paths;
+    const st = pl.toDoc(startPt()); paths = cutOrder(cutDoc(), { start: st }).paths;
     sim = simulate(paths, pl.toBed, p => setFor(String(p.key), p.phase), startPt(), DEFAULT_MOTION);
+    // the parts you can pick on the bed (a part = an outline with its holes and engraving; copies are separate)
+    const lasered = new Set(laserPaths(doc).flatMap(p => p.ids)), copyOf = (e: Entity) => e.id.split('#')[1] || '';
+    parts = findParts(doc.ents.filter(e => lasered.has(e.id)) as Entity[], e => e.group?.length ? e.group[e.group.length - 1] + '#' + copyOf(e) : null)
+      .map(q => { const polys = q.polys.map(r => r.map(pl.toBed)); return { ids: q.ids, polys, box: boxOf(polys.flat()) }; });
+    const a = jobAt(), cb = sim.box || { x0: a.x, y0: a.y, x1: a.x + refW(), y1: a.y + refH() };
+    cbOff = { dx: cb.x0 - a.x, dy: cb.y0 - a.y, w: cb.x1 - cb.x0, h: cb.y1 - cb.y0 };
     tPlay = Math.min(tPlay, sim.total); msg('');
     overlapN = S.traces.length ? overlapsTraces(jobParts().map(q => thin(q, 1)), S.traces) : 0;
     renderSteps(); draw(); updatePlayer();
@@ -88,6 +117,24 @@ export function openLaser(ed: Editor, saveFile: (name: string, text: string) => 
   let overlapN = 0;
   const overlap = () => overlapN;
 
+  // ---------- quick changes to picked parts (the drawing itself is not changed) ----------
+  const pickedParts = () => parts.filter(q => q.ids.some(id => sel.has(id)) && !q.ids.every(id => left.has(id)));
+  const pickedBox = () => { const ps = pickedParts(); return ps.length ? boxOf(ps.flatMap(q => [P(q.box.x0, q.box.y0), P(q.box.x1, q.box.y1)])) : null; };
+  function changePicked(A: (c: Point) => Parameters<typeof affEnt>[1]) {
+    const ids = new Set(pickedParts().flatMap(q => q.ids)); if (!ids.size) return;
+    const sub = laserBox({ ...doc, ents: doc.ents.filter(e => ids.has(e.id)) }); if (!sub) return;
+    const T = A(P((sub.x0 + sub.x1) / 2, (sub.y0 + sub.y1) / 2));
+    doc = { ...doc, ents: doc.ents.map(e => ids.has(e.id) ? { ...(affEnt(e as Shape, T) as any), id: e.id, layer: e.layer, color: e.color, w: e.w, group: e.group } : e) };
+    rebuild();
+  }
+  const scalePicked = (f: number) => changePicked(c => affScale(c, f, f));
+  /** move by a distance on the bed (y from the back = down the drawing) */
+  const movePicked = (d: Point) => changePicked(() => affMove(P(d.x, -d.y)));
+  function partAt(p: Point) {
+    for (let i = parts.length - 1; i >= 0; i--) { const q = parts[i]; if (q.ids.every(id => left.has(id))) continue; if (p.x < q.box.x0 - 1 || p.x > q.box.x1 + 1 || p.y < q.box.y0 - 1 || p.y > q.box.y1 + 1) continue; if (q.polys.some(r => r.length > 2 && insidePoly(p, r))) return q; }
+    return null;
+  }
+
   // ---------- steps ----------
   function stepHtml(n: number, title: string, open: boolean, summary: string, body: string, id: string) {
     return `<section class="lw-step${open ? ' open' : ''}" id="${id}"><div class="lw-sh"><span class="lw-n">${n}</span><b>${title}</b>${!open && summary ? `<span class="lw-sum">${summary}</span>` : ''}</div>${open ? `<div class="lw-sb">${body}</div>` : ''}</section>`;
@@ -97,12 +144,16 @@ export function openLaser(ed: Editor, saveFile: (name: string, text: string) => 
     const m = S.machine, has = present(), fit = fitsBed(m, jobBox()), est = sim;
     $('#lwSheet').innerHTML = nS > 1 ? `Sheet <span class="segc" id="lwSh">${Array.from({ length: nS }, (_, i) => `<button type="button" data-v="${i}" aria-pressed="${i === sheet}">${i + 1}</button>`).join('')}</span>` : esc(ed.doc.name || '');
     const s1 = stepHtml(1, 'Your laser', !m.setUp, `✓ ${esc(m.name)} · ${m.bedW} × ${m.bedH} mm <button type="button" class="lw-link" id="lwChange">Change</button>`, `
-      ${help('Do this once. Stand at the <b>front</b> of the laser. In the picture, the shaded bands are the <b>back</b> and the <b>sides</b>; you stand at the open edge.')}
-      <div class="lw-row"><label>Name <input type="text" id="lwName" value="${esc(m.name)}"></label></div>
-      <div class="lw-row"><label>Bed width <input type="text" inputmode="decimal" id="lwBW" value="${m.bedW}"> mm</label><label>depth <input type="text" inputmode="decimal" id="lwBH" value="${m.bedH}"> mm</label></div>
-      <canvas id="lwOri" width="300" height="200" aria-label="The laser seen from the front"></canvas>
-      ${help('Click the <b>corner the head goes to</b> when you switch the laser on (the green dot). Then press <b>Show how it should frame</b> and compare with the real laser’s Frame. If the real head went the other way, press a <b>Flip</b> until the picture matches.')}
-      <div class="lw-row wrap"><button type="button" class="btn" id="lwOriPlay">▶ Show how it should frame</button><button type="button" class="btn" id="lwFlipLR" aria-pressed="${m.flipLR}">Flip left ↔ right</button><button type="button" class="btn" id="lwFlipFB" aria-pressed="${m.flipFB}">Flip front ↕ back</button></div>
+      ${help('Do this once. Stand at the <b>front</b> of the laser. The big picture is the bed: the pink bands are the <b>back</b> and the <b>sides</b>; you stand at the open edge.')}
+      <div class="lw-grid"><label for="lwName">Name</label><span class="lw-in"><input type="text" id="lwName" value="${esc(m.name)}"></span>
+        <label for="lwBW">Bed width</label><span class="lw-in"><input type="text" inputmode="decimal" id="lwBW" value="${m.bedW}"> mm</span>
+        <label for="lwBH">Bed depth</label><span class="lw-in"><input type="text" inputmode="decimal" id="lwBH" value="${m.bedH}"> mm</span></div>
+      <ol class="lw-howto">
+        <li>Switch the laser on. On the big picture, <b>click the corner the head goes to</b> (the green dot).</li>
+        <li>Press <b>▶ Show how it should frame</b> and watch the picture. Then press Frame on the real laser.</li>
+        <li>Did the real head go the other way? Click the <b>⇅</b> or <b>⇆</b> arrow on the bed until the picture moves the same way as the laser.</li>
+      </ol>
+      <div class="lw-row wrap"><button type="button" class="btn" id="lwOriPlay">▶ Show how it should frame</button>${m.flipLR || m.flipFB ? `<span class="lw-read small">Flipped: ${[m.flipLR ? 'left ↔ right' : '', m.flipFB ? 'front ↕ back' : ''].filter(Boolean).join(', ')}</span>` : ''}</div>
       <button type="button" class="btn primary" id="lwSetUp">Done: my laser is set up</button>`, 'lwS1');
     const mine = S.myMaterials.find(m => m.id === S.material);
     const rows = colours().map(([k, ph]) => { const st = setFor(k, ph), name = k === 'paint' ? 'Fills' : COLORS[k as ColorKey]?.label || k;
@@ -129,20 +180,25 @@ export function openLaser(ed: Editor, saveFile: (name: string, text: string) => 
         <button type="button" role="radio" data-pm="head" aria-checked="${S.placeMode === 'head'}"><b>Start where the laser head is</b><span>Move the head over your material; the job sits under it.</span></button>
       </div>
       ${S.placeMode === 'bed' ? `
-        <div class="lw-row"><label>From the left <input type="text" inputmode="decimal" id="lwX" value="${r1(S.at.x)}"> mm</label><label>From the back <input type="text" inputmode="decimal" id="lwY" value="${r1(S.at.y)}"> mm</label></div>
-        <div class="lw-row wrap"><button type="button" class="btn" id="lwCornerBL">Back-left corner</button><button type="button" class="btn" id="lwMid">Middle of the bed</button></div>` : `
-        <div class="lw-row"><label>Head from the left <input type="text" inputmode="decimal" id="lwHX" value="${r1(S.head.x)}"> mm</label><label>from the back <input type="text" inputmode="decimal" id="lwHY" value="${r1(S.head.y)}"> mm</label></div>
-        <div class="lw-row">The head is at the job’s <div class="segc" id="lwAnchor"><button type="button" data-v="top-left" aria-pressed="${S.anchor === 'top-left'}">top-left corner</button><button type="button" data-v="centre" aria-pressed="${S.anchor === 'centre'}">middle</button></div></div>
-        ${help('Until Kerf is connected to the laser, type where you moved the head to (or drag the cross on the bed). The job moves with the head, so what you see is what Frame will trace.')}`}
-      <div class="lw-row wrap"><span>Turn</span><button type="button" class="btn" id="lwTurnL" title="Turn a quarter turn anticlockwise">⟲</button><button type="button" class="btn" id="lwTurnR" title="Turn a quarter turn clockwise">⟳</button>
-        <label>Copies <input type="text" inputmode="numeric" id="lwCopies" value="${S.copies}"></label>${S.copies > 1 ? `<label>gap <input type="text" inputmode="decimal" id="lwGap" value="${S.gap}"> mm</label>` : ''}</div>
+        <div class="lw-grid"><label for="lwX">From the left</label><span class="lw-in"><input type="text" inputmode="decimal" id="lwX" value="${r1(jobBox().x0)}"> mm</span>
+          <label for="lwY">From the back</label><span class="lw-in"><input type="text" inputmode="decimal" id="lwY" value="${r1(jobBox().y0)}"> mm</span>
+          <span class="lw-lab">Line up</span><span class="lw-in"><span class="segc icons" role="group" aria-label="Line up across the bed">${['left', 'centre', 'right'].map(k => `<button type="button" data-al="${k}" title="Line up with the ${k === 'centre' ? 'middle' : k + '-hand side'} of the bed"><svg viewBox="0 0 20 20">${ALIGN_ICON[k]}</svg></button>`).join('')}</span>
+            <span class="segc icons" role="group" aria-label="Line up front to back">${['back', 'middle', 'front'].map(k => `<button type="button" data-al="${k}" title="Line up with the ${k} of the bed"><svg viewBox="0 0 20 20">${ALIGN_ICON[k]}</svg></button>`).join('')}</span></span></div>` : `
+        <div class="lw-grid"><label for="lwHX">Head from the left</label><span class="lw-in"><input type="text" inputmode="decimal" id="lwHX" value="${r1(S.head.x)}"> mm</span>
+          <label for="lwHY">Head from the back</label><span class="lw-in"><input type="text" inputmode="decimal" id="lwHY" value="${r1(S.head.y)}"> mm</span>
+          <span class="lw-lab">Head is at the job’s</span><span class="lw-in"><span class="segc" id="lwAnchor"><button type="button" data-v="top-left" aria-pressed="${S.anchor === 'top-left'}">top-left corner</button><button type="button" data-v="centre" aria-pressed="${S.anchor === 'centre'}">middle</button></span></span></div>
+        ${help('Until Kerf is connected to the laser, type where you moved the head to (or drag the red cross on the bed). The job moves with the head, so what you see is what Frame will trace.')}`}
+      <div class="lw-grid"><span class="lw-lab">Turn</span><span class="lw-in"><button type="button" class="btn sm" id="lwTurnL" title="Turn a quarter turn anticlockwise">⟲</button><button type="button" class="btn sm" id="lwTurnR" title="Turn a quarter turn clockwise">⟳</button></span>
+        <label for="lwCopies">Copies</label><span class="lw-in"><input type="text" inputmode="numeric" id="lwCopies" value="${S.copies}">${S.copies > 1 ? `<label class="lw-sub">gap <input type="text" inputmode="decimal" id="lwGap" value="${S.gap}"> mm</label>` : ''}</span></div>
+      ${quickHtml()}
       <div class="lw-row wrap"><button type="button" class="btn${rulerOn ? ' on' : ''}" id="lwRuler" aria-pressed="${rulerOn}">📏 Ruler</button>${ruler ? `<button type="button" class="btn" id="lwToRuler" title="Put the job's top-left corner on the ruler point">Move job to the ruler point</button><button type="button" class="lw-link" id="lwRulerClear">Clear ruler</button>` : ''}</div>
       ${ruler ? `<p class="lw-read">From the ruler point, the job starts <b>${r1(jobBox().x0 - ruler.x)} mm</b> ${jobBox().x0 >= ruler.x ? 'to the right' : 'to the left'} and <b>${r1(jobBox().y0 - ruler.y)} mm</b> ${jobBox().y0 >= ruler.y ? 'towards the front' : 'towards the back'}.</p>` : help('<b>Ruler</b>: click the bed to put a reference point (e.g. the corner of your acrylic). Kerf shows how far the job is from it.')}
       <div class="lw-cut">
         <label class="tog"><input type="checkbox" role="switch" id="lwTraces" ${S.showTraces ? 'checked' : ''}> Show what’s already been cut${S.traces.length ? ` (${S.traces.length})` : ''}</label>
-        ${S.traces.length ? `<div class="lw-row wrap"><button type="button" class="btn" id="lwNext">Next to the last cut</button><button type="button" class="lw-link" id="lwClearCut">New sheet: clear</button></div>` : help('After a job is cut, press <b>It’s been cut</b> in step 5. Kerf then shows a grey shadow of it here, so you can put the next job (or a re-cut) in the space that’s left.')}
+        <div class="lw-row wrap"><button type="button" class="btn" id="lwMarkCut" title="Leave a grey shadow of this job on the bed">✓ Mark this job as cut</button>${S.traces.length ? `<button type="button" class="btn" id="lwNext">Next to the last cut</button><button type="button" class="lw-link" id="lwClearCut">New sheet: clear</button>` : ''}</div>
+        ${help(S.traces.length ? 'Grey = already cut. The flag shows where the laser <b>started</b> the last job and the red ring where the head <b>finished</b>. Put the next job (or a re-cut) in the empty space.' : 'After the laser has cut a job, press <b>✓ Mark this job as cut</b>. A grey shadow stays on the bed, with where the laser started and finished, so the next job (or a re-cut) goes in the space that’s left. <b>Try it now:</b> press it, then <b>Next to the last cut</b>.')}
       </div>
-      <p class="lw-read">Job size: <b>${r1(jobW())} × ${r1(jobH())} mm</b>${S.copies > 1 ? ` (${S.copies} copies)` : ''}</p>
+      <p class="lw-read">Job size: <b>${r1(jobW())} × ${r1(jobH())} mm</b>${S.copies > 1 ? ` (${S.copies} copies)` : ''}${left.size ? ` · ${parts.filter(q => q.ids.every(id => left.has(id))).length} left out` : ''}</p>
       ${fit ? `<p class="bad">⚠ ${fit} Move the job so it fits on the bed.</p>` : `<p class="ok">✓ Fits on the bed.</p>`}
       ${overlap() ? `<p class="bad">⚠ This lands on something already cut. Move it into the empty space (or press <b>Next to the last cut</b>).</p>` : ''}`;
     const s3 = stepHtml(3, 'Place it on the bed', true, '', placeBody, 'lwS3');
@@ -153,10 +209,22 @@ export function openLaser(ed: Editor, saveFile: (name: string, text: string) => 
       ${help('<b>Preview</b> plays the job in the order the laser will follow (holes before outlines; red dashes are moves with the laser off). <b>Show the frame</b> draws the box the head will trace around the job. The time is an estimate; it gets closer once we read your laser’s own settings.')}` : '', 'lwS4');
     const s5 = stepHtml(5, 'Send', true, '', `
       <div class="lw-row wrap"><button type="button" class="btn primary" id="lwSave">Save file for LightBurn</button><button type="button" class="btn" disabled>Send to the laser</button></div>
-      <button type="button" class="btn" id="lwCutDone" title="Leave a grey shadow of this job on the bed, so the next one goes in the space that's left">✓ It’s been cut: remember where</button>
+      <button type="button" class="btn" id="lwCutDone" title="Leave a grey shadow of this job on the bed, so the next one goes in the space that's left">✓ Mark this job as cut</button>
       ${help('For now, save the file and open it in LightBurn (<b>File → Import</b>; in Optimization Settings switch optimisation off to keep this order). Sending straight to the laser comes when we connect Kerf to it, with a check before anything moves.')}`, 'lwS5');
     $('#lwSteps').innerHTML = s1 + s2 + s3 + s4 + s5;
-    bindSteps(); drawOri();
+    bindSteps(); draw();
+  }
+  function quickHtml() {
+    const ps = pickedParts(), n = parts.filter(q => !q.ids.every(id => left.has(id))).length, out = parts.filter(q => q.ids.every(id => left.has(id))).length, pb = pickedBox();
+    return `<div class="lw-quick">
+      <div class="lw-qh"><b>Quick changes</b>${n > 1 ? `<button type="button" class="lw-link" id="lwSelAll">Pick all ${n}</button>` : ''}${ps.length ? `<button type="button" class="lw-link" id="lwSelNone">Clear</button>` : ''}</div>
+      ${ps.length && pb ? `<p class="lw-read small">${ps.length} of ${n} part${n > 1 ? 's' : ''} picked</p>
+        <div class="lw-grid"><label for="lwSW">Width</label><span class="lw-in"><input type="text" inputmode="decimal" id="lwSW" value="${r1(pb.x1 - pb.x0)}"> mm</span>
+          <label for="lwSH">Height</label><span class="lw-in"><input type="text" inputmode="decimal" id="lwSH" value="${r1(pb.y1 - pb.y0)}"> mm <span class="lw-sub">(keeps its shape)</span></span></div>
+        <div class="lw-row wrap"><button type="button" class="btn sm" id="lwSmaller" title="10% smaller">− 10%</button><button type="button" class="btn sm" id="lwBigger" title="10% bigger">+ 10%</button><button type="button" class="btn sm" id="lwLeave" title="Don't cut these this time">Leave out</button></div>`
+      : help('Click a part on the bed to pick it (<b>Shift</b>+click for more), or drag a box round several. Then change their size, drag them, or leave them out of this cut. Your drawing isn’t changed.')}
+      ${out ? `<p class="lw-read small">${out} part${out > 1 ? 's' : ''} left out of this cut · <button type="button" class="lw-link" id="lwBringBack">Bring back</button></p>` : ''}
+    </div>`;
   }
 
   function num(v: string, lo: number, hi: number): number | null { const n = parseFloat(v.replace(',', '.')); return isFinite(n) && n >= lo && n <= hi ? n : null; }
@@ -167,16 +235,8 @@ export function openLaser(ed: Editor, saveFile: (name: string, text: string) => 
     on('lwName', 'change', e => { S.machine.name = (e.target as HTMLInputElement).value.trim() || 'My laser'; save(); });
     on('lwBW', 'change', e => { const v = num((e.target as HTMLInputElement).value, 50, 3000); if (v) { S.machine.bedW = v; save(); rebuild(); } });
     on('lwBH', 'change', e => { const v = num((e.target as HTMLInputElement).value, 50, 3000); if (v) { S.machine.bedH = v; save(); rebuild(); } });
-    on('lwFlipLR', 'click', () => { S.machine.flipLR = !S.machine.flipLR; save(); renderSteps(); playOri(); });
-    on('lwFlipFB', 'click', () => { S.machine.flipFB = !S.machine.flipFB; save(); renderSteps(); playOri(); });
-    on('lwOriPlay', 'click', () => playOri());
+    on('lwOriPlay', 'click', () => playSetup());
     on('lwSetUp', 'click', () => { S.machine.setUp = true; save(); rebuild(); });
-    const ori = root.querySelector<HTMLCanvasElement>('#lwOri');
-    if (ori) ori.onclick = ev => { const r = ori.getBoundingClientRect(), x = (ev.clientX - r.left) / r.width, y = (ev.clientY - r.top) / r.height;
-      let c: Corner = `${y < 0.5 ? 'back' : 'front'}-${x < 0.5 ? 'left' : 'right'}` as Corner;
-      if (S.machine.flipLR) c = c.replace(/left|right/, w => w === 'left' ? 'right' : 'left') as Corner;
-      if (S.machine.flipFB) c = c.replace(/back|front/, w => w === 'back' ? 'front' : 'back') as Corner;
-      S.machine.park = c; save(); rebuild(); };
     on('lwMat', 'change', e => {
       const v = (e.target as HTMLSelectElement).value; if (!v) return;
       if (v.startsWith('ex:')) { S.phase = structuredClone(EXAMPLES[v.slice(3)].s); S.colors = {}; }
@@ -205,11 +265,25 @@ export function openLaser(ed: Editor, saveFile: (name: string, text: string) => 
       save(); rebuild();
     }));
     root.querySelectorAll<HTMLElement>('.lw-cards button').forEach(b => b.onclick = () => { S.placeMode = b.dataset.pm as any; save(); rebuild(); });
-    const setAt = (x: number | null, y: number | null) => { if (x != null) S.at = P(x, S.at.y); if (y != null) S.at = P(S.at.x, y); save(); rebuild(); };
+    // typed positions and lining up refer to what will be cut (its top-left corner)
+    const setAt = (x: number | null, y: number | null) => { const jb = jobBox(); if (x != null) S.at = P(S.at.x + x - jb.x0, S.at.y); if (y != null) S.at = P(S.at.x, S.at.y + y - jb.y0); save(); rebuild(); };
     on('lwX', 'change', e => setAt(num((e.target as HTMLInputElement).value, -5000, 5000), null));
     on('lwY', 'change', e => setAt(null, num((e.target as HTMLInputElement).value, -5000, 5000)));
-    on('lwCornerBL', 'click', () => { S.at = P(5, 5); save(); rebuild(); });
-    on('lwMid', 'click', () => { S.at = P(Math.round((S.machine.bedW - jobW()) / 2), Math.round((S.machine.bedH - jobH()) / 2)); save(); rebuild(); });
+    root.querySelectorAll<HTMLElement>('[data-al]').forEach(b => b.onclick = () => {
+      const m = S.machine, k = b.dataset.al!, w = jobW(), h = jobH();
+      if (k === 'left') setAt(0, null); else if (k === 'centre') setAt(Math.round((m.bedW - w) / 2 * 10) / 10, null); else if (k === 'right') setAt(m.bedW - w, null);
+      else if (k === 'back') setAt(null, 0); else if (k === 'middle') setAt(null, Math.round((m.bedH - h) / 2 * 10) / 10); else setAt(null, m.bedH - h);
+    });
+    on('lwSelAll', 'click', () => { parts.forEach(q => q.ids.forEach(id => sel.add(id))); renderSteps(); });
+    on('lwSelNone', 'click', () => { sel.clear(); renderSteps(); });
+    const sizeTo = (want: number | null, cur: number) => { if (want && cur > 0) scalePicked(want / cur); };
+    on('lwSW', 'change', e => { const pb = pickedBox(); if (pb) sizeTo(num((e.target as HTMLInputElement).value, 0.5, 5000), pb.x1 - pb.x0); });
+    on('lwSH', 'change', e => { const pb = pickedBox(); if (pb) sizeTo(num((e.target as HTMLInputElement).value, 0.5, 5000), pb.y1 - pb.y0); });
+    on('lwSmaller', 'click', () => scalePicked(0.9));
+    on('lwBigger', 'click', () => scalePicked(1 / 0.9));
+    on('lwLeave', 'click', () => { for (const q of pickedParts()) q.ids.forEach(id => left.add(id)); sel.clear(); rebuild(); msg('Left out of this cut. Your drawing isn’t changed.'); });
+    on('lwBringBack', 'click', () => { left.clear(); rebuild(); });
+    on('lwMarkCut', 'click', () => markCut());
     on('lwHX', 'change', e => { const v = num((e.target as HTMLInputElement).value, -5000, 5000); if (v != null) { S.head = P(v, S.head.y); save(); rebuild(); } });
     on('lwHY', 'change', e => { const v = num((e.target as HTMLInputElement).value, -5000, 5000); if (v != null) { S.head = P(S.head.x, v); save(); rebuild(); } });
     root.querySelectorAll<HTMLElement>('#lwAnchor button').forEach(b => b.onclick = () => { S.anchor = b.dataset.v as any; save(); rebuild(); });
@@ -229,57 +303,29 @@ export function openLaser(ed: Editor, saveFile: (name: string, text: string) => 
       if (!ok) { msg('There isn’t room beside the last cut. Try turning the job, or start a new sheet.', true); return; }
       S.placeMode = 'bed'; S.at = ok; save(); rebuild(); msg('Moved next to the last cut.');
     });
-    on('lwCutDone', 'click', () => {
-      const parts = jobParts().map(q => thin(q, 0.5)); if (!parts.length) return;
-      S.traces.push({ when: new Date().toISOString(), name: ed.doc.name || 'job', parts, box: jobBox(), start: jobAt() });
-      if (S.traces.length > 30) S.traces.shift();
-      S.showTraces = true; save(); rebuild(); msg('Remembered. A grey shadow shows where this was cut; put the next job in the space that’s left.');
-    });
+    on('lwCutDone', 'click', () => markCut());
     on('lwPrev', 'click', () => { if (sim && tPlay >= sim.total) tPlay = 0; play(true); });
     on('lwFrameScr', 'click', () => showFrame());
     on('lwSave', 'click', () => { const x = exportLaserSVG(doc, { start: placement(box, jobAt()).toDoc(startPt()) }); saveFile((ed.doc.name || 'drawing').replace(/[^\w\- ]+/g, '').trim().replace(/\s+/g, '-') + (nS > 1 ? `-sheet${sheet + 1}` : '') + '-laser.svg', x.svg); });
   }
+  function markCut() {
+    const ps = jobParts().map(q => thin(q, 0.5)); if (!ps.length || !sim) return;
+    const first = sim.steps.find(x => x.k !== 'travel') as any, start = first ? (first.k === 'line' ? first.pts[0] : P(first.rings[0][0].x, first.y0)) : jobAt();
+    S.traces.push({ when: new Date().toISOString(), name: ed.doc.name || 'job', parts: ps, box: jobBox(), start, end: sim.end });
+    if (S.traces.length > 30) S.traces.shift();
+    S.showTraces = true; save(); rebuild(); msg('Marked as cut. The grey shadow shows what’s gone; the flag is where the laser started and the red ring where it finished.');
+  }
   const msg = (t: string, bad = false) => { const el = $('#lwMsg'); el.textContent = t; el.classList.toggle('bad', bad); };
 
-  // ---------- the small "your laser" picture: bands at the back and sides, a frame test ----------
-  let oriT = -1;
-  function drawOri() {
-    const c = root.querySelector<HTMLCanvasElement>('#lwOri'); if (!c) return;
-    const g = c.getContext('2d')!, W = c.width, H = c.height, m = S.machine, cs = getComputedStyle(document.documentElement);
-    const band = 14, pad = 22, bx = pad, by = pad + 12, bw = W - 2 * pad, bh = H - 2 * pad - 26;
-    g.setTransform(1, 0, 0, 1, 0, 0); g.clearRect(0, 0, W, H);
-    g.save();
-    // flips turn the whole picture round
-    g.translate(W / 2, (H - 14) / 2); g.scale(m.flipLR ? -1 : 1, m.flipFB ? -1 : 1); g.translate(-W / 2, -(H - 14) / 2);
-    g.fillStyle = '#F7C6D6'; g.strokeStyle = '#333';
-    g.fillRect(bx - band, by - band, band, bh + band); g.fillRect(bx + bw, by - band, band, bh + band); g.fillRect(bx, by - band, bw, band);
-    g.fillStyle = cs.getPropertyValue('--sheet') || '#fff'; g.fillRect(bx, by, bw, bh); g.lineWidth = 1; g.strokeRect(bx, by, bw, bh);
-    g.restore();
-    const map = (p: Point) => { let x = bx + p.x / m.bedW * bw, y = by + p.y / m.bedH * bh; if (m.flipLR) x = W - x; if (m.flipFB) y = (H - 14) - y; return P(x, y); };
-    g.fillStyle = cs.getPropertyValue('--muted') || '#666'; g.font = '11px system-ui, sans-serif'; g.textAlign = 'center';
-    const top = by - band - 5, bottom = by + bh + 15;
-    g.fillText('BACK', W / 2, m.flipFB ? bottom + band : top); g.fillText('FRONT · you stand here', W / 2, m.flipFB ? top : bottom + 3);
-    // a sample job in the middle, and the parking corner
-    const jb = { x0: m.bedW * 0.35, y0: m.bedH * 0.3, x1: m.bedW * 0.65, y1: m.bedH * 0.65 };
-    const a = map(P(jb.x0, jb.y0)), b = map(P(jb.x1, jb.y1));
-    g.strokeStyle = '#999'; g.setLineDash([3, 3]); g.strokeRect(Math.min(a.x, b.x), Math.min(a.y, b.y), Math.abs(b.x - a.x), Math.abs(b.y - a.y)); g.setLineDash([]);
-    const home = map(cornerPt(m));
-    // frame test animation: from the parked head to the job, then round the job (back-left, back-right, front-right, front-left)
-    if (oriT >= 0) {
-      const route = [cornerPt(m), P(jb.x0, jb.y0), P(jb.x1, jb.y0), P(jb.x1, jb.y1), P(jb.x0, jb.y1), P(jb.x0, jb.y0)].map(map);
-      const lens = route.slice(1).map((p, i) => Math.hypot(p.x - route[i].x, p.y - route[i].y)), L = lens.reduce((x, y) => x + y, 0);
-      let left = Math.min(1, oriT) * L, head = route[0];
-      g.strokeStyle = '#0d6b5e'; g.lineWidth = 2; g.beginPath(); g.moveTo(route[0].x, route[0].y);
-      for (let i = 0; i < lens.length && left > 0; i++) { const f = Math.min(1, left / lens[i]); head = P(route[i].x + (route[i + 1].x - route[i].x) * f, route[i].y + (route[i + 1].y - route[i].y) * f); g.lineTo(head.x, head.y); left -= lens[i]; }
-      g.stroke(); g.fillStyle = '#c62828'; g.beginPath(); g.arc(head.x, head.y, 4, 0, Math.PI * 2); g.fill();
-    }
-    g.fillStyle = '#1a7f37'; g.beginPath(); g.arc(home.x, home.y, 5, 0, Math.PI * 2); g.fill();
-  }
-  function playOri() {
-    const t0 = performance.now(); oriT = 0;
-    const step = (now: number) => { if (!root.isConnected) return; oriT = (now - t0) / 2500; drawOri(); if (oriT < 1.3) requestAnimationFrame(step); else { oriT = -1; drawOri(); } };
+  // ---------- setting up: the bed picture turned round by the flips, and a frame test on it ----------
+  function playSetup() {
+    const t0 = performance.now(); setupAnim = 0;
+    const step = (now: number) => { if (!root.isConnected) return; setupAnim = (now - t0) / 3000; draw(); if (setupAnim < 1.2) requestAnimationFrame(step); else { setupAnim = null; draw(); } };
     requestAnimationFrame(step);
   }
+  const flipPt = (p: Point) => P(S.machine.flipLR ? S.machine.bedW - p.x : p.x, S.machine.flipFB ? S.machine.bedH - p.y : p.y);
+  $('#lwArrFB').onclick = () => { S.machine.flipFB = !S.machine.flipFB; save(); renderSteps(); playSetup(); };
+  $('#lwArrLR').onclick = () => { S.machine.flipLR = !S.machine.flipLR; save(); renderSteps(); playSetup(); };
 
   // ---------- the bed ----------
   let view = { s: 1, ox: 0, oy: 0 };
@@ -299,10 +345,11 @@ export function openLaser(ed: Editor, saveFile: (name: string, text: string) => 
     const dpr = window.devicePixelRatio || 1, cs = getComputedStyle(document.documentElement), m = S.machine, s = view.s;
     const col = (v: string, d: string) => (cs.getPropertyValue(v) || d).trim();
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, canvas.width, canvas.height);
-    const a = toScr(P(0, 0)), bw = m.bedW * s, bh = m.bedH * s;
-    // back and sides bands, the bed, the grid
-    ctx.fillStyle = '#F7C6D6'; const band = 12;
-    ctx.fillRect(a.x - band, a.y - band, band, bh + band); ctx.fillRect(a.x + bw, a.y - band, band, bh + band); ctx.fillRect(a.x, a.y - band, bw, band);
+    const a = toScr(P(0, 0)), bw = m.bedW * s, bh = m.bedH * s, setup = !m.setUp;
+    // back and sides bands (while setting up, the flips turn the picture round), the bed, the grid
+    ctx.fillStyle = '#F7C6D6'; const band = 12, backAtFront = setup && m.flipFB;
+    if (backAtFront) { ctx.fillRect(a.x - band, a.y, band, bh + band); ctx.fillRect(a.x + bw, a.y, band, bh + band); ctx.fillRect(a.x, a.y + bh, bw, band); }
+    else { ctx.fillRect(a.x - band, a.y - band, band, bh + band); ctx.fillRect(a.x + bw, a.y - band, band, bh + band); ctx.fillRect(a.x, a.y - band, bw, band); }
     ctx.fillStyle = col('--sheet', '#fff'); ctx.fillRect(a.x, a.y, bw, bh);
     ctx.lineWidth = 1;
     for (let x = 0; x <= m.bedW + 1e-6; x += 10) { ctx.strokeStyle = x % 50 ? col('--grid', '#e5e5e5') : col('--grid-major', '#ccc'); ctx.beginPath(); ctx.moveTo(a.x + x * s, a.y); ctx.lineTo(a.x + x * s, a.y + bh); ctx.stroke(); }
@@ -312,20 +359,30 @@ export function openLaser(ed: Editor, saveFile: (name: string, text: string) => 
     for (let x = 0; x <= m.bedW; x += 100) ctx.fillText(String(x), a.x + x * s, a.y - band - 4);
     ctx.textAlign = 'right'; for (let y = 0; y <= m.bedH; y += 100) ctx.fillText(String(y), a.x - band - 4, a.y + y * s + 4);
     ctx.textAlign = 'center'; ctx.font = '600 11px system-ui, sans-serif';
-    ctx.fillText('BACK', a.x + bw / 2, a.y - band - 18); ctx.fillText('FRONT · you stand here', a.x + bw / 2, a.y + bh + 22);
-    ctx.save(); ctx.translate(a.x - band - 34, a.y + bh / 2); ctx.rotate(-Math.PI / 2); ctx.fillText('LEFT', 0, 0); ctx.restore();
-    ctx.save(); ctx.translate(a.x + bw + band + 18, a.y + bh / 2); ctx.rotate(Math.PI / 2); ctx.fillText('RIGHT', 0, 0); ctx.restore();
+    if (backAtFront) { ctx.fillText('FRONT · you stand here', a.x + bw / 2, a.y - band - 18); ctx.fillText('BACK', a.x + bw / 2, a.y + bh + 26); }
+    else { ctx.fillText('BACK', a.x + bw / 2, a.y - band - 18); ctx.fillText('FRONT · you stand here', a.x + bw / 2, a.y + bh + 22); }
+    const lr = setup && m.flipLR ? ['RIGHT', 'LEFT'] : ['LEFT', 'RIGHT'];
+    ctx.save(); ctx.translate(a.x - band - 34, a.y + bh / 2); ctx.rotate(-Math.PI / 2); ctx.fillText(lr[0], 0, 0); ctx.restore();
+    ctx.save(); ctx.translate(a.x + bw + band + 18, a.y + bh / 2); ctx.rotate(Math.PI / 2); ctx.fillText(lr[1], 0, 0); ctx.restore();
+    // flip arrows on the bands (only while setting up)
+    const arrFB = $<HTMLButtonElement>('#lwArrFB'), arrLR = $<HTMLButtonElement>('#lwArrLR'); arrFB.hidden = arrLR.hidden = !setup;
+    if (setup) { arrFB.style.left = `${a.x + bw * 0.75}px`; arrFB.style.top = `${backAtFront ? a.y + bh + band / 2 : a.y - band / 2}px`; arrLR.style.left = `${a.x + bw + band / 2}px`; arrLR.style.top = `${a.y + bh * 0.25}px`; }
     // parking corner
-    const hm = toScr(cornerPt(m)); ctx.fillStyle = '#1a7f37'; ctx.beginPath(); ctx.arc(hm.x, hm.y, 5, 0, Math.PI * 2); ctx.fill();
+    const hm = toScr(setup ? flipPt(cornerPt(m)) : cornerPt(m)); ctx.fillStyle = '#1a7f37'; ctx.beginPath(); ctx.arc(hm.x, hm.y, 5, 0, Math.PI * 2); ctx.fill();
     ctx.font = '10.5px system-ui, sans-serif'; ctx.textAlign = hm.x > a.x + bw / 2 ? 'right' : 'left'; ctx.fillText('parks here', hm.x + (hm.x > a.x + bw / 2 ? -8 : 8), hm.y + (hm.y > a.y + bh / 2 ? -8 : 14));
-    // what's already been cut on this sheet: grey shadows, and where the last job started
+    if (setup) { drawSetup(); return; }
+    // what's already been cut on this sheet: grey shadows, and where the last job started and finished
     if (S.showTraces && S.traces.length) {
       S.traces.forEach((t, i) => {
         const lastOne = i === S.traces.length - 1;
         ctx.beginPath(); for (const q of t.parts) q.forEach((p, j) => { const v = toScr(p); j ? ctx.lineTo(v.x, v.y) : ctx.moveTo(v.x, v.y); });
         ctx.fillStyle = lastOne ? 'rgba(90,104,98,.28)' : 'rgba(90,104,98,.18)'; ctx.fill('evenodd');
         ctx.strokeStyle = 'rgba(90,104,98,.7)'; ctx.lineWidth = 1; ctx.stroke();
-        if (lastOne) { const f = toScr(t.start); ctx.fillStyle = '#5a6862'; ctx.beginPath(); ctx.moveTo(f.x, f.y); ctx.lineTo(f.x, f.y - 14); ctx.lineTo(f.x + 10, f.y - 10); ctx.lineTo(f.x, f.y - 6); ctx.fill(); ctx.font = '10.5px system-ui, sans-serif'; ctx.textAlign = 'left'; ctx.fillText('last job started here', f.x + 12, f.y - 6); }
+        if (lastOne) {
+          const f = toScr(t.start); ctx.fillStyle = '#2b5f8a'; ctx.beginPath(); ctx.moveTo(f.x, f.y); ctx.lineTo(f.x, f.y - 16); ctx.lineTo(f.x + 11, f.y - 12); ctx.lineTo(f.x, f.y - 8); ctx.fill();
+          ctx.font = '600 10.5px system-ui, sans-serif'; ctx.textAlign = 'left'; ctx.fillText('started', f.x + 13, f.y + 12);
+          if (t.end) { const e = toScr(t.end); ctx.strokeStyle = '#c62828'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(e.x, e.y, 6, 0, Math.PI * 2); ctx.stroke(); ctx.lineWidth = 1; ctx.fillStyle = '#c62828'; ctx.beginPath(); ctx.arc(e.x, e.y, 2, 0, Math.PI * 2); ctx.fill(); ctx.fillText('laser finished here', e.x + 10, e.y - 9); }
+        }
       });
     }
     // the job
@@ -346,7 +403,34 @@ export function openLaser(ed: Editor, saveFile: (name: string, text: string) => 
       ctx.fillText(`${r1(Math.abs(jb.x0 - ruler.x))} mm`, (r.x + c.x) / 2, r.y - 6);
       ctx.textAlign = 'left'; ctx.fillText(`${r1(Math.abs(jb.y0 - ruler.y))} mm`, c.x + 6, (r.y + c.y) / 2);
     }
+    // parts left out of this cut (faint), picked parts (outlined), a part being dragged, the box being dragged out
+    ctx.lineWidth = 1;
+    for (const q of parts) {
+      const out = q.ids.every(id => left.has(id)), picked = !out && q.ids.some(id => sel.has(id)); if (!out && !picked) continue;
+      const d = picked && selDrag ? selDrag : P(0, 0);
+      ctx.beginPath(); for (const r of q.polys) r.forEach((p, i) => { const v = toScr(P(p.x + d.x, p.y + d.y)); i ? ctx.lineTo(v.x, v.y) : ctx.moveTo(v.x, v.y); });
+      if (out) { ctx.setLineDash([3, 3]); ctx.strokeStyle = '#9aa5a0'; ctx.stroke(); ctx.setLineDash([]); }
+      else { ctx.fillStyle = 'rgba(13,107,94,.12)'; ctx.fill('evenodd'); ctx.strokeStyle = col('--accent', '#0d6b5e'); ctx.lineWidth = 2; ctx.stroke(); ctx.lineWidth = 1; }
+    }
+    const pb = pickedBox();
+    if (pb) { const d = selDrag || P(0, 0), u = toScr(P(pb.x0 + d.x, pb.y0 + d.y)); ctx.setLineDash([5, 3]); ctx.strokeStyle = col('--accent', '#0d6b5e'); ctx.strokeRect(u.x - 3, u.y - 3, (pb.x1 - pb.x0) * s + 6, (pb.y1 - pb.y0) * s + 6); ctx.setLineDash([]); }
+    if (boxSel) { const u = toScr(boxSel.a), v = toScr(boxSel.b); ctx.setLineDash([4, 3]); ctx.strokeStyle = '#2b5f8a'; ctx.fillStyle = 'rgba(43,95,138,.08)'; ctx.fillRect(Math.min(u.x, v.x), Math.min(u.y, v.y), Math.abs(v.x - u.x), Math.abs(v.y - u.y)); ctx.strokeRect(Math.min(u.x, v.x), Math.min(u.y, v.y), Math.abs(v.x - u.x), Math.abs(v.y - u.y)); ctx.setLineDash([]); }
     if (frameAnim != null) drawFrameAnim(frameAnim);
+  }
+  /** while setting up: a sample job in the middle, and (when playing) the head going from its corner round it */
+  function drawSetup() {
+    const m = S.machine, jb = { x0: m.bedW * 0.35, y0: m.bedH * 0.3, x1: m.bedW * 0.65, y1: m.bedH * 0.65 };
+    const u = toScr(P(jb.x0, jb.y0)), v = toScr(P(jb.x1, jb.y1));
+    ctx.strokeStyle = '#999'; ctx.setLineDash([4, 4]); ctx.strokeRect(u.x, u.y, v.x - u.x, v.y - u.y); ctx.setLineDash([]);
+    ctx.fillStyle = '#5a6862'; ctx.font = '12px system-ui, sans-serif'; ctx.textAlign = 'center'; ctx.fillText('a job', (u.x + v.x) / 2, (u.y + v.y) / 2 + 4);
+    if (setupAnim == null) return;
+    // the route in the machine's own terms, shown through the flips
+    const route = [cornerPt(m), P(jb.x0, jb.y0), P(jb.x1, jb.y0), P(jb.x1, jb.y1), P(jb.x0, jb.y1), P(jb.x0, jb.y0)].map(p => toScr(flipPt(p)));
+    const lens = route.slice(1).map((p, i) => Math.hypot(p.x - route[i].x, p.y - route[i].y)), L = lens.reduce((x, y) => x + y, 0);
+    let rest = Math.min(1, setupAnim) * L, head = route[0];
+    ctx.strokeStyle = '#0d6b5e'; ctx.lineWidth = 2.5; ctx.beginPath(); ctx.moveTo(route[0].x, route[0].y);
+    for (let i = 0; i < lens.length && rest > 0; i++) { const f = Math.min(1, rest / lens[i]); head = P(route[i].x + (route[i + 1].x - route[i].x) * f, route[i].y + (route[i + 1].y - route[i].y) * f); ctx.lineTo(head.x, head.y); rest -= lens[i]; }
+    ctx.stroke(); ctx.lineWidth = 1; ctx.fillStyle = '#c62828'; ctx.beginPath(); ctx.arc(head.x, head.y, 6, 0, Math.PI * 2); ctx.fill();
   }
   function strokeColour(st: Step) { return st.k === 'travel' ? '#c62828' : hexOf(st.key); }
   function drawStep(st: Step, state: 'idle' | 'done' | 'now' | 'todo', t: number) {
@@ -398,7 +482,7 @@ export function openLaser(ed: Editor, saveFile: (name: string, text: string) => 
   function play(go: boolean) {
     playing = go && !!sim && sim.total > 0; $('#lwPlay').textContent = playing ? '❚❚ Pause' : '▶ Play';
     cancelAnimationFrame(raf); if (!playing) return; last = performance.now();
-    const tick = (now: number) => { if (!root.isConnected || !playing || !sim) return; tPlay = Math.min(sim.total, tPlay + (now - last) / 1000 * speed); last = now; updatePlayer(); draw(); if (tPlay >= sim.total) play(false); else raf = requestAnimationFrame(tick); };
+    const tick = (now: number) => { if (!root.isConnected || !playing || !sim) return; tPlay = Math.min(sim.total, tPlay + (now - last) / 1000 * speed); last = now; updatePlayer(); draw(); if (tPlay >= sim.total) { play(false); msg('Finished. When the real laser has cut it, press ✓ Mark this job as cut to leave its shadow.'); } else raf = requestAnimationFrame(tick); };
     raf = requestAnimationFrame(tick);
   }
   const stopPlay = () => play(false);
@@ -408,30 +492,56 @@ export function openLaser(ed: Editor, saveFile: (name: string, text: string) => 
   root.querySelectorAll<HTMLElement>('#lwSpeed button').forEach(b => b.onclick = () => { speed = +b.dataset.v!; root.querySelectorAll('#lwSpeed button').forEach(x => x.setAttribute('aria-pressed', String(x === b))); });
   $<HTMLInputElement>('#lwTravel').onchange = e => { showTravel = (e.target as HTMLInputElement).checked; draw(); };
 
-  // ---------- dragging the job (or the head), and the ruler ----------
-  let drag: { from: Point; at0: Point } | null = null;
+  // ---------- on the bed: pick parts, drag them or the whole job (or the head), box-pick, the ruler, setting up ----------
+  let drag: { kind: 'job' | 'head' | 'parts' | 'box'; from: Point; at0: Point } | null = null;
+  const bedPt = (ev: PointerEvent) => { const r = canvas.getBoundingClientRect(); return toBedPt(ev.clientX - r.left, ev.clientY - r.top); };
+  const inJob = (p: Point) => { const jb = jobBox(); return p.x >= jb.x0 && p.x <= jb.x1 && p.y >= jb.y0 && p.y <= jb.y1; };
+  const allPicked = () => { const live = parts.filter(q => !q.ids.every(id => left.has(id))); return live.length > 0 && live.every(q => q.ids.some(id => sel.has(id))); };
   canvas.addEventListener('pointerdown', ev => {
-    const r = canvas.getBoundingClientRect(), p = toBedPt(ev.clientX - r.left, ev.clientY - r.top);
+    const p = bedPt(ev), m = S.machine;
+    if (!m.setUp) {   // setting up: click a corner of the bed for where the head parks
+      const q = flipPt(p); let c: Corner = `${q.y < m.bedH / 2 ? 'back' : 'front'}-${q.x < m.bedW / 2 ? 'left' : 'right'}` as Corner; m.park = c; save(); draw(); return;
+    }
     if (rulerOn) { ruler = P(Math.round(p.x * 2) / 2, Math.round(p.y * 2) / 2); rulerOn = false; msg(''); renderSteps(); draw(); return; }
-    const jb = jobBox(), inJob = p.x >= jb.x0 && p.x <= jb.x1 && p.y >= jb.y0 && p.y <= jb.y1;
-    if (S.placeMode === 'bed' && inJob) drag = { from: p, at0: S.at };
-    else if (S.placeMode === 'head') drag = { from: p, at0: S.head };
-    if (drag) { canvas.setPointerCapture(ev.pointerId); stopPlay(); tPlay = 0; }
+    const hit = partAt(p);
+    if (hit) {
+      const isPicked = hit.ids.some(id => sel.has(id));
+      if (ev.shiftKey) { hit.ids.forEach(id => isPicked ? sel.delete(id) : sel.add(id)); renderSteps(); return; }
+      if (!isPicked) { sel.clear(); hit.ids.forEach(id => sel.add(id)); renderSteps(); }
+      // all of it picked (or just one part): drag the whole job; otherwise drag the picked parts
+      drag = allPicked() || parts.length === 1 ? (S.placeMode === 'bed' ? { kind: 'job', from: p, at0: S.at } : { kind: 'head', from: p, at0: S.head }) : { kind: 'parts', from: p, at0: P(0, 0) };
+    } else if (inJob(p)) { sel.clear(); drag = S.placeMode === 'bed' ? { kind: 'job', from: p, at0: S.at } : { kind: 'head', from: p, at0: S.head }; renderSteps(); }
+    else if (S.placeMode === 'head' && Math.hypot(p.x - S.head.x, p.y - S.head.y) < 12 / view.s) drag = { kind: 'head', from: p, at0: S.head };
+    else { drag = { kind: 'box', from: p, at0: p }; boxSel = { a: p, b: p }; }
+    canvas.setPointerCapture(ev.pointerId); stopPlay(); tPlay = 0;
   });
   canvas.addEventListener('pointermove', ev => {
-    const r = canvas.getBoundingClientRect(), p = toBedPt(ev.clientX - r.left, ev.clientY - r.top);
-    canvas.style.cursor = rulerOn ? 'crosshair' : (S.placeMode === 'bed' ? ((() => { const jb = jobBox(); return p.x >= jb.x0 && p.x <= jb.x1 && p.y >= jb.y0 && p.y <= jb.y1; })() ? 'grab' : 'default') : 'move');
-    if (!drag) return;
-    const q = P(Math.round((drag.at0.x + p.x - drag.from.x) * 2) / 2, Math.round((drag.at0.y + p.y - drag.from.y) * 2) / 2);
-    if (S.placeMode === 'bed') S.at = q; else S.head = q;
+    const p = bedPt(ev);
+    if (!drag) { canvas.style.cursor = !S.machine.setUp ? 'pointer' : rulerOn ? 'crosshair' : partAt(p) ? 'pointer' : inJob(p) ? 'grab' : 'crosshair'; return; }
+    const d = P(Math.round((p.x - drag.from.x) * 2) / 2, Math.round((p.y - drag.from.y) * 2) / 2);
+    if (drag.kind === 'job') S.at = P(drag.at0.x + d.x, drag.at0.y + d.y);
+    else if (drag.kind === 'head') S.head = P(drag.at0.x + d.x, drag.at0.y + d.y);
+    else if (drag.kind === 'parts') selDrag = d;
+    else boxSel = { a: drag.from, b: p };
     draw();
   });
-  canvas.addEventListener('pointerup', () => { if (!drag) return; drag = null; save(); rebuild(); });
+  canvas.addEventListener('pointerup', () => {
+    if (!drag) return; const k = drag.kind; drag = null;
+    if (k === 'parts') { const d = selDrag; selDrag = null; if (d && (d.x || d.y)) movePicked(d); else draw(); return; }
+    if (k === 'box' && boxSel) {
+      const x0 = Math.min(boxSel.a.x, boxSel.b.x), x1 = Math.max(boxSel.a.x, boxSel.b.x), y0 = Math.min(boxSel.a.y, boxSel.b.y), y1 = Math.max(boxSel.a.y, boxSel.b.y); boxSel = null;
+      sel.clear();
+      if ((x1 - x0) * view.s > 4 || (y1 - y0) * view.s > 4)   // a box touching a part picks it
+        for (const q of parts) if (!q.ids.every(id => left.has(id)) && q.box.x1 >= x0 && q.box.x0 <= x1 && q.box.y1 >= y0 && q.box.y0 <= y1) q.ids.forEach(id => sel.add(id));
+      renderSteps(); return;
+    }
+    save(); rebuild();
+  });
 
   // ---------- open / close ----------
   const close = () => { cancelAnimationFrame(raf); playing = false; root.remove(); window.removeEventListener('resize', onResize); window.removeEventListener('keydown', onKey, true); };
   const onResize = () => draw();
-  const onKey = (ev: KeyboardEvent) => { if (ev.key === 'Escape') { if (rulerOn) { rulerOn = false; renderSteps(); draw(); } else close(); ev.stopPropagation(); } else if (ev.key === ' ' && !(ev.target as HTMLElement).matches('input,select,textarea,button')) { ev.preventDefault(); $('#lwPlay').click(); } };
+  const onKey = (ev: KeyboardEvent) => { if (ev.key === 'Escape') { if (rulerOn) { rulerOn = false; renderSteps(); draw(); } else if (sel.size) { sel.clear(); renderSteps(); } else close(); ev.stopPropagation(); } else if (ev.key === ' ' && !(ev.target as HTMLElement).matches('input,select,textarea,button')) { ev.preventDefault(); $('#lwPlay').click(); } };
   $('#lwClose').onclick = close;
   $<HTMLInputElement>('#lwHelp').onchange = e => { S.help = (e.target as HTMLInputElement).checked; save(); renderSteps(); };
   window.addEventListener('resize', onResize); window.addEventListener('keydown', onKey, true);
