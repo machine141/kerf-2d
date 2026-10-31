@@ -12,7 +12,7 @@ import type { HingeMark, HingePattern, Shape } from '../model/types';
 import { computeHinge, autoAngle, HINGE_PATTERNS, patternInfo, MATERIALS, suggest, bendCheck, type HingeArea, type BrushSettings, type MaterialSet } from '../hinge/brush';
 import { laserTime } from '../hinge/hinge';
 
-export const HB_ICON = '<path d="M4 20c3 0 5-2 5-5l9-9a2 2 0 0 0-3-3l-9 9c-3 0-5 2-5 5"/><path d="M12 15h2M10 18h2M15 12h2" />';
+export const HB_ICON = '<path d="M2 18L5.3 6L8.7 18L12 6L15.3 18L18.7 6L22 18"/>';
 
 const settings = (ed: Editor): BrushSettings => ({ pitch: Math.max(0.5, +ed.opt.hbPitch || 2.5), slit: Math.max(1, +ed.opt.hbSlit || 15), bridge: Math.max(0.5, +ed.opt.hbBridge || 3), edge: Math.max(0, +ed.opt.hbEdge || 0) });
 /** The drawing the paint is checked against (not the hinge slits themselves, not dimensions). */

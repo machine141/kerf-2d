@@ -3,7 +3,7 @@ export const ICONS: Record<string, string> = {
   select: '<path d="M6 3l11 9-5 1 3 6-2 1-3-6-4 4z"/>',
   line: '<path d="M3 18l5-9 6 6 7-11"/><circle cx="3" cy="18" r="1.3"/><circle cx="21" cy="4" r="1.3"/>',
   rect: '<rect x="4" y="6" width="16" height="12"/>',
-  circle: '<rect x="3" y="3" width="18" height="18" stroke-dasharray="2.5 2" stroke-width="1"/><circle cx="12" cy="12" r="9"/><circle cx="3" cy="3" r="1.5" fill="currentColor"/><circle cx="21" cy="21" r="1.5" fill="currentColor"/>',
+  circle: '<circle cx="12" cy="12" r="8.5"/>',
   arc: '<path d="M4 16a8 8 0 0 1 16 0"/><circle cx="4" cy="16" r="1.2"/><circle cx="20" cy="16" r="1.2"/>',
   text: '<path d="M3 6V4h12v2M9 4v15M6.5 19h5"/><path d="M15 13l6 7M21 13l-6 7"/>',
   dim: '<path d="M4 7v10M20 7v10M4 12h16M4 12l3-2M4 12l3 2M20 12l-3-2M20 12l-3 2"/>',

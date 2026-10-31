@@ -10,7 +10,7 @@ import type { Editor } from '../editor/editor';
 import type { Point } from '../geometry/vec';
 import type { Entity, Shape } from '../model/types';
 
-const ICON = '<path d="M5 9h9v10H5z"/><circle cx="16" cy="8" r="5"/><circle cx="16" cy="8" r="2"/>';
+const ICON = '<path d="M16 20.6A9.5 9.5 0 1 0 8 20.6"/><path d="M14.9 16.1A5 5 0 1 0 9.1 16.1"/>';
 const opts = (ed: Editor): RingOpts => ({ outerD: +ed.opt.ringD, holeD: +ed.opt.ringHole, overlap: +ed.opt.ringOverlap });
 
 function target(ed: Editor, raw: Point): Entity | null {

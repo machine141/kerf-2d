@@ -19,6 +19,7 @@ import { Renderer } from '../render/renderer';
 import { COLORS, WIDTHS, PAGES, MODE_LABEL, modeOf, colorLabel, newDoc, type Entity, type Shape, type ColorKey, type LaserMode, type TextEnt as TextEntT } from '../model/types';
 import { exportSVG, importSVG } from '../io/svg';
 import { exportLaserSVG } from '../laser/export';
+import { regroupFills } from '../tools/bucket';
 import { exportDXF, importDXF, type DxfOptions } from '../io/dxf';
 import { zipOne } from '../io/zip';
 import { enterNodeEdit } from '../tools/select';
@@ -396,7 +397,7 @@ export function startUI(ed: Editor) {
     if (isImage(f)) { openTrace(ed, f); return; }
     const text = await f.text();
     try {
-      if (/\.json$/i.test(f.name)) { const d = JSON.parse(text); if (!d.ents || !d.page) throw new Error('Not a Kerf 2D drawing'); ed.sel.clear(); ed.store.load(d); ($('#docName') as HTMLInputElement).value = ed.doc.name; ed.fit(); ed.toast('Opened ' + f.name); }
+      if (/\.json$/i.test(f.name)) { const d = JSON.parse(text); if (!d.ents || !d.page) throw new Error('Not a Kerf 2D drawing'); ed.sel.clear(); ed.store.load(d); const rg = regroupFills(ed); ($('#docName') as HTMLInputElement).value = ed.doc.name; ed.fit(); ed.toast('Opened ' + f.name + (rg ? ` · ${rg} fill${rg > 1 ? 's' : ''} grouped with ${rg > 1 ? 'their shapes' : 'its shape'}` : '')); }
       else loadImported(/\.dxf$/i.test(f.name) ? importDXF(text) : importSVG(text), f.name);
     } catch (e: any) { ed.toast('Could not open ' + f.name + ': ' + e.message); }
   };
