@@ -10,8 +10,6 @@ export const LB_PALETTE: string[] = [
   '#A00000', '#00A000', '#A0A000', '#C08000', '#00A0FF', '#A000A0', '#808080', '#7D87B9', '#BB7784', '#4A6FE3',
   '#D33F6A', '#8CD78C', '#F0B98D', '#F6C4E1', '#FA9ED4', '#500A78', '#B45A00', '#004754', '#86FA88', '#FFDB66',
 ];
-/** LightBurn tool layer T1: imported but never sent to the laser (used here for the sheet outline). */
-export const LB_T1 = '#F36926';
 
 /** Key for paint-bucket fills (they get a layer of their own). */
 export type LaserKey = ColorKey | 'paint';

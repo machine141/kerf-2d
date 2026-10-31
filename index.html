@@ -49,6 +49,7 @@ header{grid-area:head;display:flex;align-items:center;gap:12px;padding-block:8px
 #docName{background:transparent;border:1px solid transparent;border-radius:4px;padding:3px 6px;width:170px;min-width:0}
 #docName:hover,#docName:focus{border-color:var(--line);background:var(--panel)}
 .actions{display:flex;gap:4px;flex-wrap:wrap;margin-left:auto}
+.files{display:flex;gap:4px}
 .menu{position:relative}
 .menu .pop{position:absolute;top:calc(100% + 4px);left:0;z-index:30;background:var(--panel);border:1px solid var(--line);border-radius:8px;box-shadow:0 8px 28px var(--shadow);padding:4px;min-width:260px;display:flex;flex-direction:column}
 .menu .pop[hidden]{display:none}
@@ -109,7 +110,7 @@ header{grid-area:head;display:flex;align-items:center;gap:12px;padding-block:8px
 .tog input:checked{background:var(--accent)}
 .tog input:checked::after{left:16px}
 .tog input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
-#lxSum{flex-basis:100%;font-size:12.5px;line-height:1.5}
+#lxSum{font-size:12.5px;line-height:1.5}
 #lxSum .ok{color:#1a7f37;font-weight:600}
 #lxSum .bad{color:#c62828;font-weight:600}
 #lxSum table{border-collapse:collapse;margin:6px 0}
@@ -148,10 +149,18 @@ table.res td:last-child{text-align:right;white-space:nowrap}
 #readout{display:flex;gap:14px;font-family:var(--f-mono);font-size:12px;color:var(--muted);flex-wrap:wrap;justify-content:flex-end}
 #readout span b{color:var(--fg);font-weight:500}
 #modal{position:fixed;inset:0;background:rgba(10,15,12,.45);display:grid;place-items:center;z-index:20;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
-#modal .box{background:var(--panel);border:1px solid var(--line);border-radius:8px;width:min(700px,100%);max-height:85vh;display:flex;flex-direction:column;box-shadow:0 10px 40px var(--shadow)}
+#modal .box{background:var(--panel);border:1px solid var(--line);border-radius:8px;width:min(860px,100%);max-height:90vh;display:flex;flex-direction:column;box-shadow:0 10px 40px var(--shadow)}
 #modal .head{display:flex;justify-content:space-between;align-items:center;padding:10px 14px;border-bottom:1px solid var(--line)}
 #mOpts{padding:10px 14px 0;display:flex;gap:14px;flex-wrap:wrap;align-items:center}
-#modal textarea{flex:1;min-height:220px;margin:12px 14px;background:var(--sheet);color:var(--fg);border:1px solid var(--line);border-radius:5px;font-family:var(--f-mono);font-size:11.5px;padding:8px;resize:vertical}
+#mBody{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr);gap:14px;padding:12px 14px;overflow:auto}
+@media (max-width:640px){#mBody{grid-template-columns:1fr}}
+#mPrev{background:var(--sheet);border:1px solid var(--line);border-radius:6px;padding:8px;display:grid;place-items:center;min-height:160px}
+#mPrev img{max-width:100%;max-height:52vh;display:block}
+.xkinds{display:flex;gap:6px;flex-basis:100%;flex-wrap:wrap}
+.xkinds button{flex:1 1 160px;display:flex;flex-direction:column;align-items:flex-start;gap:2px;text-align:left;border:1px solid var(--line);background:var(--panel);border-radius:8px;padding:8px 10px}
+.xkinds button span{font-size:11.5px;color:var(--muted)}
+.xkinds button[aria-checked="true"]{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
+.xkinds button[aria-checked="true"] b{color:var(--accent)}
 #modal .foot{display:flex;gap:8px;justify-content:flex-end;align-items:center;padding:0 14px 12px;flex-wrap:wrap}
 #modal .foot .hint{margin-right:auto}
 .dropping-x{}
@@ -417,15 +426,76 @@ body.dropping #main{outline:3px dashed var(--accent);outline-offset:-6px}
   .toggles,#readout{justify-content:flex-start}
 }
 @media (prefers-reduced-motion:reduce){#toast{transition:none}}
+
+/* ---------- Laser workspace ---------- */
+#laserWs{position:fixed;inset:0;z-index:40;background:var(--desk);display:flex;flex-direction:column;color:var(--fg)}
+#laserWs .lw-head{display:flex;align-items:center;gap:14px;padding:8px max(16px,env(safe-area-inset-left,0px));border-bottom:1px solid var(--line);flex-wrap:wrap}
+#laserWs .lw-head strong{font-size:16px}
+#laserWs .lw-head .lw-sheet{color:var(--muted);font-size:13px;margin-right:auto;display:flex;align-items:center;gap:6px}
+#laserWs .lw-body{flex:1;display:grid;grid-template-columns:minmax(300px,390px) 1fr;min-height:0}
+#laserWs .lw-steps{overflow:auto;padding:10px 12px 40px;border-right:1px solid var(--line);background:var(--panel)}
+#laserWs .lw-main{display:flex;flex-direction:column;min-width:0;min-height:0}
+#laserWs .lw-bedwrap{flex:1;min-height:240px;position:relative}
+#laserWs .lw-bedwrap canvas{position:absolute;inset:0;touch-action:none}
+#laserWs .lw-player{display:flex;align-items:center;gap:10px;padding:8px 16px;border-top:1px solid var(--line);flex-wrap:wrap}
+#laserWs .lw-player input[type=range]{flex:1 1 200px;accent-color:var(--accent)}
+#laserWs .lw-msg{margin:0;padding:0 16px 8px;font-size:13px;min-height:1.2em}
+#laserWs .lw-step{border:1px solid var(--line);border-radius:10px;margin-bottom:10px;background:var(--sheet)}
+#laserWs .lw-sh{display:flex;align-items:center;gap:10px;padding:10px 12px;flex-wrap:wrap}
+#laserWs .lw-n{width:26px;height:26px;border-radius:50%;background:var(--accent);color:var(--accent-fg);display:grid;place-items:center;font-weight:600;font-size:13px;flex:none}
+#laserWs .lw-step:not(.open) .lw-n{background:var(--line);color:var(--fg)}
+#laserWs .lw-sh b{font-size:14.5px}
+#laserWs .lw-sum{font-size:12.5px;color:var(--muted);flex-basis:100%;padding-left:36px}
+#laserWs .lw-sb{padding:0 12px 12px 48px;display:flex;flex-direction:column;gap:8px;font-size:13px}
+#laserWs .lw-row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+#laserWs .lw-row label{display:flex;align-items:center;gap:6px}
+#laserWs input[type=text],#laserWs select{border:1px solid var(--line);border-radius:6px;padding:4px 6px;background:var(--panel);min-width:0}
+#laserWs .lw-row input[type=text]{width:64px}
+#laserWs #lwName{width:150px}
+#laserWs .lw-help{margin:0;color:var(--muted);font-size:12.5px;line-height:1.45;background:var(--panel-2);border-radius:6px;padding:6px 8px}
+#laserWs .lw-help.small{font-size:11.5px;padding:0;background:none;margin-top:2px;font-weight:400}
+#laserWs .lw-link{border:0;background:none;color:var(--accent);text-decoration:underline;padding:0;font:inherit;cursor:pointer}
+#laserWs #lwOri{width:100%;max-width:300px;height:auto;border-radius:6px;cursor:pointer;background:var(--panel)}
+#laserWs .btn[aria-pressed="true"],#laserWs .btn.on{border-color:var(--accent);color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
+#laserWs .btn{padding:6px 12px}
+#laserWs .btn[disabled]{opacity:.5;cursor:not-allowed}
+#laserWs .lw-op{border:1px solid var(--line);border-radius:8px;padding:8px 10px;display:flex;flex-direction:column;gap:6px;background:var(--panel)}
+#laserWs .lw-op.off{opacity:.6}
+#laserWs .lw-oph{display:flex;align-items:center;gap:6px}
+#laserWs .lw-oph b{margin-right:auto}
+#laserWs .lw-opf{display:flex;flex-wrap:wrap;gap:6px 12px;align-items:center}
+#laserWs .lw-opf label{display:flex;align-items:center;gap:4px}
+#laserWs .lw-opf input[type=text]{width:52px}
+#laserWs .lw-opf small{color:var(--muted)}
+#laserWs .lw-read.small{font-size:12px;color:var(--muted)}
+#laserWs .lw-set{border-collapse:collapse;width:100%}
+#laserWs .lw-set th{font-size:11.5px;font-weight:500;color:var(--muted);text-align:left;padding:2px 4px;line-height:1.2}
+#laserWs .lw-set td{padding:5px 4px;border-top:1px solid var(--line);vertical-align:middle}
+#laserWs .lw-set td:first-child{width:40%}
+#laserWs .lw-set input[type=text]{width:52px}
+#laserWs .sw{display:inline-block;width:12px;height:12px;border-radius:3px;border:1px solid rgba(0,0,0,.25);vertical-align:-2px;margin-right:2px}
+#laserWs .lw-cards{display:flex;flex-direction:column;gap:6px}
+#laserWs .lw-cards button{display:flex;flex-direction:column;align-items:flex-start;gap:2px;text-align:left;border:1px solid var(--line);background:var(--panel);border-radius:8px;padding:8px 10px}
+#laserWs .lw-cards button span{font-size:12px;color:var(--muted)}
+#laserWs .lw-cards button[aria-checked="true"]{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
+#laserWs .lw-cards button[aria-checked="true"] b{color:var(--accent)}
+#laserWs .lw-read{margin:0}
+#laserWs .lw-big{margin:0;font-size:18px}
+#laserWs .ok{color:#1a7f37;margin:0;font-weight:600}
+#laserWs .bad{color:#c62828;margin:0;font-weight:600}
+@media (max-width:820px){#laserWs .lw-body{grid-template-columns:1fr;grid-template-rows:auto minmax(320px,1fr);overflow:auto}#laserWs .lw-steps{border-right:0;border-bottom:1px solid var(--line);overflow:visible}}
 </style>
 </head>
 <body>
 <header>
-  <div class="brand"><b>Kerf 2D</b><span>precision drafting · v1.4.1</span></div>
+  <div class="brand"><b>Kerf 2D</b><span>precision drafting · v1.5</span></div>
+  <div class="files">
+    <button class="btn" id="bNew" title="Start a new drawing">New</button>
+    <button class="btn" id="bOpen" title="Open a Kerf drawing, or bring in an SVG, DXF or picture">Open…</button>
+    <button class="btn" id="bSave" title="Save this drawing to work on later">Save</button>
+  </div>
   <input id="docName" aria-label="Drawing name" value="Glasses front">
   <div class="actions">
-    <button class="btn" id="bNew">New</button>
-    <button class="btn" id="bOpen">Open…</button>
     <div class="menu" id="mkMenu">
       <button class="btn" id="bMake" aria-haspopup="true" aria-expanded="false" title="Box maker, elements and picture tracing">Make ▾</button>
       <div class="pop" role="menu" hidden>
@@ -440,16 +510,14 @@ body.dropping #main{outline:3px dashed var(--accent);outline-offset:-6px}
         <button role="menuitem" id="bTrace"><b>Trace image…</b><span>Turn a picture into outlines (or drop / paste one)</span></button>
       </div>
     </div>
-    <button class="btn" id="bSave">Save</button>
     <button class="btn" id="bHandIn" title="Pupils: check your design and save it to send to your teacher">Hand in</button>
     <button class="btn" id="bUndo" title="Undo (Ctrl+Z)">Undo</button>
     <button class="btn" id="bRedo" title="Redo (Ctrl+Y)">Redo</button>
     <button class="btn" id="bFit" title="Zoom to page (F)">Fit page</button>
     <button class="btn" id="bHelp" title="How to use the tool you have picked, with pictures">? Help</button>
-    <button class="btn primary" id="bLaser" title="Export in a good cut order with LightBurn's layer colours">Export for laser</button>
-    <button class="btn primary" id="bSvg">Export SVG</button>
-    <button class="btn primary" id="bDxf">Export DXF</button>
- <input type="file" id="classIn" accept=".json,.zip" multiple hidden>
+    <button class="btn primary" id="bExport" title="Save a file for the laser (LightBurn), or an SVG / DXF">Export</button>
+    <button class="btn primary" id="bLaser" title="Laser workspace: settings, position on the bed, preview and time">Laser</button>
+    <input type="file" id="classIn" accept=".json,.zip" multiple hidden>
     <input type="file" id="fileIn" accept=".json,.dxf,.svg,.png,.jpg,.jpeg,.gif,.webp,.bmp" hidden><input type="file" id="imgIn" accept="image/*" hidden>
   </div>
 </header>
@@ -489,8 +557,8 @@ body.dropping #main{outline:3px dashed var(--accent);outline-offset:-6px}
   <div class="box" role="dialog" aria-modal="true" aria-labelledby="mTitle">
     <div class="head"><strong id="mTitle">Export</strong><button class="x" id="mClose" aria-label="Close">✕</button></div>
     <div id="mOpts"></div>
-    <textarea id="mText" readonly spellcheck="false"></textarea>
-    <div class="foot"><p class="hint" id="mHint"></p><button class="btn" id="mCopy">Copy text</button><button class="btn primary" id="mSave">Save file</button></div>
+    <div id="mBody"><div id="mPrev"><img id="mImg" alt="Picture of what will be exported"></div><div id="lxSum"></div></div>
+    <div class="foot"><p class="hint" id="mHint"></p><button class="btn primary" id="mSave">Save file</button></div>
   </div>
 </div>
 <script type="module" src="/src/main.ts"></script>

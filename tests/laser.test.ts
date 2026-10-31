@@ -175,11 +175,9 @@ describe('Export for laser: the SVG file', () => {
       expect(Math.min(...errs), s.type).toBeLessThan(0.01);
     }
   });
-  it('colours are LightBurn’s exact layer colours; the sheet outline is on tool layer T1 and comes first', () => {
-    expect(x.svg).toMatch(/<rect id="sheet-outline"[^>]*stroke="#F36926"/);
-    expect(x.svg.indexOf('sheet-outline')).toBeLessThan(x.svg.indexOf('step-1'));
-    expect([...x.svg.matchAll(/stroke="(#[0-9A-F]{6})"/g)].map(m => m[1]).filter(c => c !== '#F36926').every(c => c === '#FF0000')).toBe(true);
-    expect(exportLaserSVG(doc, { outline: false }).svg).not.toMatch(/sheet-outline/);
+  it('colours are LightBurn’s exact layer colours; no sheet outline (LightBurn would put it on a cutting layer)', () => {
+    expect([...x.svg.matchAll(/stroke="(#[0-9A-F]{6})"/g)].map(m => m[1]).every(c => c === '#FF0000')).toBe(true);
+    expect(x.svg).not.toMatch(/<rect/); expect(x.svg).not.toMatch(/#F36926/i);
   });
   it('the legend says which LightBurn layer each colour went to and what it does', () => {
     const y = exportLaserSVG(classSheet());

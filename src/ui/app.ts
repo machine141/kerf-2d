@@ -20,6 +20,7 @@ import { COLORS, WIDTHS, PAGES, MODE_LABEL, modeOf, colorLabel, newDoc, type Ent
 import { exportSVG, importSVG } from '../io/svg';
 import { exportLaserSVG } from '../laser/export';
 import { regroupFills } from '../tools/bucket';
+import { openLaser } from './laser';
 import { exportDXF, importDXF, type DxfOptions } from '../io/dxf';
 import { zipOne } from '../io/zip';
 import { enterNodeEdit } from '../tools/select';
@@ -252,6 +253,7 @@ export function startUI(ed: Editor) {
   // ---------- keyboard ----------
   window.addEventListener('keydown', ev => {
     const k = ev.key, tgt = ev.target as HTMLElement, typing = tgt.matches?.('input,select,textarea');
+    if (document.getElementById('laserWs')) return;      // the Laser workspace has its own keys
     if (k === 'Shift' || k === 'Alt') { ed.mods = { ...ed.mods, shift: ev.shiftKey, alt: ev.altKey }; if (k === 'Alt' && ed.hover) ev.preventDefault(); R.request(); }
     if (ev.altKey && ['a', 'r', 'p'].includes(k.toLowerCase())) { ev.preventDefault(); setCm(({ a: 'abs', r: 'rel', p: 'pol' } as any)[k.toLowerCase()]); return; }
     if ((ev.ctrlKey || ev.metaKey) && !typing) {
@@ -299,60 +301,81 @@ export function startUI(ed: Editor) {
     catch { ed.toast('Saving is not available here — use Copy text'); }
   }
   let exportSheet = 0;
-  function showExport(kind: 'svg' | 'dxf') {
+  // ---------- Export: one window, three kinds of file; shows a picture of what will be saved, never the file's code ----------
+  type ExpKind = 'laser' | 'svg' | 'dxf';
+  let expKind: ExpKind = 'laser';
+  const laserOpts = { fills: false };
+  const EXP: Record<ExpKind, { title: string; sub: string; ext: string }> = {
+    laser: { title: 'For the laser', sub: 'LightBurn-ready: best cut order, each colour on its own layer', ext: '-laser.svg' },
+    svg: { title: 'SVG', sub: 'For Inkscape and other drawing software', ext: '.svg' },
+    dxf: { title: 'DXF', sub: 'For CAD and other laser software', ext: '.dxf' },
+  };
+  function showExport(kind?: ExpKind) {
+    if (kind) expKind = kind;
     const nS = Math.max(1, ed.doc.sheets || 1); if (exportSheet >= nS) exportSheet = 0;
     const src = () => nS > 1 ? sheetDoc(ed.doc, exportSheet) : ed.doc;
-    const build = () => kind === 'svg' ? exportSVG(src(), ui.exportOpts) : exportDXF(src(), ui.exportOpts);
-    const fname = () => base() + (nS > 1 ? `-sheet${exportSheet + 1}` : '') + '.' + kind, refresh = () => { const t = build(); $<HTMLTextAreaElement>('#mText').value = t; $('#mSave').onclick = () => saveFile(fname(), t); if (nS > 1) $('#mHint').textContent = `Sheet ${exportSheet + 1} of ${nS} · ${src().ents.length} objects · export each sheet in turn`; $('#mCopy').onclick = async () => { try { await navigator.clipboard.writeText(t); ed.toast('Copied'); } catch { $<HTMLTextAreaElement>('#mText').select(); ed.toast('Text selected — press Ctrl+C'); } }; };
-    $('#mTitle').textContent = kind === 'svg' ? 'Export SVG (mm)' : 'Export DXF (R12, mm)';
-    const n = ed.doc.ents.filter(e => (ed.store.visible(e) || ui.exportOpts.includeHidden) && !(ui.exportOpts.skipDims && e.type === 'dim')).length;
-    $('#mHint').textContent = `${ed.doc.page.w} × ${ed.doc.page.h} mm · ${n} objects` + (kind === 'dxf' && DL ? ' · saved as a .zip containing the .dxf' : '');
-    $('#mOpts').innerHTML = (nS > 1 ? `<div>Sheet <div class="segc" id="xSheet" role="group">${Array.from({ length: nS }, (_, i) => `<button type="button" data-v="${i}" aria-pressed="${i === exportSheet}">${i + 1}</button>`).join('')}</div></div>` : '') + `<label class="chk"><input type="checkbox" id="xHidden" ${ui.exportOpts.includeHidden ? 'checked' : ''}> Include hidden layers</label><label class="chk"><input type="checkbox" id="xDims" ${ui.exportOpts.skipDims ? '' : 'checked'}> Include dimensions</label>` +
-      (ed.doc.ents.some(e => e.type === 'fill') ? (kind === 'svg' ? `<label class="chk"><input type="checkbox" id="xFills" ${ui.exportOpts.skipFills ? '' : 'checked'}> Include fills (solid colours — the laser engraves them as areas)</label>` : `<span class="hint">Fills are left out: DXF can't hold filled areas. Use SVG to engrave them.</span>`) : '') +
-      (kind === 'dxf' ? `<label class="chk"><input type="checkbox" id="xSplit" ${ui.exportOpts.splitArcs ? 'checked' : ''}> Split arcs &amp; circles into lines</label><label class="chk">Curve tolerance <input type="text" id="xTol" value="${ui.exportOpts.curveTol}" style="width:60px" class="mono"> mm</label>` : '');
-    const rebind = () => { ui.exportOpts.includeHidden = $<HTMLInputElement>('#xHidden').checked; ui.exportOpts.skipDims = !$<HTMLInputElement>('#xDims').checked; const xf = document.querySelector<HTMLInputElement>('#xFills'); if (xf) ui.exportOpts.skipFills = !xf.checked; if (kind === 'dxf') { ui.exportOpts.splitArcs = $<HTMLInputElement>('#xSplit').checked; const t = parseLength($<HTMLInputElement>('#xTol').value); if (t > 0) ui.exportOpts.curveTol = t; } refresh(); };
-    $('#mOpts').querySelectorAll('input').forEach(i => i.addEventListener('change', rebind));
-    $('#mOpts').querySelectorAll<HTMLElement>('#xSheet button').forEach(b => b.onclick = () => { exportSheet = +b.dataset.v!; $('#mOpts').querySelectorAll('#xSheet button').forEach(x => x.setAttribute('aria-pressed', String(x === b))); refresh(); });
-    refresh(); $('#modal').hidden = false;
-  }
-  // ---------- export for laser: cut order + LightBurn layer colours ----------
-  const laserOpts = { outline: true, fills: false };
-  function showLaserExport() {
-    const nS = Math.max(1, ed.doc.sheets || 1); if (exportSheet >= nS) exportSheet = 0;
-    const src = () => nS > 1 ? sheetDoc(ed.doc, exportSheet) : ed.doc;
-    const fname = () => base() + (nS > 1 ? `-sheet${exportSheet + 1}` : '') + '-laser.svg';
+    const fname = () => base() + (nS > 1 ? `-sheet${exportSheet + 1}` : '') + EXP[expKind].ext;
     const m = (v: number) => v >= 1000 ? (v / 1000).toFixed(1) + ' m' : Math.round(v) + ' mm';
+    const picture = (svg: string) => { $<HTMLImageElement>('#mImg').src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg.replace(/stroke-width="[\d.]+"/g, 'stroke-width="0.6"')); };
     const refresh = () => {
-      const x = exportLaserSVG(src(), laserOpts), r = x.result, n = r.paths.length;
-      $<HTMLTextAreaElement>('#mText').value = x.svg; $('#mSave').onclick = () => saveFile(fname(), x.svg);
-      $('#mCopy').onclick = async () => { try { await navigator.clipboard.writeText(x.svg); ed.toast('Copied'); } catch { $<HTMLTextAreaElement>('#mText').select(); ed.toast('Text selected — press Ctrl+C'); } };
-      const order = (['engrave', 'score', 'cut'] as const).filter(k => x.counts[k]).map(k => `${x.counts[k]} ${({ engrave: 'engraved areas', score: 'engraved lines', cut: 'cuts' })[k]}`).join(' → ');
-      const saving = r.travelDrawn > 1 ? Math.round(100 * (1 - r.travel / r.travelDrawn)) : 0;
-      $('#lxSum').innerHTML = !n ? `<p class="bad">Nothing to send to the laser on this sheet (check the colours are set to cut or engrave, and their layers are showing).</p>` :
-        `<div><b>Order:</b> ${order}</div>` +
-        (r.outlinesWithInside ? (r.insideAfter ? `<div class="bad">⚠ ${r.insideAfter} inside cuts would come after their outline.</div>` : `<div class="ok">✓ Holes first: ${r.outlinesWithInside} ${r.outlinesWithInside === 1 ? 'shape has' : 'shapes have'} everything inside cut before the outline.</div>`) : '') +
-        `<div><b>Laser-off moves:</b> ${m(r.travel)}${saving > 0 ? ` (in drawing order: ${m(r.travelDrawn)} — ${saving}% less)` : ''}</div>` +
-        (r.joined.to ? `<div>Joined ${r.joined.from} loose lines that touch into ${r.joined.to} ${r.joined.to === 1 ? 'path' : 'paths'}.</div>` : '') +
-        (r.removed ? `<div>Left out ${r.removed} ${r.removed === 1 ? 'line' : 'lines'} drawn twice (cut once).</div>` : '') +
-        `<table><tr><td><b>Kerf colour</b></td><td><b>LightBurn layer</b></td><td><b>Does</b></td><td></td></tr>` +
-        x.legend.map(l => `<tr><td><span class="sw" style="background:${l.kerfHex}"></span>${l.label}</td><td><span class="sw" style="background:${l.lbHex}"></span>${l.layer}</td><td>${l.does}</td><td class="hint">${l.count}</td></tr>`).join('') + `</table>` +
-        `<details><summary>Opening it in LightBurn</summary><ol><li><b>File → Import</b> this file. Each colour lands on the layer shown above.</li><li>Set speed, power and passes for each layer as usual.</li><li>To cut in this order: in the Laser window open <b>Optimization Settings</b> and switch optimisation off.</li><li>The orange sheet outline is on tool layer <b>T1</b>: LightBurn shows it but never cuts it.</li></ol></details>`;
-      $('#mHint').textContent = (nS > 1 ? `Sheet ${exportSheet + 1} of ${nS} · export each sheet in turn · ` : '') + `${n} paths, numbered in cut order`;
+      const d = src(); let text = '', info = '';
+      if (expKind === 'laser') {
+        const x = exportLaserSVG(d, laserOpts), r = x.result, n = r.paths.length; text = x.svg; picture(x.svg);
+        const order = (['engrave', 'score', 'cut'] as const).filter(k => x.counts[k]).map(k => `${x.counts[k]} ${({ engrave: 'engraved areas', score: 'engraved lines', cut: 'cuts' })[k]}`).join(' → ');
+        const saving = r.travelDrawn > 1 ? Math.round(100 * (1 - r.travel / r.travelDrawn)) : 0;
+        info = !n ? `<p class="bad">Nothing to send to the laser on this sheet (check the colours are set to cut or engrave, and their layers are showing).</p>` :
+          `<div><b>Order:</b> ${order}</div>` +
+          (r.outlinesWithInside ? (r.insideAfter ? `<div class="bad">⚠ ${r.insideAfter} inside cuts would come after their outline.</div>` : `<div class="ok">✓ Holes first: everything inside ${r.outlinesWithInside} ${r.outlinesWithInside === 1 ? 'shape is' : 'shapes is'} cut before its outline.</div>`) : '') +
+          `<div><b>Moves with the laser off:</b> ${m(r.travel)}${saving > 0 ? ` (${saving}% less than in drawing order)` : ''}</div>` +
+          (r.joined.to ? `<div>Joined ${r.joined.from} loose lines that touch into ${r.joined.to} ${r.joined.to === 1 ? 'path' : 'paths'}.</div>` : '') +
+          (r.removed ? `<div>Left out ${r.removed} ${r.removed === 1 ? 'line' : 'lines'} drawn twice (cut once).</div>` : '') +
+          `<table><tr><td><b>Kerf colour</b></td><td><b>LightBurn layer</b></td><td><b>Does</b></td></tr>` +
+          x.legend.map(l => `<tr><td><span class="sw" style="background:${l.kerfHex}"></span>${l.label}</td><td><span class="sw" style="background:${l.lbHex}"></span>${l.layer}</td><td>${l.does} <span class="hint">· ${l.count}</span></td></tr>`).join('') + `</table>` +
+          `<details><summary>Opening it in LightBurn</summary><ol><li><b>File → Import</b> this file. Each colour lands on the layer shown above.</li><li>Set speed, power and passes for each layer as usual.</li><li>To cut in this order: in the Laser window open <b>Optimization Settings</b> and switch optimisation off.</li></ol></details>`;
+        $('#mHint').textContent = (nS > 1 ? `Sheet ${exportSheet + 1} of ${nS} · export each sheet in turn · ` : '') + `${d.page.w} × ${d.page.h} mm`;
+      } else {
+        text = expKind === 'svg' ? exportSVG(d, ui.exportOpts) : exportDXF(d, ui.exportOpts); picture(exportSVG(d, { ...ui.exportOpts, skipFills: expKind === 'dxf' || ui.exportOpts.skipFills }));
+        const n = d.ents.filter(e => (ed.store.visible(e) || ui.exportOpts.includeHidden) && !(ui.exportOpts.skipDims && e.type === 'dim')).length;
+        info = `<div>${n} objects, in the order they were drawn.${expKind === 'dxf' && DL ? ' Saved as a .zip with the .dxf inside.' : ''}</div>`;
+        $('#mHint').textContent = (nS > 1 ? `Sheet ${exportSheet + 1} of ${nS} · ` : '') + `${d.page.w} × ${d.page.h} mm`;
+      }
+      $('#lxSum').innerHTML = info;
+      $('#mSave').onclick = () => saveFile(fname(), text);
+      $('#mSave').textContent = 'Save ' + fname();
     };
-    $('#mTitle').textContent = 'Export for laser (LightBurn-ready SVG)';
-    $('#mOpts').innerHTML = (nS > 1 ? `<div>Sheet <div class="segc" id="xSheet" role="group">${Array.from({ length: nS }, (_, i) => `<button type="button" data-v="${i}" aria-pressed="${i === exportSheet}">${i + 1}</button>`).join('')}</div></div>` : '') +
-      `<label class="tog"><input type="checkbox" role="switch" id="lxOutline" ${laserOpts.outline ? 'checked' : ''}> Sheet outline as a guide (never cut)</label>` +
-      (ed.doc.ents.some(e => e.type === 'fill') ? `<label class="tog"><input type="checkbox" role="switch" id="lxFills" ${laserOpts.fills ? 'checked' : ''}> Engrave paint-bucket fills</label>` : '') +
-      `<div id="lxSum"></div>`;
-    $('#mOpts').querySelectorAll<HTMLInputElement>('input').forEach(i => i.addEventListener('change', () => { laserOpts.outline = $<HTMLInputElement>('#lxOutline').checked; const f = document.querySelector<HTMLInputElement>('#lxFills'); if (f) laserOpts.fills = f.checked; refresh(); }));
-    $('#mOpts').querySelectorAll<HTMLElement>('#xSheet button').forEach(b => b.onclick = () => { exportSheet = +b.dataset.v!; $('#mOpts').querySelectorAll('#xSheet button').forEach(x => x.setAttribute('aria-pressed', String(x === b))); refresh(); });
-    refresh(); $('#modal').hidden = false;
+    const opts = () => {
+      const fills = ed.doc.ents.some(e => e.type === 'fill');
+      if (expKind === 'laser') return fills ? `<label class="tog"><input type="checkbox" role="switch" id="lxFills" ${laserOpts.fills ? 'checked' : ''}> Engrave paint-bucket fills</label>` : '';
+      return `<label class="tog"><input type="checkbox" role="switch" id="xHidden" ${ui.exportOpts.includeHidden ? 'checked' : ''}> Hidden layers</label><label class="tog"><input type="checkbox" role="switch" id="xDims" ${ui.exportOpts.skipDims ? '' : 'checked'}> Dimensions</label>` +
+        (fills ? (expKind === 'svg' ? `<label class="tog"><input type="checkbox" role="switch" id="xFills" ${ui.exportOpts.skipFills ? '' : 'checked'}> Fills (solid colours)</label>` : `<span class="hint">Fills are left out: DXF can't hold filled areas.</span>`) : '') +
+        (expKind === 'dxf' ? `<label class="tog"><input type="checkbox" role="switch" id="xSplit" ${ui.exportOpts.splitArcs ? 'checked' : ''}> Arcs &amp; circles as short lines</label><label class="chk">Curve tolerance <input type="text" id="xTol" value="${ui.exportOpts.curveTol}" style="width:60px" class="mono"> mm</label>` : '');
+    };
+    const draw = () => {
+      $('#mOpts').innerHTML = `<div class="xkinds" role="radiogroup" aria-label="Kind of file">${(Object.keys(EXP) as ExpKind[]).map(k => `<button type="button" role="radio" data-k="${k}" aria-checked="${k === expKind}"><b>${EXP[k].title}</b><span>${EXP[k].sub}</span></button>`).join('')}</div>` +
+        (nS > 1 ? `<div>Sheet <div class="segc" id="xSheet" role="group">${Array.from({ length: nS }, (_, i) => `<button type="button" data-v="${i}" aria-pressed="${i === exportSheet}">${i + 1}</button>`).join('')}</div></div>` : '') + opts();
+      $('#mOpts').querySelectorAll<HTMLElement>('.xkinds button').forEach(b => b.onclick = () => { expKind = b.dataset.k as ExpKind; draw(); });
+      $('#mOpts').querySelectorAll<HTMLInputElement>('input').forEach(i => i.addEventListener('change', () => {
+        const v = (id: string) => document.querySelector<HTMLInputElement>('#' + id);
+        if (v('lxFills')) laserOpts.fills = v('lxFills')!.checked;
+        if (v('xHidden')) ui.exportOpts.includeHidden = v('xHidden')!.checked;
+        if (v('xDims')) ui.exportOpts.skipDims = !v('xDims')!.checked;
+        if (v('xFills')) ui.exportOpts.skipFills = !v('xFills')!.checked;
+        if (v('xSplit')) ui.exportOpts.splitArcs = v('xSplit')!.checked;
+        if (v('xTol')) { const t = parseLength(v('xTol')!.value); if (t > 0) ui.exportOpts.curveTol = t; }
+        refresh();
+      }));
+      $('#mOpts').querySelectorAll<HTMLElement>('#xSheet button').forEach(b => b.onclick = () => { exportSheet = +b.dataset.v!; draw(); });
+      refresh();
+    };
+    $('#mTitle').textContent = 'Export';
+    draw(); $('#modal').hidden = false;
   }
-  $('#bLaser').onclick = () => showLaserExport();
+  $('#bExport').onclick = () => showExport();
+  $('#bLaser').onclick = () => openLaser(ed, saveFile);
   $('#mClose').onclick = () => { $('#modal').hidden = true; };
   $('#modal').addEventListener('click', ev => { if ((ev.target as HTMLElement).id === 'modal') $('#modal').hidden = true; });
   const saveNative = () => saveFile(base() + '.json', JSON.stringify(ed.doc, null, 1));
-  $('#bSave').onclick = saveNative; $('#bSvg').onclick = () => showExport('svg'); $('#bDxf').onclick = () => showExport('dxf');
+  $('#bSave').onclick = saveNative;
   $('#bOpen').onclick = () => $('#fileIn').click();
   const isImage = (f: File) => /^image\//i.test(f.type) || /\.(png|jpe?g|jfif|gif|webp|bmp|avif|heic|heif)$/i.test(f.name);
   $('#bTrace').onclick = () => { document.querySelector<HTMLElement>('#mkMenu .pop')!.hidden = true; $('#imgIn').click(); };

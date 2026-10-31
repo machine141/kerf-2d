@@ -2,15 +2,16 @@
  * "Export for laser": an SVG laid out for LightBurn (and any laser software that reads SVG).
  *  - shapes are written one after another in cut order (see order.ts);
  *  - each colour is written with LightBurn's exact layer colour, so it lands on the right layer;
- *  - the sheet outline can go on LightBurn's tool layer T1 (shown for lining up, never sent to the laser).
+ *  - no sheet outline: LightBurn 2.2 put a T1-coloured rectangle on cutting layer 05 when imported
+ *    (Muks's test, 31 Oct 2026), so it would have been cut. Only the drawing goes in the file.
  */
 import { fmt, clean } from '../geometry/vec';
 import { COLORS, modeOf, MODE_LABEL, type Doc } from '../model/types';
 import { cutOrder, PHASE_LABEL, type OrderOptions, type OrderResult, type Phase } from './order';
-import { lbHex, lbName, LB_T1, type LaserKey } from './palette';
+import { lbHex, lbName, type LaserKey } from './palette';
 import { segsD } from './segs';
 
-export interface LaserExportOptions extends OrderOptions { /** sheet outline on LightBurn's tool layer T1 (default on) */ outline?: boolean }
+export type LaserExportOptions = OrderOptions;
 export interface LegendRow { key: LaserKey; label: string; kerfHex: string; layer: string; lbHex: string; does: string; count: number }
 export interface LaserExport { svg: string; result: OrderResult; legend: LegendRow[]; counts: Record<Phase, number> }
 
@@ -23,7 +24,6 @@ export function exportLaserSVG(doc: Doc, o: LaserExportOptions = {}): LaserExpor
     `<svg xmlns="http://www.w3.org/2000/svg" width="${nf(w)}mm" height="${nf(h)}mm" viewBox="0 0 ${nf(w)} ${nf(h)}">`,
     `<!-- ${esc(doc.name)} · Kerf 2D export for laser · 1 user unit = 1 mm · shapes are in cut order: engrave areas, engraved lines, then cuts (holes before outlines) -->`,
     `<g id="kerf-laser-job" fill="none" stroke-linecap="round" stroke-linejoin="round">`);
-  if (o.outline !== false) out.push(`<rect id="sheet-outline" x="0" y="0" width="${nf(w)}" height="${nf(h)}" stroke="${LB_T1}" stroke-width="0.1"/>`);
   result.paths.forEach((p, i) => {
     const hx = lbHex(p.key), d = p.rings.map(r => segsD(r, p.kind === 'area' || p.closed, h)).join(' ');
     out.push(p.kind === 'area'
