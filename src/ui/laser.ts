@@ -63,7 +63,7 @@ export function openLaser(ed: Editor, saveFile: (name: string, text: string) => 
         <div class="lw-bedwrap"><canvas id="lwBed" aria-label="The laser bed, as you stand at the front"></canvas>
           <button type="button" class="lw-arrow" id="lwArrFB" title="Flip front ↕ back" aria-label="Flip front and back" hidden>⇅</button>
           <button type="button" class="lw-arrow" id="lwArrLR" title="Flip left ↔ right" aria-label="Flip left and right" hidden>⇆</button>
-          <div class="lw-corner" id="lwCorner"></div></div>
+          <div class="lw-corner" id="lwCorner"></div><div class="lw-warn" id="lwWarn" role="alert" hidden></div></div>
         <div class="lw-player">
           <button class="btn primary" id="lwPlay" title="Play the job: watch the order the laser will follow">▶ Play</button>
           <input type="range" id="lwScrub" min="0" max="1000" value="0" aria-label="Where in the job">
@@ -126,6 +126,8 @@ export function openLaser(ed: Editor, saveFile: (name: string, text: string) => 
   /** outlines of the job on the bed (from the simulation) */
   const jobParts = () => (sim?.steps || []).flatMap(st => st.k === 'line' ? [st.pts] : st.k === 'area' ? st.rings : []);
   let overlapN = 0;
+  /** the warnings, in plain words */
+  const warnings = () => { const f = fitsBed(S.machine, jobBox()), w: string[] = []; if (f) w.push(f + ' Move the job so it fits on the bed.'); if (overlapN) w.push('This lands on something already cut. Move it into the empty space.'); return w; };
   const overlap = () => overlapN;
 
   // ---------- quick changes to picked parts (the drawing itself is not changed) ----------
@@ -226,7 +228,7 @@ export function openLaser(ed: Editor, saveFile: (name: string, text: string) => 
           ${S.showAlign ? `<span class="lw-lab">Line up</span><span class="lw-in"><span class="segc icons" role="group" aria-label="Line up across the bed">${['left', 'centre', 'right'].map(k => `<button type="button" data-al="${k}" title="Line up with the ${k === 'centre' ? 'middle' : k + '-hand side'} of the bed"><svg viewBox="0 0 20 20">${ALIGN_ICON[k]}</svg></button>`).join('')}</span>
             <span class="segc icons" role="group" aria-label="Line up front to back">${['back', 'middle', 'front'].map(k => `<button type="button" data-al="${k}" title="Line up with the ${k} of the bed"><svg viewBox="0 0 20 20">${ALIGN_ICON[k]}</svg></button>`).join('')}</span></span>` : ''}
           <span class="lw-lab">Lock</span><span class="lw-in"><label class="tog"><input type="checkbox" role="switch" id="lwLockJob" ${S.lockJob ? 'checked' : ''}> Stop the job being dragged</label></span></div>` : `
-        <p class="lw-read small">Move the laser three ways: the <b>arrows</b>, the <b>numbers</b>, or <b>drag</b> the red cross on the bed (or click where it should go).</p>
+        <p class="lw-read small">Move the laser three ways: the <b>arrows</b>, the <b>numbers</b>, or <b>drag</b> the red cross on the bed (or <b>double-click</b> where it should go).</p>
         <div class="lw-move">
           <div class="lw-jog" role="group" aria-label="Move the laser">
             <span></span><button type="button" class="btn" data-jog="0,-1" title="Towards the back (hold to keep moving)">▲</button><span></span>
@@ -254,8 +256,8 @@ export function openLaser(ed: Editor, saveFile: (name: string, text: string) => 
         ${help(S.traces.length ? 'Grey = already cut. The flag shows where the laser <b>started</b> the last job and the red ring where it <b>finished</b>. Put the next job (or a re-cut) in the empty space.' : 'After the laser has cut a job, press <b>✓ Mark this job as cut</b>. A grey shadow stays on the bed, with where the laser started and finished, so the next job (or a re-cut) goes in the space that’s left. <b>Try it now:</b> press it, then <b>Next to the last cut</b>.')}
       </div>
       <p class="lw-read">Job size: <b>${r1(jobW())} × ${r1(jobH())} mm</b>${S.copies > 1 ? ` (${S.copies} copies)` : ''}${left.size ? ` · ${parts.filter(q => q.ids.every(id => left.has(id))).length} left out` : ''}</p>
-      ${fit ? `<p class="bad">⚠ ${fit} Move the job so it fits on the bed.</p>` : `<p class="ok">✓ Fits on the bed.</p>`}
-      ${overlap() ? `<p class="bad">⚠ This lands on something already cut. Move it into the empty space (or press <b>Next to the last cut</b>).</p>` : ''}`;
+      ${S.warnStep ? `${fit ? `<p class="bad">⚠ ${fit} Move the job so it fits on the bed.</p>` : `<p class="ok">✓ Fits on the bed.</p>`}
+      ${overlap() ? `<p class="bad">⚠ This lands on something already cut. Move it into the empty space (or press <b>Next to the last cut</b>).</p>` : ''}` : ''}`;
     const s3 = stepHtml(3, 'Place it on the bed', true, '', placeBody, 'lwS3');
     const s4 = stepHtml(4, 'Check it', true, '', est ? `
       <p class="lw-big">About <b>${fmtTime(est.total)}</b></p>
@@ -305,6 +307,7 @@ export function openLaser(ed: Editor, saveFile: (name: string, text: string) => 
       <p class="lw-ph">Placing the job</p>${t('showAlign', 'Line-up buttons', 'left, middle, right, back, front')}${t('showTurn', 'Turn buttons', 'quarter turns of the whole job')}
       <p class="lw-ph">The bed</p>${t('showCentre', 'Show the middle of the bed')}${t('snap', 'Grid lock', 'things land on the grid')}<label class="lw-sub">Grid every <input type="text" inputmode="decimal" data-num="snapStep" value="${S.snapStep}"> mm</label>
       ${t('stepLock', 'Step lock', 'drags move in whole steps')}<label class="lw-sub">Step <input type="text" inputmode="decimal" data-num="lockStep" value="${S.lockStep}"> mm</label>
+      <p class="lw-ph">Warnings</p><p class="lw-read small" style="margin:0">Doesn’t fit, or lands on something already cut. Show them:</p>${t('warnStep', 'In step 3')}${t('warnUnder', 'Under the bed')}${t('warnTopRight', 'On the bed, top right')}
       <p class="lw-ph">Help</p>${t('help', 'Explanations under each step')}`;
     $('#lwPrefs').querySelectorAll<HTMLInputElement>('[data-pref]').forEach(i => i.onchange = () => { (S as any)[i.dataset.pref!] = i.checked; save(); renderSteps(); ($('#lwHelp') as HTMLInputElement).checked = S.help; });
     $('#lwPrefs').querySelectorAll<HTMLInputElement>('[data-num]').forEach(i => i.onchange = () => { const v = num(i.value, 0.1, 100); if (v) { (S as any)[i.dataset.num!] = v; save(); renderCorner(); } else i.value = String((S as any)[i.dataset.num!]); });
@@ -456,7 +459,7 @@ export function openLaser(ed: Editor, saveFile: (name: string, text: string) => 
   function fitView() {
     const wrap = canvas.parentElement!, dpr = window.devicePixelRatio || 1, W = wrap.clientWidth, H = wrap.clientHeight;
     canvas.width = Math.max(10, W * dpr); canvas.height = Math.max(10, H * dpr); canvas.style.width = W + 'px'; canvas.style.height = H + 'px';
-    const m = S.machine, padL = 56, padT = 44, padR = 40, padB = 56;
+    const m = S.machine, padL = 56, padT = 44, padR = 40, padB = 76;
     const s = Math.min((W - padL - padR) / m.bedW, (H - padT - padB) / m.bedH);
     fitV = { s, ox: padL + ((W - padL - padR) - m.bedW * s) / 2, oy: padT + ((H - padT - padB) - m.bedH * s) / 2 };
     if (!zoomed) view = { ...fitV };
@@ -485,7 +488,7 @@ export function openLaser(ed: Editor, saveFile: (name: string, text: string) => 
     ctx.fillStyle = col('--muted', '#666'); ctx.font = '11px system-ui, sans-serif'; ctx.textAlign = 'center';
     for (let x = 0; x <= m.bedW + 1e-6; x += G.label) ctx.fillText(String(x), a.x + x * s, a.y - band - 4);
     ctx.textAlign = 'right'; for (let y = 0; y <= m.bedH + 1e-6; y += G.label) ctx.fillText(String(y), a.x - band - 4, a.y + y * s + 4);
-    ctx.textAlign = 'left'; ctx.fillText(`${m.bedW} × ${m.bedH} mm · grid ${G.minor} mm`, a.x, a.y + bh + 38);
+    ctx.textAlign = 'left'; ctx.font = '11px system-ui, sans-serif'; ctx.fillText(`${m.bedW} × ${m.bedH} mm · grid ${G.minor} mm`, a.x, a.y + bh + 22);
     ctx.textAlign = 'center'; ctx.font = '600 11px system-ui, sans-serif';
     if (backAtFront) { ctx.fillText('FRONT · you stand here', a.x + bw / 2, a.y - band - 18); ctx.fillText('BACK', a.x + bw / 2, a.y + bh + 26); }
     else { ctx.fillText('BACK', a.x + bw / 2, a.y - band - 18); ctx.fillText('FRONT · you stand here', a.x + bw / 2, a.y + bh + 22); }
@@ -559,6 +562,11 @@ export function openLaser(ed: Editor, saveFile: (name: string, text: string) => 
     if (xf && xfLabel) { const c = toScr(pb ? xf(P(pb.x1, pb.y0)) : P(0, 0)); ctx.font = '600 11.5px system-ui, sans-serif'; ctx.textAlign = 'left'; ctx.fillStyle = col('--accent', '#0d6b5e'); ctx.fillText(xfLabel, c.x + 10, c.y - 8); }
     if (boxSel) { const u = toScr(boxSel.a), v = toScr(boxSel.b); ctx.setLineDash([4, 3]); ctx.strokeStyle = '#2b5f8a'; ctx.fillStyle = 'rgba(43,95,138,.08)'; ctx.fillRect(Math.min(u.x, v.x), Math.min(u.y, v.y), Math.abs(v.x - u.x), Math.abs(v.y - u.y)); ctx.strokeRect(Math.min(u.x, v.x), Math.min(u.y, v.y), Math.abs(v.x - u.x), Math.abs(v.y - u.y)); ctx.setLineDash([]); }
     if (frameAnim != null) drawFrameAnim(frameAnim);
+    // warnings: under the bed (below FRONT) and/or on the bed at the top right
+    const ws = warnings();
+    if (S.warnUnder && ws.length) { ctx.font = '600 12.5px system-ui, sans-serif'; ctx.textAlign = 'left'; ctx.fillStyle = '#c62828'; ws.forEach((w, i) => ctx.fillText('⚠ ' + w, a.x, a.y + bh + 42 + i * 17)); }
+    const wb = $('#lwWarn'); wb.hidden = !(S.warnTopRight && ws.length);
+    if (!wb.hidden) { wb.innerHTML = ws.map(w => `<div>⚠ ${esc(w)}</div>`).join(''); const W = canvas.clientWidth; wb.style.top = `${Math.max(6, a.y + 8)}px`; wb.style.right = `${Math.max(6, W - (a.x + bw) + 8)}px`; }
   }
   /** while setting up: a sample job in the middle, and (when playing) the head going from its corner round it */
   function drawSetup() {
@@ -664,7 +672,12 @@ export function openLaser(ed: Editor, saveFile: (name: string, text: string) => 
     xfLabel = `${r1(w * fx)} × ${r1(hh * fy)} mm`; return scaleAbout(P(ox, oy), fx, fy);
   }
   canvas.addEventListener('wheel', ev => { ev.preventDefault(); const r = canvas.getBoundingClientRect(); zoomAt(ev.clientX - r.left, ev.clientY - r.top, ev.deltaY < 0 ? 1.15 : 1 / 1.15); }, { passive: false });
-  canvas.addEventListener('dblclick', ev => { if (!pickedParts().length && !partAt(bedPt(ev as any))) { zoomed = false; draw(); renderCorner(); } });
+  canvas.addEventListener('dblclick', ev => {
+    const p = bedPt(ev as any); if (partAt(p) || inJob(p) || !S.machine.setUp) return;
+    // "start where the laser is": double-click empty bed to send the laser there; otherwise double-click shows the whole bed
+    if (S.placeMode === 'head') { if (S.lockLaser) { msg('The laser is locked. Switch off the lock to move it.', true); return; } S.head = onBed(P(snapV(p.x), snapV(p.y))); save(); rebuild(); return; }
+    zoomed = false; draw(); renderCorner();
+  });
   let pan: { x: number; y: number; ox: number; oy: number } | null = null, spaceDown = false;
   canvas.addEventListener('pointerdown', ev => {
     // pan: middle button, or hold the space bar and drag
@@ -686,10 +699,11 @@ export function openLaser(ed: Editor, saveFile: (name: string, text: string) => 
         // all of it picked (or just one part): drag the whole job; otherwise drag the picked parts
         drag = allPicked() || parts.length === 1 ? jobDrag() : { kind: 'parts', from: p, at0: P(0, 0) };
       } else if (inJob(p)) { if (sel.size) { sel.clear(); renderSteps(); } drag = jobDrag(); }
-      else if (S.placeMode === 'head') {   // click anywhere on the bed to send the laser there, then drag it
+      else if (S.placeMode === 'head' && Math.hypot(p.x - S.head.x, p.y - S.head.y) * view.s < 14) {   // grab the red cross
         if (S.lockLaser) { msg('The laser is locked. Switch off the lock to move it.', true); return; }
-        S.head = onBed(P(snapV(p.x), snapV(p.y))); drag = { kind: 'laser', from: S.head, at0: S.head }; draw();
+        drag = { kind: 'laser', from: p, at0: S.head };
       }
+      // a click on empty bed only clears the pick and may start a box (so clicking away after a drag never moves anything)
       else { if (sel.size) { sel.clear(); renderSteps(); } drag = { kind: 'box', from: p, at0: p }; boxSel = { a: p, b: p }; }
     }
     if (drag) { canvas.setPointerCapture(ev.pointerId); stopPlay(); tPlay = 0; }

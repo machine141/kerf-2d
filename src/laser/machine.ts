@@ -51,6 +51,8 @@ export interface LaserState {
   showAlign: boolean; showTurn: boolean;
   /** step lock: drags move in whole steps from where they started */
   stepLock: boolean; lockStep: number;
+  /** where warnings (doesn't fit, lands on something already cut) are shown: in step 3, under the bed, on the bed at the top right */
+  warnStep: boolean; warnUnder: boolean; warnTopRight: boolean;
   /** quick changes: how much one scroll or arrow changes a size or angle by; keep the shape when resizing */
   spinStep: number; keepShape: boolean;
 }
@@ -96,6 +98,7 @@ export const defaultState = (): LaserState => ({
   snap: true, snapStep: 5, showCentre: true, lockJob: false, lockLaser: false,
   jogStep: 10, jogStepBase: 10, jogSpeed: 50, jogSpeedBase: 10, spinStep: 1, keepShape: true,
   showAlign: false, showTurn: false, stepLock: false, lockStep: 1,
+  warnStep: true, warnUnder: true, warnTopRight: false,
 });
 
 /** Grid spacing for a bed drawn at `s` pixels per mm: fine lines at least ~7 px apart, labels at least ~45 px apart. */
