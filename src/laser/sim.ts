@@ -71,7 +71,9 @@ export function simulate(ps: LPath[], B: (p: Point) => Point, set: JobSettings |
   let bx0 = Infinity, by0 = Infinity, bx1 = -Infinity, by1 = -Infinity; const grow = (p: Point) => { bx0 = Math.min(bx0, p.x); by0 = Math.min(by0, p.y); bx1 = Math.max(bx1, p.x); by1 = Math.max(by1, p.y); };
   const travel = (to: Point) => { const d = dist(head, to); if (d < 1e-6) return; const dur = runTime(d, m.rapid, m.accel); steps.push({ k: 'travel', pts: [head, to], t0: t, dur, len: d }); t += dur; travelLen += d; travelTime += dur; head = to; };
   for (const p of ps) {
-    const s = setOf(p); if (!s || !s.on) continue;
+    const s0 = setOf(p); if (!s0 || !s0.on) continue;
+    // a pass written out on its own (start somewhere different each pass) is done once
+    const s = p.onePass ? { ...s0, passes: 1 } : s0;
     if (p.kind === 'area') {
       const rings = p.rings.map(r => sampleSegs(r, 0.05).map(B)), step = Math.max(0.02, s.interval ?? 0.1), rows = scanRows(rings, step);
       if (!rows.length) continue; rings.flat().forEach(grow);

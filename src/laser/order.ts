@@ -29,6 +29,8 @@ export interface LPath {
   loop?: Loop;
   /** source object ids (for showing / testing) */
   ids: string[];
+  /** cutting extras (extras.ts): the test piece; one pass of several, written out separately; a piece of an outline with tabs */
+  test?: boolean; onePass?: boolean; tabbed?: boolean;
   /** points along the path (0.02 mm chords), for containment and checks */
   pts: Point[];
   box: { x0: number; y0: number; x1: number; y1: number };
@@ -40,6 +42,8 @@ export interface OrderOptions {
   /** where the laser head starts (default: top-left corner of the sheet) */
   start?: Point;
   joinTol?: number;
+  /** a last change to the ordered paths (cutting extras: test piece, tabs, passes) */
+  finish?: (paths: LPath[]) => LPath[];
 }
 export interface OrderResult {
   paths: LPath[];
@@ -228,7 +232,7 @@ export function cutOrder(doc: Doc, o: OrderOptions = {}): OrderResult {
   // doubles first, so a line drawn twice isn't joined to itself as a there-and-back path
   const { paths: once, removed } = removeDoubles(drawn);
   const j = joinPaths(once, o.joinTol ?? 0.05);
-  const paths = orderPaths(j.paths, start), chk = insideAfterCount(paths);
+  const ordered = orderPaths(j.paths, start), chk = insideAfterCount(ordered), paths = o.finish ? o.finish(ordered) : ordered;
   return {
     paths, drawn, travel: travelOf(paths, start), travelDrawn: travelOf(drawn, start),
     joined: { from: j.from, to: j.to },

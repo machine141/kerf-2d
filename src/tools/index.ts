@@ -14,4 +14,22 @@ import { hingeBrushTool } from './hingebrush';
 import { smoothTool } from './smooth';
 import { bucketTool } from './bucket';
 
-export const ALL_TOOLS: Tool[] = [selectTool, lineTool, rectTool, polygonTool, circleTool, arcTool, splineTool, spiralTool, textTool, dimTool, offsetTool, filletTool, trimTool, ringTool, hingeBrushTool, bucketTool, eraserTool, smoothTool, moveTool, rotateTool, mirrorTool, arrayTool];
+/**
+ * The toolbox, top to bottom, in groups (a thin line between groups), laid out like most drawing and CAD
+ * programs (Illustrator, Inkscape, Onshape and Fusion 360 sketches, 2D Design): select first, then the shapes
+ * you draw most, then arranging (move, rotate, mirror, repeat), then changing shapes, then the extras.
+ * In the two-column toolbox each row is a pair that belongs together.
+ */
+const LAYOUT: Tool[][] = [
+  [selectTool],
+  // draw: line & rectangle, circle & arc, polygon & curve, text & spiral
+  [lineTool, rectTool, circleTool, arcTool, polygonTool, splineTool, textTool, spiralTool],
+  // arrange: move & rotate, mirror & repeat
+  [moveTool, rotateTool, mirrorTool, arrayTool],
+  // change shapes: trim & erase, fillet & offset, smooth
+  [trimTool, eraserTool, filletTool, offsetTool, smoothTool],
+  // extras: fill & dimension, key ring & hinge brush
+  [bucketTool, dimTool, ringTool, hingeBrushTool],
+];
+LAYOUT.forEach((g, i) => g.forEach(t => { t.group = i; }));
+export const ALL_TOOLS: Tool[] = LAYOUT.flat();

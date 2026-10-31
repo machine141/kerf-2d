@@ -57,6 +57,8 @@ export interface LaserState {
   spinStep: number; keepShape: boolean;
   /** the last job file applied (its time stamp), so opening the Laser screen again keeps the technician's own changes */
   jobAt?: string;
+  /** cutting extras (step 2): a test piece cut first, start somewhere different each pass, tabs (how many per part, how wide) */
+  testPiece: boolean; spreadStarts: boolean; tabs: boolean; tabN: number; tabW: number;
   /** the material test last set up (Material test screen) */
   test?: import('./mattest').TestSpec;
 }
@@ -103,6 +105,7 @@ export const defaultState = (): LaserState => ({
   jogStep: 10, jogStepBase: 10, jogSpeed: 50, jogSpeedBase: 10, spinStep: 1, keepShape: true,
   showAlign: false, showTurn: false, stepLock: false, lockStep: 1,
   warnStep: true, warnUnder: true, warnTopRight: false,
+  testPiece: false, spreadStarts: false, tabs: false, tabN: 2, tabW: 0.6,
 });
 
 /** Grid spacing for a bed drawn at `s` pixels per mm: fine lines at least ~7 px apart, labels at least ~45 px apart. */

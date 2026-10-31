@@ -20,7 +20,8 @@ import { affEnt, type Affine } from '../geometry/affine';
 import type { Entity, Shape } from '../model/types';
 import { matchMaterial, jobLabel, thicknessIn } from '../laser/jobinfo';
 import { DEFAULT_TEST, MODE_TEXT, fitGrid, steps, testCells, testSize, testSVG, testList, testTime, cellPts, type TestSpec, type TestMode } from '../laser/mattest';
-import { LB_PALETTE } from '../laser/palette';
+import { LB_PALETTE, lbName, type LaserKey } from '../laser/palette';
+import { applyExtras } from '../laser/extras';
 
 const PH_LABEL: Record<Phase, string> = { engrave: 'Engrave area', score: 'Engrave line', cut: 'Cut' };
 const esc = (s: string) => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' } as any)[c]);
@@ -122,12 +123,28 @@ export function openLaser(ed: Editor, saveFile: (name: string, text: string) => 
   /** what will actually be cut, on the bed (after quick changes and leaving parts out) */
   const jobBox = (): Box => { const a = jobAt(); return { x0: a.x + cbOff.dx, y0: a.y + cbOff.dy, x1: a.x + cbOff.dx + cbOff.w, y1: a.y + cbOff.dy + cbOff.h }; };
   const jobW = () => cbOff.w, jobH = () => cbOff.h;
+  /**
+   * The cutting extras chosen in step 2, applied after the cut order. The test piece goes 5 mm to the right of the job
+   * (or to the left, or in front, if there isn't room on the bed), with the colour of the job's last cut (its outlines).
+   */
+  const finisher = () => (ps: LPath[]): LPath[] => {
+    const cuts = ps.filter(p => p.phase === 'cut' && setFor(String(p.key), p.phase).on);
+    let test: { at: Point; key: LaserKey } | null = null;
+    if (S.testPiece && cuts.length) {
+      const b = boxOf(ps.flatMap(p => [P(p.box.x0, p.box.y0), P(p.box.x1, p.box.y1)])), pl = placement(box, jobAt()), T = 10, g = 5;
+      const right = pl.toBed(P(b.x1 + g + T, b.y1)).x <= S.machine.bedW, leftOk = pl.toBed(P(b.x0 - g - T, b.y1)).x >= 0;
+      test = { key: cuts[cuts.length - 1].key, at: right ? P(b.x1 + g, b.y1) : leftOk ? P(b.x0 - g - T, b.y1) : P(b.x0, b.y0 - g) };
+    }
+    return applyExtras(ps, { passesOf: p => setFor(String(p.key), p.phase).passes, spreadStarts: S.spreadStarts, tabs: S.tabs ? { n: S.tabN, w: S.tabW } : null, test });
+  };
+  /** layers whose passes are written out one by one (so LightBurn's Passes must be 1) */
+  const onePassLayers = () => [...new Set(paths.filter(p => p.onePass).map(p => lbName(p.key)))];
   const cutDoc = (): Doc => left.size ? { ...doc, ents: doc.ents.filter(e => !left.has(e.id)) } : doc;
   function rebuild() {
     S.head = onBed(S.head);
     const pl = placement(box, jobAt());
     // order again from where the head really starts, then simulate
-    const st = pl.toDoc(startPt()); paths = cutOrder(cutDoc(), { start: st }).paths;
+    const st = pl.toDoc(startPt()); paths = cutOrder(cutDoc(), { start: st, finish: finisher() }).paths;
     sim = simulate(paths, pl.toBed, p => setFor(String(p.key), p.phase), startPt(), DEFAULT_MOTION);
     // the parts you can pick on the bed (a part = an outline with its holes and engraving; copies and duplicates are separate)
     const lasered = new Set(laserPaths(doc).flatMap(p => p.ids)), byKey = new Map<string, Entity[]>();
@@ -200,6 +217,17 @@ export function openLaser(ed: Editor, saveFile: (name: string, text: string) => 
     return `<section class="lw-step${open ? ' open' : ''}" id="${id}"><div class="lw-sh"><span class="lw-n">${n}</span><b>${title}</b>${!open && summary ? `<span class="lw-sum">${summary}</span>` : ''}</div>${open ? `<div class="lw-sb">${body}</div>` : ''}</section>`;
   }
   const help = (t: string) => S.help ? `<p class="lw-help">${t}</p>` : '';
+  let extrasOpen = false;
+  /** step 2: the cutting extras, folded away under one line so a first-time user sees a simple step */
+  const extrasHtml = () => {
+    const nOn = [S.testPiece, S.spreadStarts, S.tabs].filter(Boolean).length, many = colours().some(([k, ph]) => setFor(k, ph).passes > 1);
+    return `<details class="lw-extras" id="lwExtras" ${extrasOpen ? 'open' : ''}><summary>Cutting extras${nOn ? ` <span class="lw-pill">${nOn} on</span>` : ''}</summary>
+      <label class="tog"><input type="checkbox" role="switch" id="lwXTest" ${S.testPiece ? 'checked' : ''}> <span><b>Test piece first</b><small>A 10 mm square with a hole, cut beside the job before anything else, with the same settings. If it doesn't drop out cleanly, stop the job.</small></span></label>
+      <label class="tog"><input type="checkbox" role="switch" id="lwXSpread" ${S.spreadStarts ? 'checked' : ''}> <span><b>Start somewhere different each pass</b><small>${many ? 'Each pass starts at another corner, so the heat and the start mark aren\'t all in one place.' : 'Only matters when a colour has 2 or more passes.'}</small></span></label>
+      <label class="tog"><input type="checkbox" role="switch" id="lwXTabs" ${S.tabs ? 'checked' : ''}> <span><b>Tabs</b><small>Small uncut bridges hold each part in the sheet (not on holes). Snap or cut them out after.</small></span></label>
+      ${S.tabs ? `<div class="lw-row small lw-tabset"><label>Per part <input type="text" inputmode="numeric" id="lwTabN" value="${S.tabN}" style="width:34px"></label><label>Width <input type="text" inputmode="decimal" id="lwTabW" value="${S.tabW}" style="width:40px"> mm</label></div>` : ''}
+    </details>`;
+  };
   function renderSteps() {
     const m = S.machine, has = present(), fit = fitsBed(m, jobBox()), est = sim;
     $('#lwSheet').innerHTML = nS > 1 ? `Sheet <span class="segc" id="lwSh">${Array.from({ length: nS }, (_, i) => `<button type="button" data-v="${i}" aria-pressed="${i === sheet}">${i + 1}</button>`).join('')}</span>` : esc(ed.doc.name || '');
@@ -239,6 +267,7 @@ export function openLaser(ed: Editor, saveFile: (name: string, text: string) => 
       ${addingMat ? `<div class="lw-row"><input type="text" id="lwMatName" placeholder="Name, e.g. birch ply" value="${esc(matPre.name || (job ? job.material : ''))}" style="width:150px"><label class="small">Thickness <input type="text" id="lwMatTh" inputmode="decimal" value="${matPre.th || job?.thickness || ''}" placeholder="3" style="width:42px"> mm</label><button type="button" class="btn primary" id="lwMatSave">Save</button><button type="button" class="lw-link" id="lwMatCancel">Cancel</button></div>` : ''}
       ${mine ? `<div class="lw-row small"><label>Thickness <input type="text" id="lwMyTh" inputmode="decimal" value="${mine.thickness || thicknessIn(mine.name) || ''}" placeholder="?" style="width:42px"> mm</label>${matDirty ? `<button type="button" class="lw-link" id="lwMatUpd">Save changes to “${esc(mine.name)}”</button>` : ''}<button type="button" class="lw-link" id="lwMatDel">Delete “${esc(mine.name)}”</button></div>` : ''}
       ${rows ? `<table class="lw-lay"><thead><tr><th></th><th>Speed<small>mm/s</small></th><th>Power<small>%</small></th><th>Passes</th><th>Air</th><th>On</th></tr></thead><tbody>${rows}</tbody></table>` : '<p class="bad">Nothing on this sheet is set to cut or engrave.</p>'}
+      ${extrasHtml()}
       ${help('One row per colour in your drawing, done top to bottom. <b>Speed</b>: how fast the head moves (slower cuts deeper). <b>Power</b>: how strong the laser is. <b>Passes</b>: how many times it goes round. <b>Air</b>: blows away smoke and flames. <b>On</b>: switch a colour off to skip it. Got settings that work? <b>+ Add material</b> keeps them for next time. The examples are only a starting point: always test on a scrap first.')}`, 'lwS2');
     const placeBody = `
       <div class="lw-cards" role="radiogroup">
@@ -289,6 +318,9 @@ export function openLaser(ed: Editor, saveFile: (name: string, text: string) => 
       ${help('<b>Preview</b> plays the job in the order the laser will follow (holes before outlines; red dashes are moves with the laser off). <b>Show the frame</b> draws the box the laser will trace around the job (without firing). The time is an estimate; it gets closer once we read your laser’s own settings.')}` : '', 'lwS4');
     const s5 = stepHtml(5, 'Send', true, '', `
       <div class="lw-row wrap"><button type="button" class="btn primary" id="lwSave">Save file for LightBurn</button><button type="button" class="btn" disabled>Send to the laser</button></div>
+      ${S.testPiece && paths.some(p => p.test) ? `<p class="lw-note">✓ The <b>test piece</b> is cut first. Watch it: if it doesn't drop out cleanly, stop the laser, change the settings and start again.</p>` : ''}
+      ${onePassLayers().length ? `<p class="lw-note">⚠ Each pass is written into the file separately. In LightBurn set <b>Passes to 1</b> for layer${onePassLayers().length > 1 ? 's' : ''} <b>${onePassLayers().join(', ')}</b>, or it will cut them too many times.</p>` : ''}
+      ${S.tabs && paths.some(p => p.tabbed) ? `<p class="lw-note">The parts have <b>tabs</b>: they stay in the sheet until you snap them out.</p>` : ''}
       <button type="button" class="btn" id="lwCutDone" title="Leave a grey shadow of this job on the bed, so the next one goes in the space that's left">✓ Mark this job as cut</button>
       ${help('For now, save the file and open it in LightBurn (<b>File → Import</b>; in Optimization Settings switch optimisation off to keep this order). Sending straight to the laser comes when we connect Kerf to it, with a check before anything moves.')}`, 'lwS5');
     $('#lwSteps').innerHTML = s1 + s2 + s3 + s4 + s5;
@@ -361,6 +393,11 @@ export function openLaser(ed: Editor, saveFile: (name: string, text: string) => 
       useMaterial(v); save(); rebuild();
     });
     on('lwTest', 'click', () => openTest());
+    on('lwExtras', 'toggle', e => { extrasOpen = (e.target as HTMLDetailsElement).open; });
+    const xt = (id: string, f: (v: boolean) => void) => on(id, 'change', e => { f((e.target as HTMLInputElement).checked); save(); rebuild(); });
+    xt('lwXTest', v => S.testPiece = v); xt('lwXSpread', v => S.spreadStarts = v); xt('lwXTabs', v => S.tabs = v);
+    on('lwTabN', 'change', e => { const v = num((e.target as HTMLInputElement).value, 1, 12); if (v) S.tabN = Math.round(v); save(); rebuild(); });
+    on('lwTabW', 'change', e => { const v = num((e.target as HTMLInputElement).value, 0.1, 5); if (v) S.tabW = v; save(); rebuild(); });
     on('lwAddMat', 'click', () => { addingMat = true; renderSteps(); root.querySelector<HTMLInputElement>('#lwMatName')?.focus(); });
     on('lwMatCancel', 'click', () => { addingMat = false; matPre = { name: '', th: 0 }; renderSteps(); });
     const snapshot = () => { const colors: Record<string, PhaseSet> = structuredClone(S.colors); for (const [k, ph] of colours()) colors[k] = structuredClone(setFor(k, ph)); return colors; };
@@ -454,7 +491,7 @@ export function openLaser(ed: Editor, saveFile: (name: string, text: string) => 
     on('lwCutDone', 'click', () => markCut());
     on('lwPrev', 'click', () => { if (sim && tPlay >= sim.total) tPlay = 0; play(true); });
     on('lwFrameScr', 'click', () => showFrame());
-    on('lwSave', 'click', () => { const x = exportLaserSVG(doc, { start: placement(box, jobAt()).toDoc(startPt()) }); saveFile((ed.doc.name || 'drawing').replace(/[^\w\- ]+/g, '').trim().replace(/\s+/g, '-') + (nS > 1 ? `-sheet${sheet + 1}` : '') + '-laser.svg', x.svg); });
+    on('lwSave', 'click', () => { const x = exportLaserSVG(cutDoc(), { start: placement(box, jobAt()).toDoc(startPt()), finish: finisher() }); saveFile((ed.doc.name || 'drawing').replace(/[^\w\- ]+/g, '').trim().replace(/\s+/g, '-') + (nS > 1 ? `-sheet${sheet + 1}` : '') + '-laser.svg', x.svg); });
   }
   function markCut() {
     const ps = jobParts().map(q => thin(q, 0.5)); if (!ps.length || !sim) return;
