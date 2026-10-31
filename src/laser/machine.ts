@@ -44,8 +44,13 @@ export interface LaserState {
   snap: boolean; snapStep: number; showCentre: boolean;
   /** locks: stop the job or the laser being moved by accident */
   lockJob: boolean; lockLaser: boolean;
-  /** moving the laser with the arrows: how far each press goes, and how fast (used once Kerf is connected) */
-  jogStep: number; jogSpeed: 'slow' | 'medium' | 'fast';
+  /** moving the laser with the arrows: how far each press goes (mm) and how fast it moves while held (mm/s);
+   *  the "base" is the number last typed: the mouse wheel goes up and down in steps of it (10 → 20, 30…) */
+  jogStep: number; jogStepBase: number; jogSpeed: number; jogSpeedBase: number;
+  /** settings (the ⚙ menu): optional tools are off at first, so a first-time user sees a simple screen */
+  showAlign: boolean; showTurn: boolean;
+  /** step lock: drags move in whole steps from where they started */
+  stepLock: boolean; lockStep: number;
   /** quick changes: how much one scroll or arrow changes a size or angle by; keep the shape when resizing */
   spinStep: number; keepShape: boolean;
 }
@@ -89,7 +94,8 @@ export const defaultState = (): LaserState => ({
   placeMode: 'bed', at: P(10, 10), head: P(300, 200), anchor: 'top-left',
   turns: 0, copies: 1, gap: 5, traces: [], showTraces: true, help: true,
   snap: true, snapStep: 5, showCentre: true, lockJob: false, lockLaser: false,
-  jogStep: 10, jogSpeed: 'medium', spinStep: 1, keepShape: true,
+  jogStep: 10, jogStepBase: 10, jogSpeed: 50, jogSpeedBase: 10, spinStep: 1, keepShape: true,
+  showAlign: false, showTurn: false, stepLock: false, lockStep: 1,
 });
 
 /** Grid spacing for a bed drawn at `s` pixels per mm: fine lines at least ~7 px apart, labels at least ~45 px apart. */
@@ -108,6 +114,7 @@ export function loadState(): LaserState {
     const raw = localStorage.getItem(KEY); if (!raw) return d;
     const s = JSON.parse(raw);
     const phase = { engrave: { ...d.phase.engrave, ...s.phase?.engrave }, score: { ...d.phase.score, ...s.phase?.score }, cut: { ...d.phase.cut, ...s.phase?.cut } };
+    if (typeof s.jogSpeed !== 'number') delete s.jogSpeed;      // older versions saved 'slow' / 'medium' / 'fast'
     return { ...d, ...s, machine: { ...d.machine, ...s.machine }, phase, colors: s.colors || {}, myMaterials: Array.isArray(s.myMaterials) ? s.myMaterials : [], traces: Array.isArray(s.traces) ? s.traces : [] };
   } catch { return d; }
 }

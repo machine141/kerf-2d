@@ -54,6 +54,7 @@ export function openLaser(ed: Editor, saveFile: (name: string, text: string) => 
       <strong>Laser</strong>
       <span class="lw-sheet" id="lwSheet"></span>
       <label class="tog" title="Short explanations under each step"><input type="checkbox" role="switch" id="lwHelp" ${S.help ? 'checked' : ''}> Help</label>
+      <div class="lw-cogwrap"><button type="button" class="lw-cog" id="lwCog" title="Settings: turn extra tools on and off" aria-label="Settings" aria-haspopup="true" aria-expanded="false">⚙</button><div class="lw-prefs" id="lwPrefs" hidden></div></div>
       <button class="btn" id="lwClose">Back to drawing</button>
     </div>
     <div class="lw-body">
@@ -62,7 +63,7 @@ export function openLaser(ed: Editor, saveFile: (name: string, text: string) => 
         <div class="lw-bedwrap"><canvas id="lwBed" aria-label="The laser bed, as you stand at the front"></canvas>
           <button type="button" class="lw-arrow" id="lwArrFB" title="Flip front ↕ back" aria-label="Flip front and back" hidden>⇅</button>
           <button type="button" class="lw-arrow" id="lwArrLR" title="Flip left ↔ right" aria-label="Flip left and right" hidden>⇆</button>
-          <div class="lw-tools" id="lwTools" role="toolbar" aria-label="Bed tools"></div></div>
+          <div class="lw-corner" id="lwCorner"></div></div>
         <div class="lw-player">
           <button class="btn primary" id="lwPlay" title="Play the job: watch the order the laser will follow">▶ Play</button>
           <input type="range" id="lwScrub" min="0" max="1000" value="0" aria-label="Where in the job">
@@ -181,7 +182,7 @@ export function openLaser(ed: Editor, saveFile: (name: string, text: string) => 
   function renderSteps() {
     const m = S.machine, has = present(), fit = fitsBed(m, jobBox()), est = sim;
     $('#lwSheet').innerHTML = nS > 1 ? `Sheet <span class="segc" id="lwSh">${Array.from({ length: nS }, (_, i) => `<button type="button" data-v="${i}" aria-pressed="${i === sheet}">${i + 1}</button>`).join('')}</span>` : esc(ed.doc.name || '');
-    const s1 = stepHtml(1, 'Your laser', !m.setUp, `✓ ${esc(m.name)} · ${m.bedW} × ${m.bedH} mm <button type="button" class="lw-link" id="lwChange">Change</button>`, `
+    const s1 = stepHtml(1, 'Laser settings', !m.setUp, `✓ ${esc(m.name)} · ${m.bedW} × ${m.bedH} mm <button type="button" class="lw-link" id="lwChange">Change</button>`, `
       ${help('Do this once. Stand at the <b>front</b> of the laser. The big picture is the bed: the pink bands are the <b>back</b> and the <b>sides</b>; you stand at the open edge.')}
       <div class="lw-grid"><label for="lwPreset">Laser</label><span class="lw-in"><select id="lwPreset">${BED_PRESETS.map((b, i) => `<option value="${i}" ${b.w === m.bedW && b.h === m.bedH ? 'selected' : ''}>${b.name} (${b.w} × ${b.h})</option>`).join('')}<option value="other" ${BED_PRESETS.some(b => b.w === m.bedW && b.h === m.bedH) ? '' : 'selected'}>Another size…</option></select></span>
         <label for="lwName">Name</label><span class="lw-in"><input type="text" id="lwName" value="${esc(m.name)}"></span>
@@ -222,35 +223,34 @@ export function openLaser(ed: Editor, saveFile: (name: string, text: string) => 
       ${S.placeMode === 'bed' ? `
         <div class="lw-grid"><label for="lwX">From the left</label><span class="lw-in">${spin('lwX', jobBox().x0)} mm</span>
           <label for="lwY">From the back</label><span class="lw-in">${spin('lwY', jobBox().y0)} mm</span>
-          <span class="lw-lab">Line up</span><span class="lw-in"><span class="segc icons" role="group" aria-label="Line up across the bed">${['left', 'centre', 'right'].map(k => `<button type="button" data-al="${k}" title="Line up with the ${k === 'centre' ? 'middle' : k + '-hand side'} of the bed"><svg viewBox="0 0 20 20">${ALIGN_ICON[k]}</svg></button>`).join('')}</span>
-            <span class="segc icons" role="group" aria-label="Line up front to back">${['back', 'middle', 'front'].map(k => `<button type="button" data-al="${k}" title="Line up with the ${k} of the bed"><svg viewBox="0 0 20 20">${ALIGN_ICON[k]}</svg></button>`).join('')}</span></span>
+          ${S.showAlign ? `<span class="lw-lab">Line up</span><span class="lw-in"><span class="segc icons" role="group" aria-label="Line up across the bed">${['left', 'centre', 'right'].map(k => `<button type="button" data-al="${k}" title="Line up with the ${k === 'centre' ? 'middle' : k + '-hand side'} of the bed"><svg viewBox="0 0 20 20">${ALIGN_ICON[k]}</svg></button>`).join('')}</span>
+            <span class="segc icons" role="group" aria-label="Line up front to back">${['back', 'middle', 'front'].map(k => `<button type="button" data-al="${k}" title="Line up with the ${k} of the bed"><svg viewBox="0 0 20 20">${ALIGN_ICON[k]}</svg></button>`).join('')}</span></span>` : ''}
           <span class="lw-lab">Lock</span><span class="lw-in"><label class="tog"><input type="checkbox" role="switch" id="lwLockJob" ${S.lockJob ? 'checked' : ''}> Stop the job being dragged</label></span></div>` : `
         <p class="lw-read small">Move the laser three ways: the <b>arrows</b>, the <b>numbers</b>, or <b>drag</b> the red cross on the bed (or click where it should go).</p>
         <div class="lw-move">
           <div class="lw-jog" role="group" aria-label="Move the laser">
-            <span></span><button type="button" class="btn" data-jog="0,-1" title="Towards the back">▲</button><span></span>
-            <button type="button" class="btn" data-jog="-1,0" title="Left">◀</button><button type="button" class="btn lw-jogc" data-jog="mid" title="Middle of the bed">⊕</button><button type="button" class="btn" data-jog="1,0" title="Right">▶</button>
-            <span></span><button type="button" class="btn" data-jog="0,1" title="Towards the front">▼</button><span></span>
+            <span></span><button type="button" class="btn" data-jog="0,-1" title="Towards the back (hold to keep moving)">▲</button><span></span>
+            <button type="button" class="btn" data-jog="-1,0" title="Left (hold to keep moving)">◀</button><button type="button" class="btn lw-jogc" data-jog="mid" title="Middle of the bed">⊕</button><button type="button" class="btn" data-jog="1,0" title="Right (hold to keep moving)">▶</button>
+            <span></span><button type="button" class="btn" data-jog="0,1" title="Towards the front (hold to keep moving)">▼</button><span></span>
           </div>
-          <div class="lw-grid">
-            <span class="lw-lab">Each press</span><span class="lw-in"><span class="segc" id="lwJogStep">${[1, 10, 50].map(v => `<button type="button" data-v="${v}" aria-pressed="${S.jogStep === v}">${v} mm</button>`).join('')}</span></span>
-            <span class="lw-lab">Speed</span><span class="lw-in"><span class="segc" id="lwJogSpeed">${(['slow', 'medium', 'fast'] as const).map(v => `<button type="button" data-v="${v}" aria-pressed="${S.jogSpeed === v}">${v}</button>`).join('')}</span></span>
+          <div class="lw-grid lw-jogset">
+            <label for="lwJogStepIn">Each press</label><span class="lw-in">${spin('lwJogStepIn', S.jogStep, S.jogStepBase)} mm</span>
+            <label for="lwJogSpeedIn">Speed</label><span class="lw-in">${spin('lwJogSpeedIn', S.jogSpeed, S.jogSpeedBase)} mm/s</span>
           </div>
         </div>
         <div class="lw-grid"><label for="lwHX">Laser from the left</label><span class="lw-in">${spin('lwHX', S.head.x)} mm</span>
           <label for="lwHY">Laser from the back</label><span class="lw-in">${spin('lwHY', S.head.y)} mm</span>
           <span class="lw-lab">Laser is at the job’s</span><span class="lw-in"><span class="segc" id="lwAnchor"><button type="button" data-v="top-left" aria-pressed="${S.anchor === 'top-left'}">top-left corner</button><button type="button" data-v="centre" aria-pressed="${S.anchor === 'centre'}">middle</button></span></span>
           <span class="lw-lab">Lock</span><span class="lw-in"><label class="tog"><input type="checkbox" role="switch" id="lwLockLaser" ${S.lockLaser ? 'checked' : ''}> Stop the laser being moved</label></span></div>
-        ${help('Until Kerf is connected to the laser, this moves the laser on the picture only; the speed is used once it’s connected. The job moves with the laser, so what you see is what Frame will trace.')}`}
-      <div class="lw-grid"><span class="lw-lab">Grid</span><span class="lw-in"><label class="tog"><input type="checkbox" role="switch" id="lwSnap" ${S.snap ? 'checked' : ''}> Snap every</label><input type="text" inputmode="decimal" id="lwSnapStep" value="${S.snapStep}" style="width:48px"> mm</span>
-        <span class="lw-lab">Turn</span><span class="lw-in"><button type="button" class="btn sm" id="lwTurnL" title="Turn a quarter turn anticlockwise">⟲</button><button type="button" class="btn sm" id="lwTurnR" title="Turn a quarter turn clockwise">⟳</button></span>
+        ${help('<b>Click</b> an arrow to move one step; <b>hold</b> it to keep moving at the speed. Type how far each press goes and how fast; the mouse wheel in a box goes up in steps of what you typed (10 → 20, 30…). Until Kerf is connected to the laser this moves the laser on the picture only. The job moves with the laser, so what you see is what Frame will trace.')}`}
+      <div class="lw-grid">${S.showTurn ? `<span class="lw-lab">Turn</span><span class="lw-in"><button type="button" class="btn sm" id="lwTurnL" title="Turn a quarter turn anticlockwise">⟲</button><button type="button" class="btn sm" id="lwTurnR" title="Turn a quarter turn clockwise">⟳</button></span>` : ''}
         <label for="lwCopies">Copies</label><span class="lw-in">${spin('lwCopies', S.copies, 1)}${S.copies > 1 ? `<label class="lw-sub">gap ${spin('lwGap', S.gap)} mm</label>` : ''}</span></div>
       ${quickHtml()}
       <div class="lw-row wrap"><button type="button" class="btn${rulerOn ? ' on' : ''}" id="lwRuler" aria-pressed="${rulerOn}">📏 Ruler</button>${ruler ? `<button type="button" class="btn" id="lwToRuler" title="Put the job's top-left corner on the ruler point">Move job to the ruler point</button><button type="button" class="lw-link" id="lwRulerClear">Clear ruler</button>` : ''}</div>
       ${ruler ? `<p class="lw-read">From the ruler point, the job starts <b>${r1(jobBox().x0 - ruler.x)} mm</b> ${jobBox().x0 >= ruler.x ? 'to the right' : 'to the left'} and <b>${r1(jobBox().y0 - ruler.y)} mm</b> ${jobBox().y0 >= ruler.y ? 'towards the front' : 'towards the back'}.</p>` : help('<b>Ruler</b>: click the bed to put a reference point (e.g. the corner of your acrylic). Kerf shows how far the job is from it.')}
       <div class="lw-cut">
         <label class="tog"><input type="checkbox" role="switch" id="lwTraces" ${S.showTraces ? 'checked' : ''}> Show what’s already been cut${S.traces.length ? ` (${S.traces.length})` : ''}</label>
-        <div class="lw-row wrap"><button type="button" class="btn" id="lwMarkCut" title="Leave a grey shadow of this job on the bed">✓ Mark this job as cut</button>${S.traces.length ? `<button type="button" class="btn" id="lwNext">Next to the last cut</button><button type="button" class="lw-link" id="lwClearCut">New sheet: clear</button>` : ''}</div>
+        <div class="lw-row wrap"><button type="button" class="btn" id="lwMarkCut" title="Leave a grey shadow of this job on the bed">✓ Mark this job as cut</button>${S.traces.length ? `<button type="button" class="btn" id="lwNext">Next to the last cut</button>` : ''}<button type="button" class="btn" id="lwClearCut" title="New sheet of material: clear the shadows" ${S.traces.length ? '' : 'disabled'}>Clear</button></div>
         ${help(S.traces.length ? 'Grey = already cut. The flag shows where the laser <b>started</b> the last job and the red ring where it <b>finished</b>. Put the next job (or a re-cut) in the empty space.' : 'After the laser has cut a job, press <b>✓ Mark this job as cut</b>. A grey shadow stays on the bed, with where the laser started and finished, so the next job (or a re-cut) goes in the space that’s left. <b>Try it now:</b> press it, then <b>Next to the last cut</b>.')}
       </div>
       <p class="lw-read">Job size: <b>${r1(jobW())} × ${r1(jobH())} mm</b>${S.copies > 1 ? ` (${S.copies} copies)` : ''}${left.size ? ` · ${parts.filter(q => q.ids.every(id => left.has(id))).length} left out` : ''}</p>
@@ -267,13 +267,13 @@ export function openLaser(ed: Editor, saveFile: (name: string, text: string) => 
       <button type="button" class="btn" id="lwCutDone" title="Leave a grey shadow of this job on the bed, so the next one goes in the space that's left">✓ Mark this job as cut</button>
       ${help('For now, save the file and open it in LightBurn (<b>File → Import</b>; in Optimization Settings switch optimisation off to keep this order). Sending straight to the laser comes when we connect Kerf to it, with a check before anything moves.')}`, 'lwS5');
     $('#lwSteps').innerHTML = s1 + s2 + s3 + s4 + s5;
-    bindSteps(); renderTools(); draw();
+    bindSteps(); renderCorner(); draw();
   }
   /** a number box you can also change with the mouse wheel, the arrow keys or its ▲▼ buttons, by the step */
   function spin(id: string, v: number, step?: number) {
     return `<span class="spin"><input type="text" inputmode="decimal" id="${id}" value="${r1(v)}" data-step="${step ?? ''}"><span class="spin-b"><button type="button" tabindex="-1" data-spin="${id}" data-d="1" aria-label="more">▲</button><button type="button" tabindex="-1" data-spin="${id}" data-d="-1" aria-label="less">▼</button></span></span>`;
   }
-  let pickAngle = 0;
+  let pickAngle = 0, bumping = false;
   function quickHtml() {
     const ps = pickedParts(), n = parts.filter(q => !q.ids.every(id => left.has(id))).length, out = parts.filter(q => q.ids.every(id => left.has(id))).length, pb = pickedBox();
     return `<div class="lw-quick">
@@ -298,30 +298,27 @@ export function openLaser(ed: Editor, saveFile: (name: string, text: string) => 
     if (k === 'left') setAt(0, null); else if (k === 'centre') setAt(Math.round((m.bedW - w) / 2 * 10) / 10, null); else if (k === 'right') setAt(m.bedW - w, null);
     else if (k === 'back') setAt(null, 0); else if (k === 'middle') setAt(null, Math.round((m.bedH - h) / 2 * 10) / 10); else setAt(null, m.bedH - h);
   }
-  /** the strip of tools in the grey area beside the bed */
-  function renderTools() {
-    const t = $('#lwTools'); if (!S.machine.setUp) { t.hidden = true; return; } t.hidden = false;
-    const tb = (id: string, label: string, icon: string, on?: boolean, dis = false) => `<button type="button" class="lw-tb" data-t="${id}" title="${label}" aria-label="${label}"${on != null ? ` aria-pressed="${on}"` : ''}${dis ? ' disabled' : ''}>${icon}</button>`;
-    const picked = pickedParts().length > 0;
-    t.innerHTML = [
-      tb('turnL', picked && !allPicked() ? 'Turn the picked parts anticlockwise' : 'Turn the job anticlockwise', '⟲'), tb('turnR', picked && !allPicked() ? 'Turn the picked parts clockwise' : 'Turn the job clockwise', '⟳'),
-      '<i></i>',
-      ...['left', 'centre', 'right', 'back', 'middle', 'front'].map(k => tb('al-' + k, `Line the job up with the ${k === 'centre' || k === 'middle' ? 'middle' : k} of the bed`, `<svg viewBox="0 0 20 20">${ALIGN_ICON[k]}</svg>`, undefined, S.placeMode !== 'bed')),
-      '<i></i>',
-      tb('dup', 'Duplicate the picked parts', '⧉', undefined, !picked),
-      tb('snap', 'Snap to the grid', '#', S.snap), tb('centre', 'Show the middle of the bed', '⊕', S.showCentre), tb('ruler', 'Ruler: click the bed for a reference point', '📏', rulerOn),
-      tb('lock', S.placeMode === 'bed' ? 'Lock the job so it can’t be dragged' : 'Lock the laser so it can’t be moved', (S.placeMode === 'bed' ? S.lockJob : S.lockLaser) ? '🔒' : '🔓', S.placeMode === 'bed' ? S.lockJob : S.lockLaser),
-    ].join('');
-    t.querySelectorAll<HTMLElement>('[data-t]').forEach(b => b.onclick = () => {
-      const k = b.dataset.t!;
-      if (k === 'turnL') turnQuarter(-1); else if (k === 'turnR') turnQuarter(1);
-      else if (k.startsWith('al-')) alignJob(k.slice(3));
-      else if (k === 'dup') dupPicked();
-      else if (k === 'snap') { S.snap = !S.snap; save(); renderSteps(); }
-      else if (k === 'centre') { S.showCentre = !S.showCentre; save(); renderTools(); draw(); }
-      else if (k === 'ruler') { rulerOn = !rulerOn; msg(rulerOn ? 'Click the bed to put the ruler point.' : ''); renderSteps(); }
-      else if (k === 'lock') { if (S.placeMode === 'bed') S.lockJob = !S.lockJob; else S.lockLaser = !S.lockLaser; save(); renderSteps(); }
-    });
+  /** ⚙ settings: extra tools are off at first so a first-time user sees a simple screen */
+  function renderPrefs() {
+    const t = (id: keyof LaserState, label: string, note = '') => `<label class="tog"><input type="checkbox" role="switch" data-pref="${id}" ${(S as any)[id] ? 'checked' : ''}><span>${label}${note ? `<small>${note}</small>` : ''}</span></label>`;
+    $('#lwPrefs').innerHTML = `<b>Settings</b>
+      <p class="lw-ph">Placing the job</p>${t('showAlign', 'Line-up buttons', 'left, middle, right, back, front')}${t('showTurn', 'Turn buttons', 'quarter turns of the whole job')}
+      <p class="lw-ph">The bed</p>${t('showCentre', 'Show the middle of the bed')}${t('snap', 'Grid lock', 'things land on the grid')}<label class="lw-sub">Grid every <input type="text" inputmode="decimal" data-num="snapStep" value="${S.snapStep}"> mm</label>
+      ${t('stepLock', 'Step lock', 'drags move in whole steps')}<label class="lw-sub">Step <input type="text" inputmode="decimal" data-num="lockStep" value="${S.lockStep}"> mm</label>
+      <p class="lw-ph">Help</p>${t('help', 'Explanations under each step')}`;
+    $('#lwPrefs').querySelectorAll<HTMLInputElement>('[data-pref]').forEach(i => i.onchange = () => { (S as any)[i.dataset.pref!] = i.checked; save(); renderSteps(); ($('#lwHelp') as HTMLInputElement).checked = S.help; });
+    $('#lwPrefs').querySelectorAll<HTMLInputElement>('[data-num]').forEach(i => i.onchange = () => { const v = num(i.value, 0.1, 100); if (v) { (S as any)[i.dataset.num!] = v; save(); renderCorner(); } else i.value = String((S as any)[i.dataset.num!]); });
+  }
+  $('#lwCog').onclick = ev => { ev.stopPropagation(); const p = $('#lwPrefs'); p.hidden = !p.hidden; $('#lwCog').setAttribute('aria-expanded', String(!p.hidden)); if (!p.hidden) renderPrefs(); };
+  root.addEventListener('click', ev => { const p = $('#lwPrefs'); if (!p.hidden && !(ev.target as HTMLElement).closest('.lw-cogwrap')) { p.hidden = true; $('#lwCog').setAttribute('aria-expanded', 'false'); } });
+  /** bottom-right of the bed: grid lock, step lock, zoom */
+  function renderCorner() {
+    const c = $('#lwCorner'); if (!S.machine.setUp) { c.hidden = true; return; } c.hidden = false;
+    c.innerHTML = `<label class="tog sm" title="Things land on the ${S.snapStep} mm grid"><input type="checkbox" role="switch" data-c="snap" ${S.snap ? 'checked' : ''}> Grid lock</label>
+      <label class="tog sm" title="Drags move in steps of ${S.lockStep} mm"><input type="checkbox" role="switch" data-c="stepLock" ${S.stepLock ? 'checked' : ''}> Step lock</label>
+      <span class="lw-zoom"><button type="button" data-z="out" title="Zoom out">−</button><span class="mono">${Math.round(zoomPct())}%</span><button type="button" data-z="in" title="Zoom in">+</button><button type="button" data-z="fit" title="Whole bed">Fit</button></span>`;
+    c.querySelectorAll<HTMLInputElement>('[data-c]').forEach(i => i.onchange = () => { (S as any)[i.dataset.c!] = i.checked; save(); });
+    c.querySelectorAll<HTMLElement>('[data-z]').forEach(b => b.onclick = () => { const z = b.dataset.z; if (z === 'fit') { zoomed = false; draw(); renderCorner(); } else { const r = canvas.getBoundingClientRect(); zoomAt(r.width / 2, r.height / 2, z === 'in' ? 1.25 : 0.8); } });
   }
   function num(v: string, lo: number, hi: number): number | null { const n = parseFloat(v.replace(',', '.')); return isFinite(n) && n >= lo && n <= hi ? n : null; }
   function bindSteps() {
@@ -366,25 +363,32 @@ export function openLaser(ed: Editor, saveFile: (name: string, text: string) => 
     on('lwY', 'change', e => setAt(null, num((e.target as HTMLInputElement).value, -5000, 5000)));
     root.querySelectorAll<HTMLElement>('#lwSteps [data-al]').forEach(b => b.onclick = () => alignJob(b.dataset.al!));
     on('lwPreset', 'change', e => { const v = (e.target as HTMLSelectElement).value; if (v === 'other') { root.querySelector<HTMLInputElement>('#lwBW')?.focus(); return; } const b = BED_PRESETS[+v]; S.machine.bedW = b.w; S.machine.bedH = b.h; S.machine.name = b.name.split(' · ')[0]; S.head = P(b.w / 2, b.h / 2); save(); rebuild(); });
-    on('lwLockJob', 'change', e => { S.lockJob = (e.target as HTMLInputElement).checked; save(); renderTools(); });
+    on('lwLockJob', 'change', e => { S.lockJob = (e.target as HTMLInputElement).checked; save(); });
     on('lwLockLaser', 'change', e => { S.lockLaser = (e.target as HTMLInputElement).checked; save(); });
-    on('lwSnap', 'change', e => { S.snap = (e.target as HTMLInputElement).checked; save(); renderTools(); });
-    on('lwSnapStep', 'change', e => { const v = num((e.target as HTMLInputElement).value, 0.1, 100); if (v) { S.snapStep = v; save(); } });
-    root.querySelectorAll<HTMLElement>('[data-jog]').forEach(b => b.onclick = () => {
-      if (S.lockLaser) { msg('The laser is locked. Switch off “Stop the laser being moved” to move it.', true); return; }
-      const j = b.dataset.jog!; if (j === 'mid') S.head = P(S.machine.bedW / 2, S.machine.bedH / 2);
-      else { const [dx, dy] = j.split(',').map(Number); S.head = P(S.head.x + dx * S.jogStep, S.head.y + dy * S.jogStep); }
-      save(); rebuild();
+    // arrows: a click moves one step; holding keeps moving at the speed until let go
+    root.querySelectorAll<HTMLElement>('[data-jog]').forEach(b => {
+      b.onpointerdown = ev => {
+        ev.preventDefault();
+        if (S.lockLaser) { msg('The laser is locked. Switch off “Stop the laser being moved” to move it.', true); return; }
+        const j = b.dataset.jog!; if (j === 'mid') { S.head = P(S.machine.bedW / 2, S.machine.bedH / 2); save(); rebuild(); return; }
+        const [dx, dy] = j.split(',').map(Number); S.head = onBed(P(S.head.x + dx * S.jogStep, S.head.y + dy * S.jogStep)); draw();
+        let last = 0, raf2 = 0; const t0 = performance.now();
+        const go = (now: number) => { if (now - t0 > 350) { const dt = last ? (now - last) / 1000 : 0; S.head = onBed(P(S.head.x + dx * S.jogSpeed * dt, S.head.y + dy * S.jogSpeed * dt)); last = now; draw(); } raf2 = requestAnimationFrame(go); };
+        raf2 = requestAnimationFrame(go);
+        const stop = () => { cancelAnimationFrame(raf2); window.removeEventListener('pointerup', stop); b.removeEventListener('pointerleave', stop); S.head = P(Math.round(S.head.x * 10) / 10, Math.round(S.head.y * 10) / 10); save(); rebuild(); };
+        window.addEventListener('pointerup', stop); b.addEventListener('pointerleave', stop);
+      };
     });
-    root.querySelectorAll<HTMLElement>('#lwJogStep button').forEach(b => b.onclick = () => { S.jogStep = +b.dataset.v!; save(); renderSteps(); });
-    root.querySelectorAll<HTMLElement>('#lwJogSpeed button').forEach(b => b.onclick = () => { S.jogSpeed = b.dataset.v as any; save(); renderSteps(); });
+    // typed step and speed: the wheel goes up and down in steps of the number last typed
+    on('lwJogStepIn', 'change', e => { const v = num((e.target as HTMLInputElement).value, 0.01, 1000); if (v) { S.jogStep = v; if (!bumping) S.jogStepBase = v; save(); renderSteps(); } });
+    on('lwJogSpeedIn', 'change', e => { const v = num((e.target as HTMLInputElement).value, 1, 1000); if (v) { S.jogSpeed = v; if (!bumping) S.jogSpeedBase = v; save(); renderSteps(); } });
     on('lwKeep', 'change', e => { S.keepShape = (e.target as HTMLInputElement).checked; save(); });
     on('lwStep', 'change', e => { const v = num((e.target as HTMLInputElement).value, 0.01, 1000); if (v) { S.spinStep = v; save(); } });
     on('lwAng', 'change', e => { const v = num((e.target as HTMLInputElement).value, -3600, 3600); if (v != null) { const d = v - pickAngle; pickAngle = v; if (d) turnPicked(d); } });
     on('lwDup', 'click', () => dupPicked());
     on('lwReset', 'click', () => { pickAngle = 0; makeJob(); msg('Quick changes undone.'); });
     // number boxes: mouse wheel, arrow keys and ▲▼ change them by the step
-    const bump = (inp: HTMLInputElement, dir: number) => { const st = +(inp.dataset.step || '') || S.spinStep, v = (parseFloat(inp.value) || 0) + dir * st; inp.value = r1(Math.round(v * 1000) / 1000); inp.dispatchEvent(new Event('change')); };
+    const bump = (inp: HTMLInputElement, dir: number) => { const st = +(inp.dataset.step || '') || S.spinStep, v = (parseFloat(inp.value) || 0) + dir * st; inp.value = r1(Math.round(v * 1000) / 1000); bumping = true; inp.dispatchEvent(new Event('change')); bumping = false; };
     root.querySelectorAll<HTMLInputElement>('.spin input').forEach(inp => {
       inp.addEventListener('wheel', ev => { if (document.activeElement !== inp && !inp.matches(':hover')) return; ev.preventDefault(); bump(inp, ev.deltaY < 0 ? 1 : -1); }, { passive: false });
       inp.addEventListener('keydown', ev => { if (ev.key === 'ArrowUp' || ev.key === 'ArrowDown') { ev.preventDefault(); bump(inp, ev.key === 'ArrowUp' ? 1 : -1); } });
@@ -442,13 +446,20 @@ export function openLaser(ed: Editor, saveFile: (name: string, text: string) => 
   $('#lwArrLR').onclick = () => { S.machine.flipLR = !S.machine.flipLR; save(); renderSteps(); playSetup(); };
 
   // ---------- the bed ----------
-  let view = { s: 1, ox: 0, oy: 0 };
+  let view = { s: 1, ox: 0, oy: 0 }, fitV = { s: 1, ox: 0, oy: 0 }, zoomed = false;
+  const zoomPct = () => 100 * view.s / (fitV.s || 1);
+  /** zoom about a point on screen (the mouse), keeping the bed under it still */
+  function zoomAt(mx: number, my: number, f: number) {
+    const b = toBedPt(mx, my), s2 = Math.max(fitV.s * 0.5, Math.min(fitV.s * 30, view.s * f));
+    view = { s: s2, ox: mx - b.x * s2, oy: my - b.y * s2 }; zoomed = true; draw(); renderCorner();
+  }
   function fitView() {
     const wrap = canvas.parentElement!, dpr = window.devicePixelRatio || 1, W = wrap.clientWidth, H = wrap.clientHeight;
     canvas.width = Math.max(10, W * dpr); canvas.height = Math.max(10, H * dpr); canvas.style.width = W + 'px'; canvas.style.height = H + 'px';
-    const m = S.machine, padL = m.setUp ? 112 : 56, padT = 44, padR = 40, padB = 44;
+    const m = S.machine, padL = 56, padT = 44, padR = 40, padB = 56;
     const s = Math.min((W - padL - padR) / m.bedW, (H - padT - padB) / m.bedH);
-    view = { s, ox: padL + ((W - padL - padR) - m.bedW * s) / 2, oy: padT + ((H - padT - padB) - m.bedH * s) / 2 };
+    fitV = { s, ox: padL + ((W - padL - padR) - m.bedW * s) / 2, oy: padT + ((H - padT - padB) - m.bedH * s) / 2 };
+    if (!zoomed) view = { ...fitV };
   }
   const toScr = (p: Point) => P(view.ox + p.x * view.s, view.oy + p.y * view.s);
   const toBedPt = (sx: number, sy: number) => P((sx - view.ox) / view.s, (sy - view.oy) / view.s);
@@ -652,7 +663,12 @@ export function openLaser(ed: Editor, saveFile: (name: string, text: string) => 
     if (h.length === 2 && S.keepShape !== shift) { const f = Math.max(fx, fy); fx = fy = f; }
     xfLabel = `${r1(w * fx)} × ${r1(hh * fy)} mm`; return scaleAbout(P(ox, oy), fx, fy);
   }
+  canvas.addEventListener('wheel', ev => { ev.preventDefault(); const r = canvas.getBoundingClientRect(); zoomAt(ev.clientX - r.left, ev.clientY - r.top, ev.deltaY < 0 ? 1.15 : 1 / 1.15); }, { passive: false });
+  canvas.addEventListener('dblclick', ev => { if (!pickedParts().length && !partAt(bedPt(ev as any))) { zoomed = false; draw(); renderCorner(); } });
+  let pan: { x: number; y: number; ox: number; oy: number } | null = null, spaceDown = false;
   canvas.addEventListener('pointerdown', ev => {
+    // pan: middle button, or hold the space bar and drag
+    if (ev.button === 1 || spaceDown) { ev.preventDefault(); pan = { x: ev.clientX, y: ev.clientY, ox: view.ox, oy: view.oy }; canvas.setPointerCapture(ev.pointerId); canvas.style.cursor = 'grabbing'; return; }
     const p = bedPt(ev), m = S.machine;
     if (!m.setUp) {   // setting up: click a corner of the bed for where the laser parks
       const q = flipPt(p); m.park = `${q.y < m.bedH / 2 ? 'back' : 'front'}-${q.x < m.bedW / 2 ? 'left' : 'right'}` as Corner; save(); draw(); return;
@@ -679,12 +695,15 @@ export function openLaser(ed: Editor, saveFile: (name: string, text: string) => 
     if (drag) { canvas.setPointerCapture(ev.pointerId); stopPlay(); tPlay = 0; }
   });
   canvas.addEventListener('pointermove', ev => {
+    if (pan) { view = { ...view, ox: pan.ox + ev.clientX - pan.x, oy: pan.oy + ev.clientY - pan.y }; zoomed = true; draw(); return; }
     const p = bedPt(ev);
     if (!drag) {
       const h = handleAt(ev); canvas.style.cursor = !S.machine.setUp ? 'pointer' : rulerOn ? 'crosshair' : h ? (h === 'rot' ? 'grab' : ({ n: 'ns', s: 'ns', e: 'ew', w: 'ew', nw: 'nwse', se: 'nwse', ne: 'nesw', sw: 'nesw' } as any)[h] + '-resize') : partAt(p) ? 'pointer' : inJob(p) ? (S.placeMode === 'bed' && S.lockJob ? 'not-allowed' : 'grab') : S.placeMode === 'head' ? 'crosshair' : 'default';
       return;
     }
-    const d = P(p.x - drag.from.x, p.y - drag.from.y);
+    let d = P(p.x - drag.from.x, p.y - drag.from.y);
+    // step lock: moves go in whole steps from where the drag started (grid lock then lines the result up with the grid)
+    if (S.stepLock && drag.kind !== 'box' && drag.kind !== 'handle') d = P(snapTo(d.x, S.lockStep), snapTo(d.y, S.lockStep));
     if (drag.kind === 'job') { const jb0x = drag.at0.x + cbOff.dx, jb0y = drag.at0.y + cbOff.dy; S.at = P(snapV(jb0x + d.x) - cbOff.dx, snapV(jb0y + d.y) - cbOff.dy); }
     else if (drag.kind === 'laser') S.head = onBed(P(snapV(drag.at0.x + d.x), snapV(drag.at0.y + d.y)));
     else if (drag.kind === 'parts') { const pb = pickedBox()!, dx = snapV(pb.x0 + d.x) - pb.x0, dy = snapV(pb.y0 + d.y) - pb.y0; xf = q => P(q.x + dx, q.y + dy); xfLabel = `${r1(pb.x0 + dx)}, ${r1(pb.y0 + dy)} mm`; }
@@ -693,6 +712,7 @@ export function openLaser(ed: Editor, saveFile: (name: string, text: string) => 
     draw();
   });
   canvas.addEventListener('pointerup', () => {
+    if (pan) { pan = null; canvas.style.cursor = ''; renderCorner(); return; }
     if (!drag) return; const k = drag.kind; drag = null;
     if (k === 'parts' || k === 'handle') { const f = xf; xf = null; xfLabel = ''; if (f) applyPicked(f); else draw(); return; }
     if (k === 'box' && boxSel) {
@@ -706,12 +726,14 @@ export function openLaser(ed: Editor, saveFile: (name: string, text: string) => 
   });
 
   // ---------- open / close ----------
-  const close = () => { cancelAnimationFrame(raf); playing = false; root.remove(); window.removeEventListener('resize', onResize); window.removeEventListener('keydown', onKey, true); };
+  const close = () => { cancelAnimationFrame(raf); playing = false; root.remove(); window.removeEventListener('resize', onResize); window.removeEventListener('keydown', onKey, true); window.removeEventListener('keyup', onKeyUp, true); };
   const onResize = () => draw();
-  const onKey = (ev: KeyboardEvent) => { if (ev.key === 'Escape') { if (rulerOn) { rulerOn = false; renderSteps(); draw(); } else if (sel.size) { sel.clear(); renderSteps(); } else close(); ev.stopPropagation(); } else if (ev.key === ' ' && !(ev.target as HTMLElement).matches('input,select,textarea,button')) { ev.preventDefault(); $('#lwPlay').click(); } };
+  const onKeyUp = (ev: KeyboardEvent) => { if (ev.key === ' ') spaceDown = false; };
+  const onKey = (ev: KeyboardEvent) => {
+    if (ev.key === ' ' && !(ev.target as HTMLElement).matches('input,select,textarea') && canvas.matches(':hover')) { spaceDown = true; ev.preventDefault(); return; } if (ev.key === 'Escape') { if (rulerOn) { rulerOn = false; renderSteps(); draw(); } else if (sel.size) { sel.clear(); renderSteps(); } else close(); ev.stopPropagation(); } else if (ev.key === ' ' && !(ev.target as HTMLElement).matches('input,select,textarea,button')) { ev.preventDefault(); $('#lwPlay').click(); } };
   $('#lwClose').onclick = close;
   $<HTMLInputElement>('#lwHelp').onchange = e => { S.help = (e.target as HTMLInputElement).checked; save(); renderSteps(); };
-  window.addEventListener('resize', onResize); window.addEventListener('keydown', onKey, true);
+  window.addEventListener('resize', onResize); window.addEventListener('keydown', onKey, true); window.addEventListener('keyup', onKeyUp, true);
   loadJob();
   if (!paths.length) msg('Nothing on this sheet is set to cut or engrave yet.', true);
   requestAnimationFrame(() => draw());
