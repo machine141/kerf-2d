@@ -11,7 +11,7 @@ import { sheetDoc } from '../io/sheets';
 import { cutOrder, type LPath, type Phase, PHASES } from '../laser/order';
 import { exportLaserSVG } from '../laser/export';
 import { simulate, placement, fmtTime, clock, DEFAULT_MOTION, type Sim, type Step, type PhaseSet } from '../laser/sim';
-import { loadState, saveState, cornerPt, fitsBed, overlapsTraces, inside as insidePoly, EXAMPLES, BED_PRESETS, gridSteps, snapTo, type LaserState, type Corner } from '../laser/machine';
+import { loadState, saveState, cornerPt, fitsBed, overlapsTraces, inside as insidePoly, EXAMPLES, BED_PRESETS, gridSteps, snapTo, KINDS, CONTROLLERS, defaultState, newLaserId, laserFile, readLaserFile, materialsFor, type LaserState, type Corner, type Controller, type LaserKind } from '../laser/machine';
 import { buildJob, colsThatFit, thin, laserBox } from '../laser/job';
 import { withPaintedSlits } from '../tools/hingebrush';
 import { laserPaths } from '../laser/order';
@@ -19,7 +19,7 @@ import { findParts, outlineOf } from '../nest/parts';
 import { affEnt, type Affine } from '../geometry/affine';
 import type { Entity, Shape } from '../model/types';
 import { matchMaterial, jobLabel, thicknessIn } from '../laser/jobinfo';
-import { DEFAULT_TEST, MODE_TEXT, fitGrid, steps, testCells, testSize, testSVG, testList, testTime, cellPts, type TestSpec, type TestMode } from '../laser/mattest';
+import { DEFAULT_TEST, MODE_TEXT, fitGrid, steps, rangeProblem, minGap, testCells, testSize, testSVG, testList, testTime, cellPts, type TestSpec, type TestMode } from '../laser/mattest';
 import { LB_PALETTE, lbName, type LaserKey } from '../laser/palette';
 import { applyExtras } from '../laser/extras';
 
@@ -59,7 +59,7 @@ export function openLaser(ed: Editor, saveFile: (name: string, text: string) => 
     S.material = v; matDirty = false; return true;
   };
   // a job sent with the file (Hand in with material, or Export → For the technician): applied once, so the technician's own changes stay
-  const job = ed.doc.job, jobMatches = job ? matchMaterial(job, S.myMaterials) : [];
+  const job = ed.doc.job, jobMatches = job ? matchMaterial(job, materialsFor(S)) : [];
   if (job && job.at !== S.jobAt) {
     if (job.sheet != null && job.sheet < nS) sheet = job.sheet;
     S.copies = Math.max(1, job.copies || 1);
@@ -217,7 +217,16 @@ export function openLaser(ed: Editor, saveFile: (name: string, text: string) => 
     return `<section class="lw-step${open ? ' open' : ''}" id="${id}"><div class="lw-sh"><span class="lw-n">${n}</span><b>${title}</b>${!open && summary ? `<span class="lw-sum">${summary}</span>` : ''}</div>${open ? `<div class="lw-sb">${body}</div>` : ''}</section>`;
   }
   const help = (t: string) => S.help ? `<p class="lw-help">${t}</p>` : '';
-  let extrasOpen = false;
+  let extrasOpen = false, moreOpen = false;
+  /** use another saved laser: this one (and its cut shadows) is kept in the list */
+  const switchLaser = (id: string) => {
+    const i = S.lasers.findIndex(x => x.id === id); if (i < 0) return;
+    const next = S.lasers[i]; S.lasers.splice(i, 1, { ...S.machine, traces: S.traces });
+    S.traces = next.traces || []; S.machine = { ...next, traces: undefined };
+    if (S.material && !S.material.startsWith('ex:') && !materialsFor(S).some(m => m.id === S.material)) S.material = '';
+    if (S.material.startsWith('ex:') && S.machine.kind !== 'co2') S.material = '';
+    S.head = onBed(S.head); save(); rebuild(); msg(`Now using “${S.machine.name}”.`);
+  };
   /** step 2: the cutting extras, folded away under one line so a first-time user sees a simple step */
   const extrasHtml = () => {
     const nOn = [S.testPiece, S.spreadStarts, S.tabs].filter(Boolean).length, many = colours().some(([k, ph]) => setFor(k, ph).passes > 1);
@@ -231,13 +240,33 @@ export function openLaser(ed: Editor, saveFile: (name: string, text: string) => 
   function renderSteps() {
     const m = S.machine, has = present(), fit = fitsBed(m, jobBox()), est = sim;
     $('#lwSheet').innerHTML = nS > 1 ? `Sheet <span class="segc" id="lwSh">${Array.from({ length: nS }, (_, i) => `<button type="button" data-v="${i}" aria-pressed="${i === sheet}">${i + 1}</button>`).join('')}</span>` : esc(ed.doc.name || '');
-    const s1 = stepHtml(1, 'Laser settings', !m.setUp, `✓ ${esc(m.name)} · ${m.bedW} × ${m.bedH} mm <button type="button" class="lw-link" id="lwChange">Change</button>`, `
+    const pick = S.lasers.length ? `<select id="lwPick" aria-label="Which laser" class="lw-pick"><option value="${m.id}" selected>${esc(m.name)}</option>${S.lasers.map(l => `<option value="${l.id}">${esc(l.name)}</option>`).join('')}</select>` : `${esc(m.name)}`;
+    const s1 = stepHtml(1, 'Laser settings', !m.setUp, `✓ ${pick} · ${m.bedW} × ${m.bedH} mm <button type="button" class="lw-link" id="lwChange">Change</button>`, `
+      ${S.lasers.length ? `<div class="lw-row small">Laser in use: ${pick}</div>` : ''}
       ${help('Do this once. Stand at the <b>front</b> of the laser. The big picture is the bed: the pink bands are the <b>back</b> and the <b>sides</b>; you stand at the open edge.')}
-      <div class="lw-grid"><label for="lwPreset">Laser</label><span class="lw-in"><select id="lwPreset">${BED_PRESETS.map((b, i) => `<option value="${i}" ${b.w === m.bedW && b.h === m.bedH ? 'selected' : ''}>${b.name} (${b.w} × ${b.h})</option>`).join('')}<option value="other" ${BED_PRESETS.some(b => b.w === m.bedW && b.h === m.bedH) ? '' : 'selected'}>Another size…</option></select></span>
+      <div class="lw-grid"><label for="lwPreset">Laser</label><span class="lw-in"><select id="lwPreset">${BED_PRESETS.map((b, i) => `<option value="${i}" ${b.w === m.bedW && b.h === m.bedH && b.controller === m.controller ? 'selected' : ''}>${b.name} (${b.w} × ${b.h})</option>`).join('')}<option value="other" ${BED_PRESETS.some(b => b.w === m.bedW && b.h === m.bedH && b.controller === m.controller) ? '' : 'selected'}>Another laser or size…</option></select></span>
         <label for="lwName">Name</label><span class="lw-in"><input type="text" id="lwName" value="${esc(m.name)}"></span>
         <label for="lwBW">Bed width</label><span class="lw-in"><input type="text" inputmode="decimal" id="lwBW" value="${m.bedW}"> mm</span>
         <label for="lwBH">Bed depth</label><span class="lw-in"><input type="text" inputmode="decimal" id="lwBH" value="${m.bedH}"> mm</span></div>
       ${help('The bed picture, its grid and numbers resize to match. When Kerf is connected to the laser it will read the size from the laser itself.')}
+      <details class="lw-more" ${moreOpen ? 'open' : ''} id="lwMore"><summary>More about this laser</summary>
+        <div class="lw-grid">
+          <label for="lwKind">Type</label><span class="lw-in"><select id="lwKind">${(Object.keys(KINDS) as LaserKind[]).map(k => `<option value="${k}" ${k === m.kind ? 'selected' : ''}>${KINDS[k]}</option>`).join('')}</select></span>
+          <label for="lwCtl">Controller</label><span class="lw-in"><select id="lwCtl">${(Object.keys(CONTROLLERS) as Controller[]).map(k => `<option value="${k}" ${k === m.controller ? 'selected' : ''}>${CONTROLLERS[k].label}</option>`).join('')}</select></span>
+          <label for="lwW">Power</label><span class="lw-in"><input type="text" inputmode="decimal" id="lwW" value="${m.watts || ''}" placeholder="?"> W</span>
+        </div>
+        <label class="tog"><input type="checkbox" role="switch" id="lwMB" ${m.motorBed ? 'checked' : ''}> Motorised bed (moves up and down)</label>
+        <label class="tog"><input type="checkbox" role="switch" id="lwAF" ${m.autofocus ? 'checked' : ''}> Autofocus</label>
+        <div class="lw-note">${CONTROLLERS[m.controller].about}.<br><b>Today:</b> ${CONTROLLERS[m.controller].now}.<br><b>Later:</b> ${CONTROLLERS[m.controller].later}.</div>
+        ${help('Not sure which controller? It is usually named on the laser\'s control panel or in its manual. LightBurn shows it too, under Devices.')}
+      </details>
+      <div class="lw-row wrap small lw-lasers">
+        <button type="button" class="lw-link" id="lwAddLaser" title="Set up a second laser; this one is kept">+ Another laser</button>
+        <button type="button" class="lw-link" id="lwShareLaser" title="Save this laser's set-up and its materials to a file, to give to a colleague">Share this laser…</button>
+        <button type="button" class="lw-link" id="lwLoadLaser" title="Add a laser from a file a colleague shared">Load a laser file…</button>
+        ${S.lasers.length ? `<button type="button" class="lw-link" id="lwDelLaser">Remove this laser</button>` : ''}
+        <input type="file" id="lwLaserFile" accept=".json,application/json" hidden>
+      </div>
       <ol class="lw-howto">
         <li>Switch the laser on. On the big picture, <b>click the corner the laser goes to</b> (the green dot).</li>
         <li>Press <b>▶ Show how it should frame</b> and watch the picture. Then press Frame on the real laser.</li>
@@ -261,8 +290,8 @@ export function openLaser(ed: Editor, saveFile: (name: string, text: string) => 
       ${askedBox}
       <div class="lw-row"><select id="lwMat" aria-label="Material">
         <option value="" ${S.material === '' ? 'selected' : ''}>Choose a material…</option>
-        ${S.myMaterials.length ? `<optgroup label="My materials">${S.myMaterials.map(m => `<option value="${m.id}" ${m.id === S.material ? 'selected' : ''}>${esc(m.name)}</option>`).join('')}</optgroup>` : ''}
-        <optgroup label="Examples (test on scrap first)">${Object.entries(EXAMPLES).map(([k, e]) => `<option value="ex:${k}" ${'ex:' + k === S.material ? 'selected' : ''}>${e.label}</option>`).join('')}</optgroup>
+        ${materialsFor(S).length ? `<optgroup label="My materials">${materialsFor(S).map(m => `<option value="${m.id}" ${m.id === S.material ? 'selected' : ''}>${esc(m.name)}</option>`).join('')}</optgroup>` : ''}
+        ${S.machine.kind === 'co2' ? `<optgroup label="Examples for a CO₂ laser (test on scrap first)">${Object.entries(EXAMPLES).map(([k, e]) => `<option value="ex:${k}" ${'ex:' + k === S.material ? 'selected' : ''}>${e.label}</option>`).join('')}</optgroup>` : ''}
       </select><button type="button" class="btn" id="lwAddMat">+ Add material</button><button type="button" class="btn" id="lwTest" title="Cut a grid of small squares at different speeds and powers to find the best settings for a new material">Material test…</button></div>
       ${addingMat ? `<div class="lw-row"><input type="text" id="lwMatName" placeholder="Name, e.g. birch ply" value="${esc(matPre.name || (job ? job.material : ''))}" style="width:150px"><label class="small">Thickness <input type="text" id="lwMatTh" inputmode="decimal" value="${matPre.th || job?.thickness || ''}" placeholder="3" style="width:42px"> mm</label><button type="button" class="btn primary" id="lwMatSave">Save</button><button type="button" class="lw-link" id="lwMatCancel">Cancel</button></div>` : ''}
       ${mine ? `<div class="lw-row small"><label>Thickness <input type="text" id="lwMyTh" inputmode="decimal" value="${mine.thickness || thicknessIn(mine.name) || ''}" placeholder="?" style="width:42px"> mm</label>${matDirty ? `<button type="button" class="lw-link" id="lwMatUpd">Save changes to “${esc(mine.name)}”</button>` : ''}<button type="button" class="lw-link" id="lwMatDel">Delete “${esc(mine.name)}”</button></div>` : ''}
@@ -383,6 +412,34 @@ export function openLaser(ed: Editor, saveFile: (name: string, text: string) => 
     const on = (id: string, ev: string, f: (e: Event) => void) => { const el = root.querySelector('#' + id); if (el) el.addEventListener(ev, f); };
     root.querySelectorAll<HTMLElement>('#lwSh button').forEach(b => b.onclick = () => { sheet = +b.dataset.v!; loadJob(); });
     on('lwChange', 'click', () => { S.machine.setUp = false; save(); renderSteps(); });
+    // ---- more than one laser: switch, add, share, load, remove ----
+    root.querySelectorAll<HTMLSelectElement>('#lwPick').forEach(sel => sel.onchange = () => switchLaser(sel.value));
+    on('lwMore', 'toggle', e => { moreOpen = (e.target as HTMLDetailsElement).open; });
+    on('lwKind', 'change', e => { S.machine.kind = (e.target as HTMLSelectElement).value as LaserKind; save(); renderSteps(); });
+    on('lwCtl', 'change', e => { S.machine.controller = (e.target as HTMLSelectElement).value as Controller; save(); renderSteps(); });
+    on('lwW', 'change', e => { const v = num((e.target as HTMLInputElement).value, 1, 1000); S.machine.watts = v ?? 0; save(); });
+    on('lwMB', 'change', e => { S.machine.motorBed = (e.target as HTMLInputElement).checked; save(); });
+    on('lwAF', 'change', e => { S.machine.autofocus = (e.target as HTMLInputElement).checked; save(); });
+    on('lwAddLaser', 'click', () => {
+      S.lasers.push({ ...S.machine, traces: S.traces }); S.traces = [];
+      S.machine = { ...defaultState().machine, id: newLaserId(), name: 'New laser' }; S.material = ''; S.head = P(S.machine.bedW / 2, S.machine.bedH / 2);
+      save(); rebuild(); msg('Set up the new laser in step 1. Your other laser is kept: switch back any time.');
+    });
+    on('lwShareLaser', 'click', () => { const f = laserFile(S); saveFile(S.machine.name.replace(/[^\p{L}\p{N}]+/gu, '-').replace(/^-|-$/g, '') + '-laser.json', JSON.stringify(f, null, 1)); msg(`Saved “${S.machine.name}” with ${f.materials.length} material${f.materials.length === 1 ? '' : 's'}. Your colleague opens the Laser screen and presses Load a laser file.`); });
+    on('lwLoadLaser', 'click', () => root.querySelector<HTMLInputElement>('#lwLaserFile')?.click());
+    on('lwLaserFile', 'change', async e => {
+      const f = (e.target as HTMLInputElement).files?.[0]; if (!f) return;
+      const got = readLaserFile(await f.text()); if (!got) { msg(`“${f.name}” isn't a Kerf laser file.`, true); return; }
+      S.lasers.push({ ...S.machine, traces: S.traces }); S.traces = []; S.machine = got.machine; S.myMaterials.push(...got.materials); S.material = '';
+      S.head = P(S.machine.bedW / 2, S.machine.bedH / 2); save(); rebuild();
+      msg(`Added “${got.machine.name}” with ${got.materials.length} material${got.materials.length === 1 ? '' : 's'}. Check the parking corner and frame in step 1 before cutting.`);
+    });
+    on('lwDelLaser', 'click', e => {
+      const b = e.currentTarget as HTMLButtonElement;
+      if (b.dataset.armed !== '1') { b.dataset.armed = '1'; b.textContent = `Click again to remove “${S.machine.name}”`; setTimeout(() => { if (b.isConnected) { b.dataset.armed = ''; b.textContent = 'Remove this laser'; } }, 3000); return; }
+      const gone = S.machine, next = S.lasers.shift()!; S.myMaterials = S.myMaterials.filter(x => x.laser !== gone.id);
+      S.traces = next.traces || []; S.machine = { ...next, traces: undefined }; S.material = ''; S.head = onBed(S.head); save(); rebuild(); msg(`Removed “${gone.name}” and its materials.`);
+    });
     on('lwName', 'change', e => { S.machine.name = (e.target as HTMLInputElement).value.trim() || 'My laser'; save(); });
     on('lwBW', 'change', e => { const v = num((e.target as HTMLInputElement).value, 50, 3000); if (v) { S.machine.bedW = v; save(); rebuild(); } });
     on('lwBH', 'change', e => { const v = num((e.target as HTMLInputElement).value, 50, 3000); if (v) { S.machine.bedH = v; save(); rebuild(); } });
@@ -406,7 +463,7 @@ export function openLaser(ed: Editor, saveFile: (name: string, text: string) => 
       const th = parseFloat((root.querySelector<HTMLInputElement>('#lwMatTh')?.value || '').replace(',', '.')), thickness = th > 0 && th < 100 ? th : thicknessIn(name);
       // the thickness goes in the name too ("3 mm MDF"), so it shows in the list
       const full = thickness && !thicknessIn(name) ? `${thickness} mm ${name}` : name;
-      const id = 'm' + Date.now().toString(36); S.myMaterials.push({ id, name: full, thickness, colors: snapshot(), phase: structuredClone(S.phase) });
+      const id = 'm' + Date.now().toString(36); S.myMaterials.push({ id, name: full, thickness, laser: S.machine.id, colors: snapshot(), phase: structuredClone(S.phase) });
       S.material = id; addingMat = false; matDirty = false; matPre = { name: '', th: 0 }; save(); renderSteps(); msg(`Saved “${full}”. Choose it next time to get these settings back.`);
     };
     on('lwMatSave', 'click', addMat);
@@ -429,7 +486,7 @@ export function openLaser(ed: Editor, saveFile: (name: string, text: string) => 
     on('lwX', 'change', e => setAt(num((e.target as HTMLInputElement).value, -5000, 5000), null));
     on('lwY', 'change', e => setAt(null, num((e.target as HTMLInputElement).value, -5000, 5000)));
     root.querySelectorAll<HTMLElement>('#lwSteps [data-al]').forEach(b => b.onclick = () => alignJob(b.dataset.al!));
-    on('lwPreset', 'change', e => { const v = (e.target as HTMLSelectElement).value; if (v === 'other') { root.querySelector<HTMLInputElement>('#lwBW')?.focus(); return; } const b = BED_PRESETS[+v]; S.machine.bedW = b.w; S.machine.bedH = b.h; S.machine.name = b.name.split(' · ')[0]; S.head = P(b.w / 2, b.h / 2); save(); rebuild(); });
+    on('lwPreset', 'change', e => { const v = (e.target as HTMLSelectElement).value; if (v === 'other') { root.querySelector<HTMLInputElement>('#lwBW')?.focus(); return; } const b = BED_PRESETS[+v]; S.machine.bedW = b.w; S.machine.bedH = b.h; S.machine.kind = b.kind; S.machine.controller = b.controller; S.machine.name = b.name.split(' · ')[0]; S.head = P(b.w / 2, b.h / 2); save(); rebuild(); });
     on('lwLockJob', 'change', e => { S.lockJob = (e.target as HTMLInputElement).checked; save(); });
     on('lwLockLaser', 'change', e => { S.lockLaser = (e.target as HTMLInputElement).checked; save(); });
     // arrows: a click moves one step; holding keeps moving at the speed until let go
@@ -810,11 +867,18 @@ export function openLaser(ed: Editor, saveFile: (name: string, text: string) => 
    */
   function openTest() {
     let T: TestSpec = fitGrid({ ...DEFAULT_TEST, ...(S.test || {}), ...(S.test ? {} : { name: job?.material || '', thickness: job?.thickness || DEFAULT_TEST.thickness }) });
-    let best = -1;
+    let best = -1, warn = '', warnT = 0;
+    /** earlier versions of the set-up, for Undo */
+    const undo: string[] = [];
     const ov = document.createElement('div'); ov.className = 'lw-testov'; ov.setAttribute('role', 'dialog'); ov.setAttribute('aria-label', 'Material test'); root.append(ov);
     const shut = () => { ov.remove(); };
     const n3 = (v: number) => String(Math.round(v * 100) / 100);
-    const field = (id: string, v: number, w = 46, lbl = '') => `<input type="text" inputmode="decimal" id="${id}" value="${n3(v)}" style="width:${w}px" aria-label="${lbl || id}">`;
+    /** a number box; the mouse wheel steps it by `step` and stops at lo/hi (so From can't pass To) */
+    const field = (id: string, v: number, w = 46, lbl = '', step = 1, lo?: number, hi?: number) => `<input type="text" inputmode="decimal" id="${id}" value="${n3(v)}" style="width:${w}px" aria-label="${lbl || id}" data-step="${step}"${lo != null ? ` data-min="${n3(lo)}"` : ''}${hi != null ? ` data-max="${n3(hi)}"` : ''}>`;
+    /** From can go up to (To − room for the squares), To down to (From + room) */
+    const room = (r: typeof T.speed) => (Math.max(1, r.n) - 1) * minGap(r);
+    const vals = (r: typeof T.speed, unit: string) => { const v = steps(r), d = v.slice(1).map((x, i) => x - v[i]), even = d.every(x => Math.abs(x - d[0]) < 1e-9);
+      return `${v.join(' · ')} ${unit}${v.length > 1 ? ` <span class="lw-dim">(${even ? '' : 'about '}${n3(even ? d[0] : (v[v.length - 1] - v[0]) / d.length)} apart)</span>` : ''}`; };
     const picture = () => {
       const { w, h } = testSize(T), cells = testCells(T), L = T.size * 1.6, top = T.size * 0.9, fs = Math.max(2.4, T.size * 0.28);
       const sp = steps(T.speed), pw = steps(T.power);
@@ -832,9 +896,14 @@ export function openLaser(ed: Editor, saveFile: (name: string, text: string) => 
         <div class="lw-testform">
           <div class="lw-row wrap"><label>What are you testing? <input type="text" id="mtName" value="${esc(T.name)}" placeholder="e.g. MDF" style="width:120px"></label><label>Thickness ${field('mtTh', T.thickness, 40, 'Thickness')} mm</label></div>
           <div class="segc lw-mode" role="radiogroup" aria-label="What to test">${(Object.keys(MODE_TEXT) as TestMode[]).map(k => `<button type="button" role="radio" data-mode="${k}" aria-checked="${k === T.mode}">${MODE_TEXT[k]}</button>`).join('')}</div>
-          <table class="lw-testtab"><tr><th></th><th>From</th><th>To</th><th>Steps</th></tr>
-            <tr><td>Speed <small>mm/s</small><br><small>across</small></td><td>${field('mtSf', T.speed.from)}</td><td>${field('mtSt', T.speed.to)}</td><td>${field('mtSn', T.speed.n, 36)}</td></tr>
-            <tr><td>Power <small>%</small><br><small>towards the front</small></td><td>${field('mtPf', T.power.from)}</td><td>${field('mtPt', T.power.to)}</td><td>${field('mtPn', T.power.n, 36)}</td></tr></table>
+          <div class="lw-row"><b class="small" style="flex:1">Speed and power to try</b><button type="button" class="lw-link" id="mtUndo" ${undo.length ? '' : 'disabled'} title="Go back one change">↶ Undo</button><button type="button" class="lw-link" id="mtReset" title="Back to the starting numbers (keeps the name and thickness)">Reset</button></div>
+          <table class="lw-testtab"><tr><th></th><th>From</th><th>To</th><th title="How many squares in that direction (not a size)">Squares</th></tr>
+            <tr><td>Speed <small>mm/s</small><br><small>across</small></td><td>${field('mtSf', T.speed.from, 46, 'Speed from', 1, 0.5, T.speed.to - room(T.speed))}</td><td>${field('mtSt', T.speed.to, 46, 'Speed to', 1, T.speed.from + room(T.speed), 2000)}</td><td>${field('mtSn', T.speed.n, 36, 'Speed squares', 1, 1, 10)}</td></tr>
+            <tr class="lw-vals"><td></td><td colspan="3">${vals(T.speed, 'mm/s')}</td></tr>
+            <tr><td>Power <small>%</small><br><small>towards the front</small></td><td>${field('mtPf', T.power.from, 46, 'Power from', 5, 1, T.power.to - room(T.power))}</td><td>${field('mtPt', T.power.to, 46, 'Power to', 5, T.power.from + room(T.power), 100)}</td><td>${field('mtPn', T.power.n, 36, 'Power squares', 1, 1, 10)}</td></tr>
+            <tr class="lw-vals"><td></td><td colspan="3">${vals(T.power, '%')}</td></tr></table>
+          ${warn ? `<div class="lw-warnmini" role="alert">⚠ ${esc(warn)}</div>` : ''}
+          ${S.help ? `<p class="lw-help"><b>Squares</b> is how many squares to try in each direction, not a size. The numbers in between are spread evenly: 4 squares from 8 to 20 mm/s tries 8, 12, 16 and 20. Start wide (e.g. speed 5 to 25, power 40 to 80), then do a second, narrower test around the best square.</p>` : ''}
           <div class="lw-row wrap small"><label>Square ${field('mtSz', T.size, 38)} mm</label><label>Gap ${field('mtGap', T.gap, 38)} mm</label><label>Passes ${field('mtPass', T.passes, 32)}</label>${T.mode === 'engrave' ? `<label>Line interval ${field('mtInt', T.interval, 42)} mm</label>` : ''}</div>
           <div class="lw-read">${n} squares · ${Math.round(w)} × ${Math.round(h)} mm · about ${fmtTime(testTime(T))}${n === 30 ? ' · 30 is the most (LightBurn has 30 layer colours)' : ''}</div>
           <div class="lw-row wrap"><button type="button" class="btn primary" id="mtSave">Save test for LightBurn</button><button type="button" class="btn" id="mtList">Save the settings list</button></div>
@@ -853,9 +922,18 @@ export function openLaser(ed: Editor, saveFile: (name: string, text: string) => 
       </div>`;
       const q = <E extends HTMLElement>(id: string) => ov.querySelector('#' + id) as E | null;
       q('mtBack')!.onclick = shut;
-      ov.querySelectorAll<HTMLElement>('[data-mode]').forEach(b => b.onclick = () => { T.mode = b.dataset.mode as TestMode; best = -1; keep(); });
+      ov.querySelectorAll<HTMLElement>('[data-mode]').forEach(b => b.onclick = () => { if (T.mode !== b.dataset.mode) undo.push(JSON.stringify(T)); T.mode = b.dataset.mode as TestMode; best = -1; keep(); });
       ov.querySelectorAll<SVGGElement>('[data-cell]').forEach(g => g.addEventListener('click', () => { best = +g.dataset.cell!; render(); }));
-      const nIn = (id: string, lo: number, hi: number, set: (v: number) => void) => { const el = q<HTMLInputElement>(id); if (el) el.onchange = () => { const v = num(el.value, lo, hi); if (v != null) { set(v); best = -1; } keep(); }; };
+      // a change that makes a range impossible (From above To, or squares that would repeat a value) is refused with a short warning
+      const nIn = (id: string, lo: number, hi: number, set: (v: number) => void) => { const el = q<HTMLInputElement>(id); if (el) el.onchange = () => {
+        const v = num(el.value, lo, hi); if (v == null) { tell('That number is out of range.'); render(); return; }
+        const before = JSON.stringify(T); set(v);
+        const bad = rangeProblem(T.speed) || rangeProblem(T.power);
+        if (bad) { T = JSON.parse(before); tell(bad); render(); return; }
+        if (JSON.stringify(T) !== before) { undo.push(before); best = -1; } keep();
+      }; };
+      q('mtUndo')!.onclick = () => { const u = undo.pop(); if (!u) return; T = JSON.parse(u); best = -1; warn = ''; keep(); };
+      q('mtReset')!.onclick = () => { undo.push(JSON.stringify(T)); T = { ...structuredClone(DEFAULT_TEST), name: T.name, thickness: T.thickness, mode: T.mode }; best = -1; warn = ''; keep(); };
       nIn('mtTh', 0, 100, v => T.thickness = v); nIn('mtSf', 0.5, 2000, v => T.speed.from = v); nIn('mtSt', 0.5, 2000, v => T.speed.to = v); nIn('mtSn', 1, 10, v => T.speed.n = Math.round(v));
       nIn('mtPf', 1, 100, v => T.power.from = v); nIn('mtPt', 1, 100, v => T.power.to = v); nIn('mtPn', 1, 10, v => T.power.n = Math.round(v));
       nIn('mtSz', 3, 50, v => T.size = v); nIn('mtGap', 1, 30, v => T.gap = v); nIn('mtPass', 1, 20, v => T.passes = Math.round(v)); nIn('mtInt', 0.02, 2, v => T.interval = v);
@@ -873,6 +951,8 @@ export function openLaser(ed: Editor, saveFile: (name: string, text: string) => 
       };
     };
     const keep = () => { T = fitGrid(T); S.test = T; save(); render(); };
+    /** a short warning under the table that goes away by itself */
+    const tell = (t: string) => { warn = t; clearTimeout(warnT); warnT = window.setTimeout(() => { warn = ''; if (ov.isConnected) render(); }, 4500); };
     render();
   }
 

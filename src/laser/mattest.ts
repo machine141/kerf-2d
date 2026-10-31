@@ -104,3 +104,17 @@ export function testTime(t: TestSpec, m: Motion = DEFAULT_MOTION): number {
   }
   return total;
 }
+
+/** The smallest difference between two squares' values that still reads as different (whole numbers from 10 up, else halves). */
+export const minGap = (r: Range) => Math.max(r.from, r.to) >= 10 ? 1 : 0.5;
+/**
+ * Is this range usable? From must be lower than To, and far enough apart that every square gets its own value
+ * (4 squares from 50 to 52 would repeat numbers). A short message if not, null if it's fine.
+ */
+export function rangeProblem(r: Range): string | null {
+  const n = Math.max(1, Math.round(r.n));
+  if (n === 1) return null;
+  if (r.from >= r.to) return 'From must be lower than To.';
+  const v = steps(r); if (new Set(v).size < v.length) return `Too close for ${n} squares: at least ${+((n - 1) * minGap(r)).toFixed(1)} apart, or fewer squares.`;
+  return null;
+}

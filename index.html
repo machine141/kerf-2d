@@ -470,6 +470,9 @@ body.dropping #main{outline:3px dashed var(--accent);outline-offset:-6px}
 #laserWs .lw-opf small{color:var(--muted)}
 #laserWs .lw-read.small{font-size:12px;color:var(--muted)}
 #laserWs .lw-set{border-collapse:collapse;width:100%}
+#laserWs .lw-more{margin:6px 0;font-size:13px}#laserWs .lw-more summary{cursor:pointer;font-weight:500;padding:3px 0}#laserWs .lw-more .tog{display:flex;gap:8px;align-items:center;margin:6px 0}
+#laserWs .lw-in{min-width:0}#laserWs .lw-in select{max-width:100%;min-width:0}
+#laserWs .lw-lasers{gap:4px 14px;margin:4px 0 8px}#laserWs .lw-pick{font:inherit;max-width:180px}
 #laserWs .lw-extras{margin:8px 0 2px;font-size:13px}#laserWs .lw-extras summary{cursor:pointer;color:var(--fg);font-weight:500;padding:3px 0}
 #laserWs .lw-extras .tog{display:flex;align-items:flex-start;gap:8px;margin:7px 0 0}#laserWs .lw-extras .tog span{display:grid;gap:1px}#laserWs .lw-extras .tog small{color:var(--muted);font-size:11.5px;line-height:1.35}
 #laserWs .lw-tabset{margin:4px 0 0 44px;gap:12px}#laserWs .lw-pill{background:var(--accent);color:var(--accent-fg);border-radius:9px;padding:0 7px;font-size:11px;margin-left:4px}
@@ -503,6 +506,9 @@ body.dropping #main{outline:3px dashed var(--accent);outline-offset:-6px}
 #laserWs .lw-testtab{border-collapse:collapse;font-size:13px}#laserWs .lw-testtab th{font-weight:500;color:var(--muted);font-size:11.5px;text-align:left;padding:0 6px 3px 0}#laserWs .lw-testtab td{padding:2px 6px 2px 0;vertical-align:middle}#laserWs .lw-testtab small{color:var(--muted)}
 #laserWs .lw-mode{display:inline-flex;flex-wrap:wrap;justify-self:start}#laserWs .lw-mode button[aria-checked="true"]{background:var(--accent);color:var(--accent-fg)}#laserWs .lw-mode button{padding:4px 10px}
 #laserWs .lw-testright{display:grid;gap:8px;min-width:0}
+#laserWs .lw-testtab .lw-vals td{font-size:11.5px;color:var(--muted);padding:0 0 6px;font-family:var(--f-mono,monospace)}#laserWs .lw-dim{opacity:.75}
+#laserWs .lw-warnmini{font-size:12.5px;color:var(--bad,#b42318);background:color-mix(in srgb,var(--bad,#b42318) 10%,transparent);border-radius:6px;padding:4px 8px}
+#laserWs .lw-link[disabled]{opacity:.4;cursor:default}
 #laserWs .lw-testpic{width:100%;max-height:62vh;background:var(--sheet,#fff);border:1px solid var(--line);border-radius:8px}
 #laserWs .lw-testpic text{fill:var(--fg);font-family:var(--f-mono,monospace)}#laserWs .lw-testpic text.ax{fill:var(--muted)}#laserWs .lw-testpic text.ln{fill:var(--muted);pointer-events:none}
 #laserWs .lw-testpic .cell{cursor:pointer}#laserWs .lw-testpic .cell:hover polygon{stroke-width:1}#laserWs .lw-testpic .cell.best polygon{stroke:var(--accent)!important;stroke-width:1.4!important}
@@ -577,7 +583,7 @@ body.dropping #main{outline:3px dashed var(--accent);outline-offset:-6px}
 </head>
 <body>
 <header>
-  <div class="brand"><b>Kerf 2D</b><span>precision drafting · v1.11</span></div>
+  <div class="brand"><b>Kerf 2D</b><span>precision drafting · v1.12</span></div>
   <div class="files">
     <button class="btn" id="bNew" title="Start a new drawing">New</button>
     <button class="btn" id="bOpen" title="Open a Kerf drawing, or bring in an SVG, DXF or picture">Open…</button>

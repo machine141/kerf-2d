@@ -40,3 +40,18 @@ describe('material test grid', () => {
     expect(fast).toBeGreaterThan(16 * 40 / 20); expect(fast).toBeLessThan(16 * 40 / 20 * 2 + 20);
   });
 });
+
+import { rangeProblem } from '../src/laser/mattest';
+describe('material test: ranges that make sense', () => {
+  it('From must be lower than To', () => {
+    expect(rangeProblem({ from: 20, to: 8, n: 4 })).toMatch(/lower/);
+    expect(rangeProblem({ from: 20, to: 20, n: 4 })).toMatch(/lower/);
+    expect(rangeProblem({ from: 20, to: 20, n: 1 })).toBeNull();
+  });
+  it('every square must get its own value', () => {
+    expect(rangeProblem({ from: 50, to: 52, n: 4 })).toMatch(/Too close for 4/);
+    expect(rangeProblem({ from: 50, to: 53, n: 4 })).toBeNull();
+    expect(rangeProblem({ from: 2, to: 3, n: 3 })).toBeNull();      // 2, 2.5, 3
+    expect(rangeProblem({ from: 2, to: 2.5, n: 3 })).toMatch(/Too close/);
+  });
+});
