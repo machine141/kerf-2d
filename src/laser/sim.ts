@@ -65,12 +65,13 @@ export function placement(box: { x0: number; y0: number; x1: number; y1: number 
 }
 
 /** Build the timeline for a drawing's laser paths (already in cut order) placed on the bed with these settings. */
-export function simulate(ps: LPath[], B: (p: Point) => Point, set: JobSettings, start: Point, m: Motion = DEFAULT_MOTION): Sim {
+export function simulate(ps: LPath[], B: (p: Point) => Point, set: JobSettings | ((p: LPath) => PhaseSet | undefined), start: Point, m: Motion = DEFAULT_MOTION): Sim {
+  const setOf = typeof set === 'function' ? set : (p: LPath) => set[p.phase];
   const steps: Step[] = []; let t = 0, head = start, cutLen = 0, travelLen = 0, cutTime = 0, travelTime = 0, engraveTime = 0;
   let bx0 = Infinity, by0 = Infinity, bx1 = -Infinity, by1 = -Infinity; const grow = (p: Point) => { bx0 = Math.min(bx0, p.x); by0 = Math.min(by0, p.y); bx1 = Math.max(bx1, p.x); by1 = Math.max(by1, p.y); };
   const travel = (to: Point) => { const d = dist(head, to); if (d < 1e-6) return; const dur = runTime(d, m.rapid, m.accel); steps.push({ k: 'travel', pts: [head, to], t0: t, dur, len: d }); t += dur; travelLen += d; travelTime += dur; head = to; };
   for (const p of ps) {
-    const s = set[p.phase]; if (!s || !s.on) continue;
+    const s = setOf(p); if (!s || !s.on) continue;
     if (p.kind === 'area') {
       const rings = p.rings.map(r => sampleSegs(r, 0.05).map(B)), step = Math.max(0.02, s.interval ?? 0.1), rows = scanRows(rings, step);
       if (!rows.length) continue; rings.flat().forEach(grow);

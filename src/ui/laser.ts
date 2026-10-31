@@ -6,20 +6,15 @@
  */
 import type { Editor } from '../editor/editor';
 import { P, type Point } from '../geometry/vec';
-import { COLORS, type Doc, type ColorKey } from '../model/types';
+import { COLORS, MODE_LABEL, modeOf, type Doc, type ColorKey } from '../model/types';
 import { sheetDoc } from '../io/sheets';
 import { cutOrder, type LPath, type Phase, PHASES } from '../laser/order';
 import { exportLaserSVG } from '../laser/export';
-import { simulate, placement, fmtTime, clock, DEFAULT_MOTION, type Sim, type Step } from '../laser/sim';
-import { loadState, saveState, cornerPt, fitsBed, MATERIALS, type LaserState, type Corner, type Material } from '../laser/machine';
+import { simulate, placement, fmtTime, clock, DEFAULT_MOTION, type Sim, type Step, type PhaseSet } from '../laser/sim';
+import { loadState, saveState, cornerPt, fitsBed, overlapsTraces, EXAMPLES, type LaserState, type Corner } from '../laser/machine';
+import { buildJob, colsThatFit, thin } from '../laser/job';
 
 const PH_LABEL: Record<Phase, string> = { engrave: 'Engrave area', score: 'Engrave line', cut: 'Cut' };
-const PH_HELP: Record<Phase, string> = {
-  engrave: 'Fills the inside of a shape by sweeping back and forth (like a printer).',
-  score: 'Marks the line on the surface without cutting through.',
-  cut: 'Cuts right through the material.',
-};
-const CORNER_LABEL: Record<Corner, string> = { 'back-left': 'back-left', 'back-right': 'back-right', 'front-left': 'front-left', 'front-right': 'front-right' };
 const esc = (s: string) => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' } as any)[c]);
 const r1 = (v: number) => (Math.round(v * 10) / 10).toString();
 const hexOf = (k: string) => k === 'paint' ? '#E58FB0' : (COLORS[k as ColorKey]?.hex || '#000');
@@ -28,7 +23,8 @@ export function openLaser(ed: Editor, saveFile: (name: string, text: string) => 
   document.getElementById('laserWs')?.remove();
   const S: LaserState = loadState();
   const nS = Math.max(1, ed.doc.sheets || 1); let sheet = 0;
-  let doc: Doc, paths: LPath[] = [], box = { x0: 0, y0: 0, x1: 0, y1: 0 }, sim: Sim | null = null;
+  let base: Doc, doc: Doc, paths: LPath[] = [], box = { x0: 0, y0: 0, x1: 0, y1: 0 }, sim: Sim | null = null;
+  let addingMat = false, matDirty = false;
   let ruler: Point | null = null, rulerOn = false, tPlay = 0, playing = false, speed = 10, showTravel = true, frameAnim: number | null = null;
   const save = () => saveState(S);
 
@@ -59,14 +55,17 @@ export function openLaser(ed: Editor, saveFile: (name: string, text: string) => 
   const canvas = $<HTMLCanvasElement>('#lwBed'), ctx = canvas.getContext('2d')!;
 
   // ---------- the job ----------
-  function loadJob() {
-    doc = nS > 1 ? sheetDoc(ed.doc, sheet) : ed.doc;
-    const start0 = P(0, doc.page.h);
-    paths = cutOrder(doc, { start: start0 }).paths;
-    const pts = paths.flatMap(p => p.pts);
-    box = pts.length ? pts.reduce((b, p) => ({ x0: Math.min(b.x0, p.x), y0: Math.min(b.y0, p.y), x1: Math.max(b.x1, p.x), y1: Math.max(b.y1, p.y) }), { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity }) : { x0: 0, y0: 0, x1: 0, y1: 0 };
+  function loadJob() { base = nS > 1 ? sheetDoc(ed.doc, sheet) : ed.doc; makeJob(); }
+  /** the sheet's drawing turned and copied as asked, moved to (0, 0) */
+  function makeJob() {
+    const one = buildJob(base, { turns: S.turns, copies: 1, gap: S.gap, cols: 1 });
+    const x = S.placeMode === 'bed' ? S.at.x : S.head.x - (S.anchor === 'centre' ? one.W / 2 : 0);
+    const j = S.copies > 1 ? buildJob(base, { turns: S.turns, copies: S.copies, gap: S.gap, cols: colsThatFit(S.machine.bedW, x, one.one.w, S.gap) }) : one;
+    doc = j.doc; box = { x0: 0, y0: 0, x1: j.W, y1: j.H };
     rebuild();
   }
+  /** settings for a colour: its own row, or (until it has one) what its kind of job starts with */
+  const setFor = (k: string, ph: Phase): PhaseSet => S.colors[k] ?? S.phase[ph];
   const jobW = () => box.x1 - box.x0, jobH = () => box.y1 - box.y0;
   /** where the job's top-left goes on the bed */
   const jobAt = (): Point => S.placeMode === 'bed' ? S.at : S.anchor === 'centre' ? P(S.head.x - jobW() / 2, S.head.y - jobH() / 2) : S.head;
@@ -76,11 +75,18 @@ export function openLaser(ed: Editor, saveFile: (name: string, text: string) => 
     const pl = placement(box, jobAt());
     // order again from where the head really starts, then simulate
     const st = pl.toDoc(startPt()); paths = cutOrder(doc, { start: st }).paths;
-    sim = simulate(paths, pl.toBed, S.settings, startPt(), DEFAULT_MOTION);
+    sim = simulate(paths, pl.toBed, p => setFor(String(p.key), p.phase), startPt(), DEFAULT_MOTION);
     tPlay = Math.min(tPlay, sim.total); msg('');
+    overlapN = S.traces.length ? overlapsTraces(jobParts().map(q => thin(q, 1)), S.traces) : 0;
     renderSteps(); draw(); updatePlayer();
   }
   const present = () => new Set(paths.map(p => p.phase));
+  /** the colours in the job, in the order the laser does them */
+  const colours = () => { const seen = new Map<string, Phase>(); for (const ph of PHASES) for (const p of paths) if (p.phase === ph && !seen.has(String(p.key))) seen.set(String(p.key), ph); return [...seen]; };
+  /** outlines of the job on the bed (from the simulation) */
+  const jobParts = () => (sim?.steps || []).flatMap(st => st.k === 'line' ? [st.pts] : st.k === 'area' ? st.rings : []);
+  let overlapN = 0;
+  const overlap = () => overlapN;
 
   // ---------- steps ----------
   function stepHtml(n: number, title: string, open: boolean, summary: string, body: string, id: string) {
@@ -98,17 +104,25 @@ export function openLaser(ed: Editor, saveFile: (name: string, text: string) => 
       ${help('Click the <b>corner the head goes to</b> when you switch the laser on (the green dot). Then press <b>Show how it should frame</b> and compare with the real laser’s Frame. If the real head went the other way, press a <b>Flip</b> until the picture matches.')}
       <div class="lw-row wrap"><button type="button" class="btn" id="lwOriPlay">▶ Show how it should frame</button><button type="button" class="btn" id="lwFlipLR" aria-pressed="${m.flipLR}">Flip left ↔ right</button><button type="button" class="btn" id="lwFlipFB" aria-pressed="${m.flipFB}">Flip front ↕ back</button></div>
       <button type="button" class="btn primary" id="lwSetUp">Done: my laser is set up</button>`, 'lwS1');
-    const rows = PHASES.filter(ph => has.has(ph)).map(ph => { const st = S.settings[ph]; const cols = [...new Set(paths.filter(p => p.phase === ph).map(p => p.key))];
-      return `<div class="lw-op${st.on ? '' : ' off'}" data-ph="${ph}">
-        <div class="lw-oph">${cols.map(k => `<span class="sw" style="background:${hexOf(String(k))}"></span>`).join('')}<b>${PH_LABEL[ph]}</b><label class="tog" title="Switch this off to skip it"><input type="checkbox" role="switch" data-f="on" ${st.on ? 'checked' : ''} aria-label="${PH_LABEL[ph]}: do this"> ${st.on ? 'On' : 'Off'}</label></div>
-        ${S.help ? `<div class="lw-help small">${PH_HELP[ph]}</div>` : ''}
-        <div class="lw-opf"><label>Speed <input type="text" inputmode="decimal" data-f="speed" value="${st.speed}"> <small>mm/s</small></label><label>Power <input type="text" inputmode="decimal" data-f="power" value="${st.power}"> <small>%</small></label><label>Passes <input type="text" inputmode="numeric" data-f="passes" value="${st.passes}"></label><label class="tog"><input type="checkbox" role="switch" data-f="air" ${st.air ? 'checked' : ''}> Air</label></div>
-      </div>`; }).join('');
+    const mine = S.myMaterials.find(m => m.id === S.material);
+    const rows = colours().map(([k, ph]) => { const st = setFor(k, ph), name = k === 'paint' ? 'Fills' : COLORS[k as ColorKey]?.label || k;
+      const does = k === 'paint' ? PH_LABEL.engrave : MODE_LABEL[modeOf(doc, k as ColorKey)];
+      return `<tr data-k="${k}" data-ph="${ph}" class="${st.on ? '' : 'off'}" title="${esc(name)}: ${does.toLowerCase()} (set in the drawing)"><td><span class="sw" style="background:${hexOf(k)}"></span>${esc(name)}</td>
+        <td><input type="text" inputmode="decimal" data-f="speed" value="${st.speed}" aria-label="${esc(name)} speed"></td>
+        <td><input type="text" inputmode="decimal" data-f="power" value="${st.power}" aria-label="${esc(name)} power"></td>
+        <td><input type="text" inputmode="numeric" data-f="passes" value="${st.passes}" aria-label="${esc(name)} passes"></td>
+        <td><label class="tog sm"><input type="checkbox" role="switch" data-f="air" ${st.air ? 'checked' : ''} aria-label="${esc(name)} air"></label></td>
+        <td><label class="tog sm"><input type="checkbox" role="switch" data-f="on" ${st.on ? 'checked' : ''} aria-label="${esc(name)} on"></label></td></tr>`; }).join('');
     const s2 = stepHtml(2, 'Material and settings', true, '', `
-      <label class="lw-row">Material <select id="lwMat">${(Object.keys(MATERIALS) as Material[]).map(k => `<option value="${k}" ${k === S.material ? 'selected' : ''}>${MATERIALS[k].label}</option>`).join('')}</select></label>
-      ${rows || '<p class="bad">Nothing on this sheet is set to cut or engrave.</p>'}
-      ${has.size ? `<p class="lw-read small">The laser does them in this order: ${PHASES.filter(ph => has.has(ph)).map(ph => PH_LABEL[ph].toLowerCase()).join(' → ')}.</p>` : ''}
-      ${help('<b>Speed</b>: how fast the head moves (slower cuts deeper). <b>Power</b>: how strong the laser is. <b>Passes</b>: how many times it goes round. <b>Air</b>: blows away smoke and flames. The material settings are <b>examples only</b>: always test on a scrap first and change them to what works on your laser.')}`, 'lwS2');
+      <div class="lw-row"><select id="lwMat" aria-label="Material">
+        <option value="" ${S.material === '' ? 'selected' : ''}>Choose a material…</option>
+        ${S.myMaterials.length ? `<optgroup label="My materials">${S.myMaterials.map(m => `<option value="${m.id}" ${m.id === S.material ? 'selected' : ''}>${esc(m.name)}</option>`).join('')}</optgroup>` : ''}
+        <optgroup label="Examples (test on scrap first)">${Object.entries(EXAMPLES).map(([k, e]) => `<option value="ex:${k}" ${'ex:' + k === S.material ? 'selected' : ''}>${e.label}</option>`).join('')}</optgroup>
+      </select><button type="button" class="btn" id="lwAddMat">+ Add material</button></div>
+      ${addingMat ? `<div class="lw-row"><input type="text" id="lwMatName" placeholder="Name, e.g. 3 mm birch ply" style="width:190px"><button type="button" class="btn primary" id="lwMatSave">Save</button><button type="button" class="lw-link" id="lwMatCancel">Cancel</button></div>` : ''}
+      ${mine ? `<div class="lw-row small">${matDirty ? `<button type="button" class="lw-link" id="lwMatUpd">Save changes to “${esc(mine.name)}”</button>` : ''}<button type="button" class="lw-link" id="lwMatDel">Delete “${esc(mine.name)}”</button></div>` : ''}
+      ${rows ? `<table class="lw-lay"><thead><tr><th></th><th>Speed<small>mm/s</small></th><th>Power<small>%</small></th><th>Passes</th><th>Air</th><th>On</th></tr></thead><tbody>${rows}</tbody></table>` : '<p class="bad">Nothing on this sheet is set to cut or engrave.</p>'}
+      ${help('One row per colour in your drawing, done top to bottom. <b>Speed</b>: how fast the head moves (slower cuts deeper). <b>Power</b>: how strong the laser is. <b>Passes</b>: how many times it goes round. <b>Air</b>: blows away smoke and flames. <b>On</b>: switch a colour off to skip it. Got settings that work? <b>+ Add material</b> keeps them for next time. The examples are only a starting point: always test on a scrap first.')}`, 'lwS2');
     const placeBody = `
       <div class="lw-cards" role="radiogroup">
         <button type="button" role="radio" data-pm="bed" aria-checked="${S.placeMode === 'bed'}"><b>Where it is on the bed</b><span>The picture is where it cuts. Drag the job, or type how far from the back-left corner.</span></button>
@@ -120,10 +134,17 @@ export function openLaser(ed: Editor, saveFile: (name: string, text: string) => 
         <div class="lw-row"><label>Head from the left <input type="text" inputmode="decimal" id="lwHX" value="${r1(S.head.x)}"> mm</label><label>from the back <input type="text" inputmode="decimal" id="lwHY" value="${r1(S.head.y)}"> mm</label></div>
         <div class="lw-row">The head is at the job’s <div class="segc" id="lwAnchor"><button type="button" data-v="top-left" aria-pressed="${S.anchor === 'top-left'}">top-left corner</button><button type="button" data-v="centre" aria-pressed="${S.anchor === 'centre'}">middle</button></div></div>
         ${help('Until Kerf is connected to the laser, type where you moved the head to (or drag the cross on the bed). The job moves with the head, so what you see is what Frame will trace.')}`}
-      <div class="lw-row wrap"><button type="button" class="btn${rulerOn ? ' on' : ''}" id="lwRuler" aria-pressed="${rulerOn}">📏 Ruler</button>${ruler ? `<button type="button" class="lw-link" id="lwRulerClear">Clear ruler</button>` : ''}</div>
+      <div class="lw-row wrap"><span>Turn</span><button type="button" class="btn" id="lwTurnL" title="Turn a quarter turn anticlockwise">⟲</button><button type="button" class="btn" id="lwTurnR" title="Turn a quarter turn clockwise">⟳</button>
+        <label>Copies <input type="text" inputmode="numeric" id="lwCopies" value="${S.copies}"></label>${S.copies > 1 ? `<label>gap <input type="text" inputmode="decimal" id="lwGap" value="${S.gap}"> mm</label>` : ''}</div>
+      <div class="lw-row wrap"><button type="button" class="btn${rulerOn ? ' on' : ''}" id="lwRuler" aria-pressed="${rulerOn}">📏 Ruler</button>${ruler ? `<button type="button" class="btn" id="lwToRuler" title="Put the job's top-left corner on the ruler point">Move job to the ruler point</button><button type="button" class="lw-link" id="lwRulerClear">Clear ruler</button>` : ''}</div>
       ${ruler ? `<p class="lw-read">From the ruler point, the job starts <b>${r1(jobBox().x0 - ruler.x)} mm</b> ${jobBox().x0 >= ruler.x ? 'to the right' : 'to the left'} and <b>${r1(jobBox().y0 - ruler.y)} mm</b> ${jobBox().y0 >= ruler.y ? 'towards the front' : 'towards the back'}.</p>` : help('<b>Ruler</b>: click the bed to put a reference point (e.g. the corner of your acrylic). Kerf shows how far the job is from it.')}
-      <p class="lw-read">Job size: <b>${r1(jobW())} × ${r1(jobH())} mm</b></p>
-      ${fit ? `<p class="bad">⚠ ${fit} Move the job so it fits on the bed.</p>` : `<p class="ok">✓ Fits on the bed.</p>`}`;
+      <div class="lw-cut">
+        <label class="tog"><input type="checkbox" role="switch" id="lwTraces" ${S.showTraces ? 'checked' : ''}> Show what’s already been cut${S.traces.length ? ` (${S.traces.length})` : ''}</label>
+        ${S.traces.length ? `<div class="lw-row wrap"><button type="button" class="btn" id="lwNext">Next to the last cut</button><button type="button" class="lw-link" id="lwClearCut">New sheet: clear</button></div>` : help('After a job is cut, press <b>It’s been cut</b> in step 5. Kerf then shows a grey shadow of it here, so you can put the next job (or a re-cut) in the space that’s left.')}
+      </div>
+      <p class="lw-read">Job size: <b>${r1(jobW())} × ${r1(jobH())} mm</b>${S.copies > 1 ? ` (${S.copies} copies)` : ''}</p>
+      ${fit ? `<p class="bad">⚠ ${fit} Move the job so it fits on the bed.</p>` : `<p class="ok">✓ Fits on the bed.</p>`}
+      ${overlap() ? `<p class="bad">⚠ This lands on something already cut. Move it into the empty space (or press <b>Next to the last cut</b>).</p>` : ''}`;
     const s3 = stepHtml(3, 'Place it on the bed', true, '', placeBody, 'lwS3');
     const s4 = stepHtml(4, 'Check it', true, '', est ? `
       <p class="lw-big">About <b>${fmtTime(est.total)}</b></p>
@@ -132,6 +153,7 @@ export function openLaser(ed: Editor, saveFile: (name: string, text: string) => 
       ${help('<b>Preview</b> plays the job in the order the laser will follow (holes before outlines; red dashes are moves with the laser off). <b>Show the frame</b> draws the box the head will trace around the job. The time is an estimate; it gets closer once we read your laser’s own settings.')}` : '', 'lwS4');
     const s5 = stepHtml(5, 'Send', true, '', `
       <div class="lw-row wrap"><button type="button" class="btn primary" id="lwSave">Save file for LightBurn</button><button type="button" class="btn" disabled>Send to the laser</button></div>
+      <button type="button" class="btn" id="lwCutDone" title="Leave a grey shadow of this job on the bed, so the next one goes in the space that's left">✓ It’s been cut: remember where</button>
       ${help('For now, save the file and open it in LightBurn (<b>File → Import</b>; in Optimization Settings switch optimisation off to keep this order). Sending straight to the laser comes when we connect Kerf to it, with a check before anything moves.')}`, 'lwS5');
     $('#lwSteps').innerHTML = s1 + s2 + s3 + s4 + s5;
     bindSteps(); drawOri();
@@ -155,12 +177,32 @@ export function openLaser(ed: Editor, saveFile: (name: string, text: string) => 
       if (S.machine.flipLR) c = c.replace(/left|right/, w => w === 'left' ? 'right' : 'left') as Corner;
       if (S.machine.flipFB) c = c.replace(/back|front/, w => w === 'back' ? 'front' : 'back') as Corner;
       S.machine.park = c; save(); rebuild(); };
-    on('lwMat', 'change', e => { S.material = (e.target as HTMLSelectElement).value as Material; S.settings = structuredClone(MATERIALS[S.material].s); save(); rebuild(); });
-    root.querySelectorAll<HTMLInputElement>('.lw-op input').forEach(i => i.addEventListener('change', () => {
-      const ph = (i.closest('.lw-op') as HTMLElement).dataset.ph as Phase, f = i.dataset.f!, st = S.settings[ph] as any;
+    on('lwMat', 'change', e => {
+      const v = (e.target as HTMLSelectElement).value; if (!v) return;
+      if (v.startsWith('ex:')) { S.phase = structuredClone(EXAMPLES[v.slice(3)].s); S.colors = {}; }
+      else { const m = S.myMaterials.find(x => x.id === v); if (m) { S.phase = structuredClone(m.phase); S.colors = structuredClone(m.colors); } }
+      S.material = v; matDirty = false; save(); rebuild();
+    });
+    on('lwAddMat', 'click', () => { addingMat = true; renderSteps(); root.querySelector<HTMLInputElement>('#lwMatName')?.focus(); });
+    on('lwMatCancel', 'click', () => { addingMat = false; renderSteps(); });
+    const snapshot = () => { const colors: Record<string, PhaseSet> = structuredClone(S.colors); for (const [k, ph] of colours()) colors[k] = structuredClone(setFor(k, ph)); return colors; };
+    const addMat = () => {
+      const name = root.querySelector<HTMLInputElement>('#lwMatName')?.value.trim(); if (!name) { root.querySelector<HTMLInputElement>('#lwMatName')?.focus(); return; }
+      const id = 'm' + Date.now().toString(36); S.myMaterials.push({ id, name, colors: snapshot(), phase: structuredClone(S.phase) });
+      S.material = id; addingMat = false; matDirty = false; save(); renderSteps(); msg(`Saved “${name}”. Choose it next time to get these settings back.`);
+    };
+    on('lwMatSave', 'click', addMat);
+    on('lwMatName', 'keydown', e => { if ((e as KeyboardEvent).key === 'Enter') addMat(); });
+    on('lwMatUpd', 'click', () => { const m = S.myMaterials.find(x => x.id === S.material); if (!m) return; m.colors = snapshot(); m.phase = structuredClone(S.phase); matDirty = false; save(); renderSteps(); msg(`Saved the changes to “${m.name}”.`); });
+    on('lwMatDel', 'click', () => { const m = S.myMaterials.find(x => x.id === S.material); if (!m) return; S.myMaterials = S.myMaterials.filter(x => x !== m); S.material = ''; save(); renderSteps(); msg(`Deleted “${m.name}”. Your settings below are unchanged.`); });
+    root.querySelectorAll<HTMLInputElement>('.lw-lay input').forEach(i => i.addEventListener('change', () => {
+      const tr = i.closest('tr') as HTMLElement, k = tr.dataset.k!, ph = tr.dataset.ph as Phase, f = i.dataset.f!;
+      const st = { ...setFor(k, ph) } as any;
       if (f === 'air' || f === 'on') st[f] = i.checked;
-      else { const v = num(i.value, f === 'passes' ? 1 : 0.1, f === 'power' ? 100 : f === 'passes' ? 20 : 2000); if (v != null) st[f] = f === 'passes' ? Math.round(v) : v; }
-      S.material = 'custom'; MATERIALS.custom.s = structuredClone(S.settings); save(); rebuild();
+      else { const v = num(i.value, f === 'passes' ? 1 : 0.1, f === 'power' ? 100 : f === 'passes' ? 20 : 2000); if (v == null) { i.value = String(st[f]); return; } st[f] = f === 'passes' ? Math.round(v) : v; }
+      S.colors[k] = st;
+      if (S.material.startsWith('ex:')) S.material = ''; else if (S.material) matDirty = true;
+      save(); rebuild();
     }));
     root.querySelectorAll<HTMLElement>('.lw-cards button').forEach(b => b.onclick = () => { S.placeMode = b.dataset.pm as any; save(); rebuild(); });
     const setAt = (x: number | null, y: number | null) => { if (x != null) S.at = P(x, S.at.y); if (y != null) S.at = P(S.at.x, y); save(); rebuild(); };
@@ -173,9 +215,29 @@ export function openLaser(ed: Editor, saveFile: (name: string, text: string) => 
     root.querySelectorAll<HTMLElement>('#lwAnchor button').forEach(b => b.onclick = () => { S.anchor = b.dataset.v as any; save(); rebuild(); });
     on('lwRuler', 'click', () => { rulerOn = !rulerOn; msg(rulerOn ? 'Click the bed to put the ruler point.' : ''); renderSteps(); draw(); });
     on('lwRulerClear', 'click', () => { ruler = null; rulerOn = false; renderSteps(); draw(); });
+    on('lwToRuler', 'click', () => { if (!ruler) return; if (S.placeMode === 'bed') S.at = ruler; else S.head = S.anchor === 'centre' ? P(ruler.x + jobW() / 2, ruler.y + jobH() / 2) : ruler; save(); rebuild(); });
+    on('lwTurnL', 'click', () => { S.turns = (S.turns + 3) % 4; save(); makeJob(); });
+    on('lwTurnR', 'click', () => { S.turns = (S.turns + 1) % 4; save(); makeJob(); });
+    on('lwCopies', 'change', e => { const v = num((e.target as HTMLInputElement).value, 1, 200); if (v != null) { S.copies = Math.round(v); save(); makeJob(); } });
+    on('lwGap', 'change', e => { const v = num((e.target as HTMLInputElement).value, 0, 200); if (v != null) { S.gap = v; save(); makeJob(); } });
+    on('lwTraces', 'change', e => { S.showTraces = (e.target as HTMLInputElement).checked; save(); draw(); });
+    on('lwClearCut', 'click', () => { S.traces = []; save(); rebuild(); msg('Cleared: the bed is empty again.'); });
+    on('lwNext', 'click', () => {
+      const last = S.traces[S.traces.length - 1]; if (!last) return; const g = 5, m = S.machine;
+      const tries = [P(last.box.x1 + g, last.box.y0), P(last.box.x0, last.box.y1 + g), P(g, last.box.y1 + g)];
+      const ok = tries.find(t => !fitsBed(m, { x0: t.x, y0: t.y, x1: t.x + jobW(), y1: t.y + jobH() }));
+      if (!ok) { msg('There isn’t room beside the last cut. Try turning the job, or start a new sheet.', true); return; }
+      S.placeMode = 'bed'; S.at = ok; save(); rebuild(); msg('Moved next to the last cut.');
+    });
+    on('lwCutDone', 'click', () => {
+      const parts = jobParts().map(q => thin(q, 0.5)); if (!parts.length) return;
+      S.traces.push({ when: new Date().toISOString(), name: ed.doc.name || 'job', parts, box: jobBox(), start: jobAt() });
+      if (S.traces.length > 30) S.traces.shift();
+      S.showTraces = true; save(); rebuild(); msg('Remembered. A grey shadow shows where this was cut; put the next job in the space that’s left.');
+    });
     on('lwPrev', 'click', () => { if (sim && tPlay >= sim.total) tPlay = 0; play(true); });
     on('lwFrameScr', 'click', () => showFrame());
-    on('lwSave', 'click', () => { const x = exportLaserSVG(doc); saveFile((ed.doc.name || 'drawing').replace(/[^\w\- ]+/g, '').trim().replace(/\s+/g, '-') + (nS > 1 ? `-sheet${sheet + 1}` : '') + '-laser.svg', x.svg); });
+    on('lwSave', 'click', () => { const x = exportLaserSVG(doc, { start: placement(box, jobAt()).toDoc(startPt()) }); saveFile((ed.doc.name || 'drawing').replace(/[^\w\- ]+/g, '').trim().replace(/\s+/g, '-') + (nS > 1 ? `-sheet${sheet + 1}` : '') + '-laser.svg', x.svg); });
   }
   const msg = (t: string, bad = false) => { const el = $('#lwMsg'); el.textContent = t; el.classList.toggle('bad', bad); };
 
@@ -256,8 +318,18 @@ export function openLaser(ed: Editor, saveFile: (name: string, text: string) => 
     // parking corner
     const hm = toScr(cornerPt(m)); ctx.fillStyle = '#1a7f37'; ctx.beginPath(); ctx.arc(hm.x, hm.y, 5, 0, Math.PI * 2); ctx.fill();
     ctx.font = '10.5px system-ui, sans-serif'; ctx.textAlign = hm.x > a.x + bw / 2 ? 'right' : 'left'; ctx.fillText('parks here', hm.x + (hm.x > a.x + bw / 2 ? -8 : 8), hm.y + (hm.y > a.y + bh / 2 ? -8 : 14));
+    // what's already been cut on this sheet: grey shadows, and where the last job started
+    if (S.showTraces && S.traces.length) {
+      S.traces.forEach((t, i) => {
+        const lastOne = i === S.traces.length - 1;
+        ctx.beginPath(); for (const q of t.parts) q.forEach((p, j) => { const v = toScr(p); j ? ctx.lineTo(v.x, v.y) : ctx.moveTo(v.x, v.y); });
+        ctx.fillStyle = lastOne ? 'rgba(90,104,98,.28)' : 'rgba(90,104,98,.18)'; ctx.fill('evenodd');
+        ctx.strokeStyle = 'rgba(90,104,98,.7)'; ctx.lineWidth = 1; ctx.stroke();
+        if (lastOne) { const f = toScr(t.start); ctx.fillStyle = '#5a6862'; ctx.beginPath(); ctx.moveTo(f.x, f.y); ctx.lineTo(f.x, f.y - 14); ctx.lineTo(f.x + 10, f.y - 10); ctx.lineTo(f.x, f.y - 6); ctx.fill(); ctx.font = '10.5px system-ui, sans-serif'; ctx.textAlign = 'left'; ctx.fillText('last job started here', f.x + 12, f.y - 6); }
+      });
+    }
     // the job
-    const jb = jobBox(), fit = fitsBed(m, jb), j0 = toScr(P(jb.x0, jb.y0));
+    const jb = jobBox(), fit = fitsBed(m, jb) || (overlap() ? 'overlap' : null), j0 = toScr(P(jb.x0, jb.y0));
     ctx.fillStyle = fit ? 'rgba(198,40,40,.06)' : 'rgba(13,107,94,.05)'; ctx.fillRect(j0.x, j0.y, (jb.x1 - jb.x0) * s, (jb.y1 - jb.y0) * s);
     ctx.setLineDash([4, 3]); ctx.strokeStyle = fit ? '#c62828' : col('--accent', '#0d6b5e'); ctx.strokeRect(j0.x, j0.y, (jb.x1 - jb.x0) * s, (jb.y1 - jb.y0) * s); ctx.setLineDash([]);
     const done = sim && (playing || tPlay > 0) ? tPlay : -1;

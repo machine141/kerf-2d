@@ -469,6 +469,19 @@ body.dropping #main{outline:3px dashed var(--accent);outline-offset:-6px}
 #laserWs .lw-opf small{color:var(--muted)}
 #laserWs .lw-read.small{font-size:12px;color:var(--muted)}
 #laserWs .lw-set{border-collapse:collapse;width:100%}
+#laserWs .lw-lay{border-collapse:collapse;width:100%;font-size:12.5px}
+#laserWs .lw-lay th{font-size:11.5px;font-weight:500;color:var(--muted);text-align:center;padding:0 2px 4px;line-height:1.15;white-space:nowrap}
+#laserWs .lw-lay th small{display:block;font-size:10px}
+#laserWs .lw-lay td{padding:3px 2px;border-top:1px solid var(--line);text-align:center;white-space:nowrap}
+#laserWs .lw-lay td:first-child{text-align:left;max-width:90px;overflow:hidden;text-overflow:ellipsis}
+#laserWs .lw-lay tr.off td{opacity:.5}
+#laserWs .lw-lay input[type=text]{width:46px;padding:3px 4px;text-align:right}
+#laserWs .tog.sm{justify-content:center}
+#laserWs .tog.sm input{width:28px;height:16px}
+#laserWs .tog.sm input::after{width:12px;height:12px}
+#laserWs .tog.sm input:checked::after{left:14px}
+#laserWs .lw-row.small{font-size:12px;gap:14px}
+#laserWs .lw-cut{display:flex;flex-direction:column;gap:6px;border-top:1px dashed var(--line);padding-top:8px}
 #laserWs .lw-set th{font-size:11.5px;font-weight:500;color:var(--muted);text-align:left;padding:2px 4px;line-height:1.2}
 #laserWs .lw-set td{padding:5px 4px;border-top:1px solid var(--line);vertical-align:middle}
 #laserWs .lw-set td:first-child{width:40%}
@@ -488,7 +501,7 @@ body.dropping #main{outline:3px dashed var(--accent);outline-offset:-6px}
 </head>
 <body>
 <header>
-  <div class="brand"><b>Kerf 2D</b><span>precision drafting · v1.5</span></div>
+  <div class="brand"><b>Kerf 2D</b><span>precision drafting · v1.6</span></div>
   <div class="files">
     <button class="btn" id="bNew" title="Start a new drawing">New</button>
     <button class="btn" id="bOpen" title="Open a Kerf drawing, or bring in an SVG, DXF or picture">Open…</button>
