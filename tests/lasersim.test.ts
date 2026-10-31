@@ -119,3 +119,13 @@ describe('Already cut (shadows on the bed)', () => {
     expect(overlapsTraces([[P(10, 10), P(20, 10), P(20, 20), P(10, 20)]], [trace])).toBe(1);
   });
 });
+
+describe('Bed grid and snap', () => {
+  it('grid lines follow the bed size on screen: a small laser drawn big gets 1–2 mm lines; a big one 10 mm', async () => {
+    const { gridSteps, snapTo } = await import('../src/laser/machine');
+    expect(gridSteps(800 / 300).minor).toBeLessThanOrEqual(5);      // K40 300 mm across ~800 px
+    expect(gridSteps(800 / 1300).minor).toBeGreaterThanOrEqual(10);  // 1390 across the same space
+    const g = gridSteps(1.6); expect(g.major % g.minor).toBe(0); expect(g.label % g.major).toBe(0); expect(g.label * 1.6).toBeGreaterThanOrEqual(45);
+    expect(snapTo(12.4, 5)).toBe(10); expect(snapTo(12.6, 5)).toBe(15); expect(snapTo(7.26, 0.5)).toBe(7.5);
+  });
+});

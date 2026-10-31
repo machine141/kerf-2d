@@ -40,7 +40,24 @@ export interface LaserState {
   /** what has been cut on the current sheet of material, and whether to show it */
   traces: Trace[]; showTraces: boolean;
   help: boolean;
+  /** the bed view: snap to grid (and how fine), the cross in the middle of the bed */
+  snap: boolean; snapStep: number; showCentre: boolean;
+  /** locks: stop the job or the laser being moved by accident */
+  lockJob: boolean; lockLaser: boolean;
+  /** moving the laser with the arrows: how far each press goes, and how fast (used once Kerf is connected) */
+  jogStep: number; jogSpeed: 'slow' | 'medium' | 'fast';
+  /** quick changes: how much one scroll or arrow changes a size or angle by; keep the shape when resizing */
+  spinStep: number; keepShape: boolean;
 }
+
+/** Common laser sizes. Once Kerf is connected to a laser it will read the size from the laser itself. */
+export const BED_PRESETS: { name: string; w: number; h: number }[] = [
+  { name: 'Ruida 644XS · 6040 CO₂', w: 600, h: 400 },
+  { name: 'K40 CO₂ (small)', w: 300, h: 200 },
+  { name: 'Desktop diode laser', w: 400, h: 400 },
+  { name: '9060 CO₂', w: 900, h: 600 },
+  { name: '1390 CO₂ (large)', w: 1300, h: 900 },
+];
 
 /**
  * Example starting points only, for a 60 W CO₂ laser. Every machine and every sheet is different:
@@ -71,7 +88,18 @@ export const defaultState = (): LaserState => ({
   material: '', myMaterials: [], colors: {}, phase: structuredClone(START_SETTINGS),
   placeMode: 'bed', at: P(10, 10), head: P(300, 200), anchor: 'top-left',
   turns: 0, copies: 1, gap: 5, traces: [], showTraces: true, help: true,
+  snap: true, snapStep: 5, showCentre: true, lockJob: false, lockLaser: false,
+  jogStep: 10, jogSpeed: 'medium', spinStep: 1, keepShape: true,
 });
+
+/** Grid spacing for a bed drawn at `s` pixels per mm: fine lines at least ~7 px apart, labels at least ~45 px apart. */
+export function gridSteps(s: number): { minor: number; major: number; label: number } {
+  const nice = [1, 2, 5, 10, 20, 50, 100, 200, 500];
+  const minor = nice.find(v => v * s >= 7) ?? 500, major = nice.find(v => v >= minor * 5 && v % minor === 0) ?? minor * 5, label = nice.find(v => v * s >= 45 && v % major === 0) ?? major;
+  return { minor, major, label };
+}
+/** Round to the snap grid. */
+export const snapTo = (v: number, step: number) => Math.round(v / step) * step;
 
 const KEY = 'kerf.laser';
 export function loadState(): LaserState {
