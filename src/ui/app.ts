@@ -20,6 +20,7 @@ import { COLORS, WIDTHS, PAGES, MODE_LABEL, modeOf, colorLabel, newDoc, type Ent
 import { exportSVG, importSVG } from '../io/svg';
 import { exportLaserSVG } from '../laser/export';
 import { regroupFills } from '../tools/bucket';
+import { withPaintedSlits } from '../tools/hingebrush';
 import { openLaser } from './laser';
 import { exportDXF, importDXF, type DxfOptions } from '../io/dxf';
 import { zipOne } from '../io/zip';
@@ -313,7 +314,8 @@ export function startUI(ed: Editor) {
   function showExport(kind?: ExpKind) {
     if (kind) expKind = kind;
     const nS = Math.max(1, ed.doc.sheets || 1); if (exportSheet >= nS) exportSheet = 0;
-    const src = () => nS > 1 ? sheetDoc(ed.doc, exportSheet) : ed.doc;
+    // what you see is what you export: painted hinge patterns go in even before Make cuts
+    const src = () => { const d = withPaintedSlits(ed); return nS > 1 ? sheetDoc(d, exportSheet) : d; };
     const fname = () => base() + (nS > 1 ? `-sheet${exportSheet + 1}` : '') + EXP[expKind].ext;
     const m = (v: number) => v >= 1000 ? (v / 1000).toFixed(1) + ' m' : Math.round(v) + ' mm';
     const picture = (svg: string) => { $<HTMLImageElement>('#mImg').src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg.replace(/stroke-width="[\d.]+"/g, 'stroke-width="0.6"')); };

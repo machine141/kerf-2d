@@ -8,7 +8,7 @@ import { flatten } from '../geometry/entity';
 import { findRegion } from '../geometry/region';
 import type { Tool, OptionSpec } from '../editor/tool';
 import type { Editor } from '../editor/editor';
-import type { HingeMark, HingePattern, Shape } from '../model/types';
+import type { HingeMark, HingePattern, Shape, Doc, Entity } from '../model/types';
 import { computeHinge, autoAngle, HINGE_PATTERNS, patternInfo, MATERIALS, suggest, bendCheck, type HingeArea, type BrushSettings, type MaterialSet } from '../hinge/brush';
 import { laserTime } from '../hinge/hinge';
 
@@ -58,6 +58,18 @@ function placeSlits(ed: Editor, areas: HingeArea[]) {
   ed.store.remove(ed.doc.ents.filter(e => e.gen === 'hinge').map(e => e.id));
   const g = 'g' + ed.doc.seq++;
   for (const s of slitsOf(areas)) { const e = ed.store.add(s.length === 2 ? { type: 'line', a: s[0], b: s[1] } as Shape : { type: 'poly', closed: false, pts: s } as Shape); e.gen = 'hinge'; e.group = [g]; }
+}
+/**
+ * The drawing as it should go to the laser or an export: if hinge patterns have been painted but
+ * Make cuts hasn't been pressed yet, their slits are added (as Make cuts would make them), so
+ * "what you see is what gets cut". The drawing itself isn't changed.
+ */
+export function withPaintedSlits(ed: Editor): Doc {
+  const d = ed.doc; if (!d.hinge?.length || d.hingeMade) return d;
+  const slits = slitsOf(hingeAreas(ed)); if (!slits.length) return d;
+  const layer = d.current, color = d.attrs.color, w = d.attrs.w, g = 'g-hinge-preview';
+  const extra = slits.map((s, i) => ({ ...(s.length === 2 ? { type: 'line', a: s[0], b: s[1] } : { type: 'poly', closed: false, pts: s }), id: 'hp' + i, layer, color, w, gen: 'hinge', group: [g] }) as Entity);
+  return { ...d, ents: [...d.ents, ...extra] };
 }
 /** Change the painted areas (one undo step). After Make cuts, the slits follow straight away. */
 function mutate(ed: Editor, fn: () => void) {

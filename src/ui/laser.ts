@@ -13,6 +13,7 @@ import { exportLaserSVG } from '../laser/export';
 import { simulate, placement, fmtTime, clock, DEFAULT_MOTION, type Sim, type Step, type PhaseSet } from '../laser/sim';
 import { loadState, saveState, cornerPt, fitsBed, overlapsTraces, inside as insidePoly, EXAMPLES, BED_PRESETS, gridSteps, snapTo, type LaserState, type Corner } from '../laser/machine';
 import { buildJob, colsThatFit, thin, laserBox } from '../laser/job';
+import { withPaintedSlits } from '../tools/hingebrush';
 import { laserPaths } from '../laser/order';
 import { findParts, outlineOf } from '../nest/parts';
 import { affEnt, type Affine } from '../geometry/affine';
@@ -79,7 +80,8 @@ export function openLaser(ed: Editor, saveFile: (name: string, text: string) => 
   const canvas = $<HTMLCanvasElement>('#lwBed'), ctx = canvas.getContext('2d')!;
 
   // ---------- the job ----------
-  function loadJob() { base = nS > 1 ? sheetDoc(ed.doc, sheet) : ed.doc; makeJob(); }
+  // everything on screen goes to the laser, including hinge patterns painted but not yet turned into cuts
+  function loadJob() { const src = withPaintedSlits(ed); base = nS > 1 ? sheetDoc({ ...src, sheets: nS }, sheet) : src; makeJob(); }
   /** the sheet's drawing turned and copied as asked, moved to (0, 0) */
   function makeJob() {
     const one = buildJob(base, { turns: S.turns, copies: 1, gap: S.gap, cols: 1 });
