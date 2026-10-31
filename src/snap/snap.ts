@@ -7,6 +7,7 @@
 import { type Point, P, sub, add, mul, dot, dist, angOf, polar, DEG, cp } from '../geometry/vec';
 import { prims, keypoints, intersect, nearestOnPrim, bbox, type Prim, type SnapKind } from '../geometry/entity';
 import type { Aids, Entity, Shape } from '../model/types';
+import { gridSnap } from './grid';
 
 export type SnapLabel = SnapKind | 'grid' | 'step' | 'radial' | 'track' | 'close' | null;
 export interface SnapResult { p: Point; k: SnapLabel; guides?: { from: Point; to: Point }[] }
@@ -26,6 +27,8 @@ export interface SnapContext {
   geomPrims?: (e: Entity) => Prim[];
   /** recently touched snap points used for alignment guides */
   track?: Point[];
+  /** page size (circle grids are centred on the page) */
+  page?: { w: number; h: number };
 }
 
 export function snapPoint(raw: Point, c: SnapContext): SnapResult {
@@ -74,7 +77,7 @@ export function snapPoint(raw: Point, c: SnapContext): SnapResult {
     if (A.gridLock || A.stepLock) r = Math.round(r / A.step) * A.step;
     return { p: cp(polar(c.last, r, sa)), k: 'radial' };
   }
-  if (A.gridLock) { const g = A.grid.spacing; return { p: cp(P(Math.round(raw.x / g) * g, Math.round(raw.y / g) * g)), k: 'grid' }; }
+  if (A.gridLock) return { p: cp(gridSnap(raw, A.grid, c.page)), k: 'grid' };
   if (A.stepLock) { const g = A.step; return { p: cp(P(Math.round(raw.x / g) * g, Math.round(raw.y / g) * g)), k: 'step' }; }
   return { p: raw, k: null };
 }

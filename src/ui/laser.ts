@@ -18,6 +18,9 @@ import { laserPaths } from '../laser/order';
 import { findParts, outlineOf } from '../nest/parts';
 import { affEnt, type Affine } from '../geometry/affine';
 import type { Entity, Shape } from '../model/types';
+import { matchMaterial, jobLabel, thicknessIn } from '../laser/jobinfo';
+import { DEFAULT_TEST, MODE_TEXT, fitGrid, steps, testCells, testSize, testSVG, testList, testTime, cellPts, type TestSpec, type TestMode } from '../laser/mattest';
+import { LB_PALETTE } from '../laser/palette';
 
 const PH_LABEL: Record<Phase, string> = { engrave: 'Engrave area', score: 'Engrave line', cut: 'Cut' };
 const esc = (s: string) => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' } as any)[c]);
@@ -39,7 +42,7 @@ export function openLaser(ed: Editor, saveFile: (name: string, text: string) => 
   const S: LaserState = loadState();
   const nS = Math.max(1, ed.doc.sheets || 1); let sheet = 0;
   let base: Doc, doc: Doc, paths: LPath[] = [], box = { x0: 0, y0: 0, x1: 0, y1: 0 }, sim: Sim | null = null;
-  let addingMat = false, matDirty = false;
+  let addingMat = false, matDirty = false, matPre = { name: '', th: 0 };
   // quick changes on the bed: picked parts (by object id), parts left out of this cut, the parts themselves (bed coords)
   const sel = new Set<string>(), left = new Set<string>();
   /** which part each object belongs to: worked out once when the job is made, so parts keep their identity when resized or moved next to each other */
@@ -48,6 +51,20 @@ export function openLaser(ed: Editor, saveFile: (name: string, text: string) => 
   let xf: ((p: Point) => Point) | null = null, xfLabel = '', boxSel: { a: Point; b: Point } | null = null, setupAnim: number | null = null;
   let ruler: Point | null = null, rulerOn = false, tPlay = 0, playing = false, speed = 10, showTravel = true, frameAnim: number | null = null;
   const save = () => saveState(S);
+  /** choose a material: an example ('ex:…') or one of mine; its settings replace the ones in step 2 */
+  const useMaterial = (v: string) => {
+    if (v.startsWith('ex:')) { const e = EXAMPLES[v.slice(3)]; if (!e) return false; S.phase = structuredClone(e.s); S.colors = {}; }
+    else { const m = S.myMaterials.find(x => x.id === v); if (!m) return false; S.phase = structuredClone(m.phase); S.colors = structuredClone(m.colors); }
+    S.material = v; matDirty = false; return true;
+  };
+  // a job sent with the file (Hand in with material, or Export → For the technician): applied once, so the technician's own changes stay
+  const job = ed.doc.job, jobMatches = job ? matchMaterial(job, S.myMaterials) : [];
+  if (job && job.at !== S.jobAt) {
+    if (job.sheet != null && job.sheet < nS) sheet = job.sheet;
+    S.copies = Math.max(1, job.copies || 1);
+    if (jobMatches.length) useMaterial(jobMatches[0].value);
+    S.jobAt = job.at; save();
+  }
 
   const root = document.createElement('div'); root.id = 'laserWs'; root.setAttribute('role', 'dialog'); root.setAttribute('aria-modal', 'true'); root.setAttribute('aria-label', 'Laser');
   root.innerHTML = `
@@ -209,14 +226,18 @@ export function openLaser(ed: Editor, saveFile: (name: string, text: string) => 
         <td><input type="text" inputmode="numeric" data-f="passes" value="${st.passes}" aria-label="${esc(name)} passes"></td>
         <td><label class="tog sm"><input type="checkbox" role="switch" data-f="air" ${st.air ? 'checked' : ''} aria-label="${esc(name)} air"></label></td>
         <td><label class="tog sm"><input type="checkbox" role="switch" data-f="on" ${st.on ? 'checked' : ''} aria-label="${esc(name)} on"></label></td></tr>`; }).join('');
+    const chosen = jobMatches.find(c => c.value === S.material);
+    const askedBox = job ? `<div class="lw-job"><div>Asked for <b>${esc(jobLabel(job))}</b>${job.from ? ` · from ${esc(job.from)}` : ''}</div>${job.note ? `<div class="small">“${esc(job.note)}”</div>` : ''}
+      <div class="small">${chosen ? `✓ “${esc(chosen.name)}” chosen${S.material.startsWith('ex:') ? ' (an example: test on scrap first)' : ''}.` : jobMatches.length ? `Matches: ${jobMatches.map(c => `<button type="button" class="lw-link" data-usemat="${c.value}">${esc(c.name)}</button>`).join(', ')}` : `<span class="bad">None of your materials matches.</span> Choose one below, or set it up and press <b>+ Add material</b>.`}</div></div>` : '';
     const s2 = stepHtml(2, 'Material and settings', true, '', `
+      ${askedBox}
       <div class="lw-row"><select id="lwMat" aria-label="Material">
         <option value="" ${S.material === '' ? 'selected' : ''}>Choose a material…</option>
         ${S.myMaterials.length ? `<optgroup label="My materials">${S.myMaterials.map(m => `<option value="${m.id}" ${m.id === S.material ? 'selected' : ''}>${esc(m.name)}</option>`).join('')}</optgroup>` : ''}
         <optgroup label="Examples (test on scrap first)">${Object.entries(EXAMPLES).map(([k, e]) => `<option value="ex:${k}" ${'ex:' + k === S.material ? 'selected' : ''}>${e.label}</option>`).join('')}</optgroup>
-      </select><button type="button" class="btn" id="lwAddMat">+ Add material</button></div>
-      ${addingMat ? `<div class="lw-row"><input type="text" id="lwMatName" placeholder="Name, e.g. 3 mm birch ply" style="width:190px"><button type="button" class="btn primary" id="lwMatSave">Save</button><button type="button" class="lw-link" id="lwMatCancel">Cancel</button></div>` : ''}
-      ${mine ? `<div class="lw-row small">${matDirty ? `<button type="button" class="lw-link" id="lwMatUpd">Save changes to “${esc(mine.name)}”</button>` : ''}<button type="button" class="lw-link" id="lwMatDel">Delete “${esc(mine.name)}”</button></div>` : ''}
+      </select><button type="button" class="btn" id="lwAddMat">+ Add material</button><button type="button" class="btn" id="lwTest" title="Cut a grid of small squares at different speeds and powers to find the best settings for a new material">Material test…</button></div>
+      ${addingMat ? `<div class="lw-row"><input type="text" id="lwMatName" placeholder="Name, e.g. birch ply" value="${esc(matPre.name || (job ? job.material : ''))}" style="width:150px"><label class="small">Thickness <input type="text" id="lwMatTh" inputmode="decimal" value="${matPre.th || job?.thickness || ''}" placeholder="3" style="width:42px"> mm</label><button type="button" class="btn primary" id="lwMatSave">Save</button><button type="button" class="lw-link" id="lwMatCancel">Cancel</button></div>` : ''}
+      ${mine ? `<div class="lw-row small"><label>Thickness <input type="text" id="lwMyTh" inputmode="decimal" value="${mine.thickness || thicknessIn(mine.name) || ''}" placeholder="?" style="width:42px"> mm</label>${matDirty ? `<button type="button" class="lw-link" id="lwMatUpd">Save changes to “${esc(mine.name)}”</button>` : ''}<button type="button" class="lw-link" id="lwMatDel">Delete “${esc(mine.name)}”</button></div>` : ''}
       ${rows ? `<table class="lw-lay"><thead><tr><th></th><th>Speed<small>mm/s</small></th><th>Power<small>%</small></th><th>Passes</th><th>Air</th><th>On</th></tr></thead><tbody>${rows}</tbody></table>` : '<p class="bad">Nothing on this sheet is set to cut or engrave.</p>'}
       ${help('One row per colour in your drawing, done top to bottom. <b>Speed</b>: how fast the head moves (slower cuts deeper). <b>Power</b>: how strong the laser is. <b>Passes</b>: how many times it goes round. <b>Air</b>: blows away smoke and flames. <b>On</b>: switch a colour off to skip it. Got settings that work? <b>+ Add material</b> keeps them for next time. The examples are only a starting point: always test on a scrap first.')}`, 'lwS2');
     const placeBody = `
@@ -337,20 +358,24 @@ export function openLaser(ed: Editor, saveFile: (name: string, text: string) => 
     on('lwSetUp', 'click', () => { S.machine.setUp = true; save(); rebuild(); });
     on('lwMat', 'change', e => {
       const v = (e.target as HTMLSelectElement).value; if (!v) return;
-      if (v.startsWith('ex:')) { S.phase = structuredClone(EXAMPLES[v.slice(3)].s); S.colors = {}; }
-      else { const m = S.myMaterials.find(x => x.id === v); if (m) { S.phase = structuredClone(m.phase); S.colors = structuredClone(m.colors); } }
-      S.material = v; matDirty = false; save(); rebuild();
+      useMaterial(v); save(); rebuild();
     });
+    on('lwTest', 'click', () => openTest());
     on('lwAddMat', 'click', () => { addingMat = true; renderSteps(); root.querySelector<HTMLInputElement>('#lwMatName')?.focus(); });
-    on('lwMatCancel', 'click', () => { addingMat = false; renderSteps(); });
+    on('lwMatCancel', 'click', () => { addingMat = false; matPre = { name: '', th: 0 }; renderSteps(); });
     const snapshot = () => { const colors: Record<string, PhaseSet> = structuredClone(S.colors); for (const [k, ph] of colours()) colors[k] = structuredClone(setFor(k, ph)); return colors; };
     const addMat = () => {
       const name = root.querySelector<HTMLInputElement>('#lwMatName')?.value.trim(); if (!name) { root.querySelector<HTMLInputElement>('#lwMatName')?.focus(); return; }
-      const id = 'm' + Date.now().toString(36); S.myMaterials.push({ id, name, colors: snapshot(), phase: structuredClone(S.phase) });
-      S.material = id; addingMat = false; matDirty = false; save(); renderSteps(); msg(`Saved “${name}”. Choose it next time to get these settings back.`);
+      const th = parseFloat((root.querySelector<HTMLInputElement>('#lwMatTh')?.value || '').replace(',', '.')), thickness = th > 0 && th < 100 ? th : thicknessIn(name);
+      // the thickness goes in the name too ("3 mm MDF"), so it shows in the list
+      const full = thickness && !thicknessIn(name) ? `${thickness} mm ${name}` : name;
+      const id = 'm' + Date.now().toString(36); S.myMaterials.push({ id, name: full, thickness, colors: snapshot(), phase: structuredClone(S.phase) });
+      S.material = id; addingMat = false; matDirty = false; matPre = { name: '', th: 0 }; save(); renderSteps(); msg(`Saved “${full}”. Choose it next time to get these settings back.`);
     };
     on('lwMatSave', 'click', addMat);
     on('lwMatName', 'keydown', e => { if ((e as KeyboardEvent).key === 'Enter') addMat(); });
+    on('lwMyTh', 'change', e => { const m = S.myMaterials.find(x => x.id === S.material); if (!m) return; const v = parseFloat((e.target as HTMLInputElement).value.replace(',', '.')); m.thickness = v > 0 && v < 100 ? v : 0; save(); });
+    root.querySelectorAll<HTMLElement>('[data-usemat]').forEach(b => b.onclick = () => { useMaterial(b.dataset.usemat!); save(); rebuild(); });
     on('lwMatUpd', 'click', () => { const m = S.myMaterials.find(x => x.id === S.material); if (!m) return; m.colors = snapshot(); m.phase = structuredClone(S.phase); matDirty = false; save(); renderSteps(); msg(`Saved the changes to “${m.name}”.`); });
     on('lwMatDel', 'click', () => { const m = S.myMaterials.find(x => x.id === S.material); if (!m) return; S.myMaterials = S.myMaterials.filter(x => x !== m); S.material = ''; save(); renderSteps(); msg(`Deleted “${m.name}”. Your settings below are unchanged.`); });
     root.querySelectorAll<HTMLInputElement>('.lw-lay input').forEach(i => i.addEventListener('change', () => {
@@ -741,14 +766,89 @@ export function openLaser(ed: Editor, saveFile: (name: string, text: string) => 
     save(); rebuild();
   });
 
+  // ---------- material test ----------
+  /**
+   * A screen over the Laser workspace: set up a grid of squares (speed across, power down), save it for LightBurn
+   * with a list of settings for each layer, then, after cutting it on a scrap, click the best square to use its settings.
+   */
+  function openTest() {
+    let T: TestSpec = fitGrid({ ...DEFAULT_TEST, ...(S.test || {}), ...(S.test ? {} : { name: job?.material || '', thickness: job?.thickness || DEFAULT_TEST.thickness }) });
+    let best = -1;
+    const ov = document.createElement('div'); ov.className = 'lw-testov'; ov.setAttribute('role', 'dialog'); ov.setAttribute('aria-label', 'Material test'); root.append(ov);
+    const shut = () => { ov.remove(); };
+    const n3 = (v: number) => String(Math.round(v * 100) / 100);
+    const field = (id: string, v: number, w = 46, lbl = '') => `<input type="text" inputmode="decimal" id="${id}" value="${n3(v)}" style="width:${w}px" aria-label="${lbl || id}">`;
+    const picture = () => {
+      const { w, h } = testSize(T), cells = testCells(T), L = T.size * 1.6, top = T.size * 0.9, fs = Math.max(2.4, T.size * 0.28);
+      const sp = steps(T.speed), pw = steps(T.power);
+      return `<svg viewBox="${-L} ${-top} ${w + L + 2} ${h + top + 2}" class="lw-testpic" role="img" aria-label="The test grid: speed across, power going to the front">
+        <text x="${w / 2}" y="${-top + fs}" text-anchor="middle" font-size="${fs * 0.9}" class="ax">BACK · speed mm/s →</text>
+        ${sp.map((v, i) => `<text x="${i * (T.size + T.gap) + T.size / 2}" y="${-fs * 0.6}" text-anchor="middle" font-size="${fs}">${v}</text>`).join('')}
+        ${pw.map((v, j) => `<text x="${-fs * 0.5}" y="${j * (T.size + T.gap) + T.size / 2 + fs * 0.35}" text-anchor="end" font-size="${fs}">${v}%</text>`).join('')}
+        ${cells.map(c => { const pts = cellPts(T, c).map(p => `${p.x},${p.y}`).join(' '); return `<g class="cell${c.layer === best ? ' best' : ''}" data-cell="${c.layer}"><polygon points="${pts}" fill="${T.mode === 'engrave' ? LB_PALETTE[c.layer] : 'var(--panel, #fff)'}" fill-opacity="${T.mode === 'engrave' ? .35 : 1}" stroke="${LB_PALETTE[c.layer]}" stroke-width="${Math.max(.35, T.size * .05)}"/><text x="${c.x + T.size / 2}" y="${c.y + T.size / 2 + fs * 0.3}" text-anchor="middle" font-size="${fs * 0.8}" class="ln">${String(c.layer).padStart(2, '0')}</text><title>Layer ${String(c.layer).padStart(2, '0')}: ${c.speed} mm/s, ${c.power} %</title></g>`; }).join('')}
+      </svg>`;
+    };
+    const render = () => {
+      const { w, h } = testSize(T), n = testCells(T).length, cell = best >= 0 ? testCells(T)[best] : null;
+      ov.innerHTML = `<div class="lw-head"><strong>Material test</strong><span class="small">Find the best speed and power for a material, on a scrap piece</span><button class="btn" id="mtBack">Back to the laser</button></div>
+      <div class="lw-testbody">
+        <div class="lw-testform">
+          <div class="lw-row wrap"><label>What are you testing? <input type="text" id="mtName" value="${esc(T.name)}" placeholder="e.g. MDF" style="width:120px"></label><label>Thickness ${field('mtTh', T.thickness, 40, 'Thickness')} mm</label></div>
+          <div class="segc lw-mode" role="radiogroup" aria-label="What to test">${(Object.keys(MODE_TEXT) as TestMode[]).map(k => `<button type="button" role="radio" data-mode="${k}" aria-checked="${k === T.mode}">${MODE_TEXT[k]}</button>`).join('')}</div>
+          <table class="lw-testtab"><tr><th></th><th>From</th><th>To</th><th>Steps</th></tr>
+            <tr><td>Speed <small>mm/s</small><br><small>across</small></td><td>${field('mtSf', T.speed.from)}</td><td>${field('mtSt', T.speed.to)}</td><td>${field('mtSn', T.speed.n, 36)}</td></tr>
+            <tr><td>Power <small>%</small><br><small>towards the front</small></td><td>${field('mtPf', T.power.from)}</td><td>${field('mtPt', T.power.to)}</td><td>${field('mtPn', T.power.n, 36)}</td></tr></table>
+          <div class="lw-row wrap small"><label>Square ${field('mtSz', T.size, 38)} mm</label><label>Gap ${field('mtGap', T.gap, 38)} mm</label><label>Passes ${field('mtPass', T.passes, 32)}</label>${T.mode === 'engrave' ? `<label>Line interval ${field('mtInt', T.interval, 42)} mm</label>` : ''}</div>
+          <div class="lw-read">${n} squares · ${Math.round(w)} × ${Math.round(h)} mm · about ${fmtTime(testTime(T))}${n === 30 ? ' · 30 is the most (LightBurn has 30 layer colours)' : ''}</div>
+          <div class="lw-row wrap"><button type="button" class="btn primary" id="mtSave">Save test for LightBurn</button><button type="button" class="btn" id="mtList">Save the settings list</button></div>
+          <ol class="lw-howto">
+            <li>In LightBurn, <b>File → Import</b> the test file. Each square lands on its own layer.</li>
+            <li>Set each layer's speed and power from the <b>settings list</b> (or hover a square here to see them).</li>
+            <li>Cut it on a <b>scrap</b> of the material. Stay with the laser.</li>
+            <li>Come back here and <b>click the best square</b>${T.mode === 'cut' ? ': the fastest one that dropped out cleanly' : ': the one that looks best'}.</li>
+          </ol>
+        </div>
+        <div class="lw-testright">
+          ${picture()}
+          <p class="small">The square with the cut-off corner is the first one, at the back left.</p>
+          ${cell ? `<div class="lw-job"><div>Best: <b>${cell.speed} mm/s</b> at <b>${cell.power} %</b>, ${T.passes} pass${T.passes > 1 ? 'es' : ''}</div><div class="lw-row"><button type="button" class="btn primary" id="mtUse">Use these settings</button><span class="small">They go into step 2 for ${T.mode === 'cut' ? 'cutting' : 'engraving'}, ready to save as a material.</span></div></div>` : '<p class="small">After cutting, click the best square.</p>'}
+        </div>
+      </div>`;
+      const q = <E extends HTMLElement>(id: string) => ov.querySelector('#' + id) as E | null;
+      q('mtBack')!.onclick = shut;
+      ov.querySelectorAll<HTMLElement>('[data-mode]').forEach(b => b.onclick = () => { T.mode = b.dataset.mode as TestMode; best = -1; keep(); });
+      ov.querySelectorAll<SVGGElement>('[data-cell]').forEach(g => g.addEventListener('click', () => { best = +g.dataset.cell!; render(); }));
+      const nIn = (id: string, lo: number, hi: number, set: (v: number) => void) => { const el = q<HTMLInputElement>(id); if (el) el.onchange = () => { const v = num(el.value, lo, hi); if (v != null) { set(v); best = -1; } keep(); }; };
+      nIn('mtTh', 0, 100, v => T.thickness = v); nIn('mtSf', 0.5, 2000, v => T.speed.from = v); nIn('mtSt', 0.5, 2000, v => T.speed.to = v); nIn('mtSn', 1, 10, v => T.speed.n = Math.round(v));
+      nIn('mtPf', 1, 100, v => T.power.from = v); nIn('mtPt', 1, 100, v => T.power.to = v); nIn('mtPn', 1, 10, v => T.power.n = Math.round(v));
+      nIn('mtSz', 3, 50, v => T.size = v); nIn('mtGap', 1, 30, v => T.gap = v); nIn('mtPass', 1, 20, v => T.passes = Math.round(v)); nIn('mtInt', 0.02, 2, v => T.interval = v);
+      q<HTMLInputElement>('mtName')!.onchange = e => { T.name = (e.target as HTMLInputElement).value.trim(); keep(); };
+      const fileBase = () => 'material-test' + (T.name ? '-' + (T.thickness ? T.thickness + 'mm-' : '') + T.name.replace(/[^\p{L}\p{N}]+/gu, '-') : '');
+      q('mtSave')!.onclick = () => saveFile(fileBase() + '.svg', testSVG(T));
+      q('mtList')!.onclick = () => saveFile(fileBase() + '-settings.txt', testList(T));
+      const use = q('mtUse'); if (use) use.onclick = () => {
+        const c = testCells(T)[best], ph: Phase = T.mode, set = (st: PhaseSet): PhaseSet => ({ ...st, speed: c.speed, power: c.power, passes: T.passes, ...(ph === 'engrave' ? { interval: T.interval } : {}) });
+        S.phase[ph] = set(S.phase[ph]);
+        for (const [k, p] of colours()) if (p === ph) S.colors[k] = set(setFor(k, p));
+        S.material = ''; matDirty = false; matPre = { name: T.name, th: T.thickness }; addingMat = true; save(); shut(); rebuild();
+        msg(`Step 2 now ${ph === 'cut' ? 'cuts' : 'engraves'} at ${c.speed} mm/s and ${c.power} %. Give it a name and press Save to keep it as a material.`);
+        root.querySelector<HTMLInputElement>('#lwMatName')?.focus();
+      };
+    };
+    const keep = () => { T = fitGrid(T); S.test = T; save(); render(); };
+    render();
+  }
+
   // ---------- open / close ----------
-  const close = () => { cancelAnimationFrame(raf); playing = false; root.remove(); window.removeEventListener('resize', onResize); window.removeEventListener('keydown', onKey, true); window.removeEventListener('keyup', onKeyUp, true); };
+  const close = () => { cancelAnimationFrame(raf); playing = false; root.remove(); ro.disconnect(); window.removeEventListener('resize', onResize); window.removeEventListener('keydown', onKey, true); window.removeEventListener('keyup', onKeyUp, true); };
   const onResize = () => draw();
   const onKeyUp = (ev: KeyboardEvent) => { if (ev.key === ' ') spaceDown = false; };
   const onKey = (ev: KeyboardEvent) => {
-    if (ev.key === ' ' && !(ev.target as HTMLElement).matches('input,select,textarea') && canvas.matches(':hover')) { spaceDown = true; ev.preventDefault(); return; } if (ev.key === 'Escape') { if (rulerOn) { rulerOn = false; renderSteps(); draw(); } else if (sel.size) { sel.clear(); renderSteps(); } else close(); ev.stopPropagation(); } else if (ev.key === ' ' && !(ev.target as HTMLElement).matches('input,select,textarea,button')) { ev.preventDefault(); $('#lwPlay').click(); } };
+    if (ev.key === ' ' && !(ev.target as HTMLElement).matches('input,select,textarea') && canvas.matches(':hover')) { spaceDown = true; ev.preventDefault(); return; } if (ev.key === 'Escape') { const tov = root.querySelector('.lw-testov'); if (tov) { tov.remove(); ev.stopPropagation(); return; } if (rulerOn) { rulerOn = false; renderSteps(); draw(); } else if (sel.size) { sel.clear(); renderSteps(); } else close(); ev.stopPropagation(); } else if (ev.key === ' ' && !(ev.target as HTMLElement).matches('input,select,textarea,button')) { ev.preventDefault(); $('#lwPlay').click(); } };
   $('#lwClose').onclick = close;
   $<HTMLInputElement>('#lwHelp').onchange = e => { S.help = (e.target as HTMLInputElement).checked; save(); renderSteps(); };
+  // the bed refits when its area changes size (window resized, side panel grows), unless you have zoomed in yourself
+  const ro = new ResizeObserver(() => draw()); ro.observe(canvas.parentElement!);
   window.addEventListener('resize', onResize); window.addEventListener('keydown', onKey, true); window.addEventListener('keyup', onKeyUp, true);
   loadJob();
   if (!paths.length) msg('Nothing on this sheet is set to cut or engrave yet.', true);

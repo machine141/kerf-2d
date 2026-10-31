@@ -110,7 +110,7 @@ export class Editor {
     // closing a shape: the first point of the line / spline being drawn pulls the cursor in
     if (this.tool.closes && this.pts.length >= 2 && dist(raw, this.pts[0]) <= Math.max(14, +this.opt.pickPx || 14) / this.view.k) return { p: this.pts[0], k: 'close' };
     return snapPoint(raw, {
-      ents: this.doc.ents, visible: this.store.visible, aids: this.doc.aids, k: this.view.k,
+      ents: this.doc.ents, visible: this.store.visible, aids: this.doc.aids, k: this.view.k, page: this.doc.page,
       last: this.pts[this.pts.length - 1], constrain45: this.mods.shift && !!this.tool.constrain45,
       drawing: o.drawing ?? !!this.tool.draws, exclude: o.exclude, track: this.track,
     });
@@ -175,7 +175,7 @@ export class Editor {
   }
   pointerMove(raw: Point, info: PointerInfo) {
     this.mods = { shift: info.shift, alt: info.alt, ctrl: info.ctrl }; this.cur = raw; this.hover = true;
-    if (this.pan) { this.view.ox = this.pan.ox - (info.sp.x - this.pan.sp.x) / this.view.k; this.view.oy = this.pan.oy + (info.sp.y - this.pan.sp.y) / this.view.k; this.changed('view'); return; }
+    if (this.pan) { this.autoFit = false; this.view.ox = this.pan.ox - (info.sp.x - this.pan.sp.x) / this.view.k; this.view.oy = this.pan.oy + (info.sp.y - this.pan.sp.y) / this.view.k; this.changed('view'); return; }
     this.snapRes = this.tool.draws ? this.snapAt(raw) : null;
     this.tool.move?.(this, raw, info);
     this.acquire();
@@ -392,9 +392,11 @@ export class Editor {
   w2s = (p: Point) => P((p.x - this.view.ox) * this.view.k, this.view.H - (p.y - this.view.oy) * this.view.k);
   s2w = (p: Point) => P(p.x / this.view.k + this.view.ox, (this.view.H - p.y) / this.view.k + this.view.oy);
   setSize(W: number, H: number) { this.view.W = W; this.view.H = H; this.changed('view'); }
-  fit() { const n = Math.max(1, this.doc.sheets || 1), h = this.doc.page.h, w = n * this.doc.page.w + (n - 1) * SHEET_GAP, m = 36, V = this.view; const k = Math.min((V.W - m * 2) / w, (V.H - m * 2) / h); V.k = k > 0 ? k : 1; V.ox = -(V.W / V.k - w) / 2; V.oy = -(V.H / V.k - h) / 2; this.changed('view'); }
-  zoomAt(sp: Point, f: number) { const b = this.s2w(sp); this.view.k = Math.min(400, Math.max(0.05, this.view.k * f)); const a = this.s2w(sp); this.view.ox += b.x - a.x; this.view.oy += b.y - a.y; this.changed('view'); }
-  panBy(dx: number, dy: number) { this.view.ox += dx / this.view.k; this.view.oy -= dy / this.view.k; this.changed('view'); }
+  /** while true the page is fitted to the window whenever the window changes size; zooming or panning turns it off, Fit page turns it back on */
+  autoFit = true;
+  fit() { this.autoFit = true; const n = Math.max(1, this.doc.sheets || 1), h = this.doc.page.h, w = n * this.doc.page.w + (n - 1) * SHEET_GAP, m = 36, V = this.view; const k = Math.min((V.W - m * 2) / w, (V.H - m * 2) / h); V.k = k > 0 ? k : 1; V.ox = -(V.W / V.k - w) / 2; V.oy = -(V.H / V.k - h) / 2; this.changed('view'); }
+  zoomAt(sp: Point, f: number) { this.autoFit = false; const b = this.s2w(sp); this.view.k = Math.min(400, Math.max(0.05, this.view.k * f)); const a = this.s2w(sp); this.view.ox += b.x - a.x; this.view.oy += b.y - a.y; this.changed('view'); }
+  panBy(dx: number, dy: number) { this.autoFit = false; this.view.ox += dx / this.view.k; this.view.oy -= dy / this.view.k; this.changed('view'); }
 
   // ---- readout helpers ----
   readout() { const p = this.cursorPoint(), r = sub(p, this.rel); return { p, r, dist: len(r), ang: normA(angOf(P(0, 0), r)) / DEG }; }

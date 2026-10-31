@@ -41,7 +41,8 @@ type DistributiveOmit<T, K extends keyof any> = T extends any ? Omit<T, K> : nev
 export interface Layer { id: string; name: string; visible: boolean; active: boolean }
 
 export interface Aids {
-  grid: { show: boolean; spacing: number };
+  /** background grid: style (squares, dots, isometric, isometric dots, circles) and, for circles, degrees between spokes */
+  grid: { show: boolean; spacing: number; style?: 'lines' | 'dots' | 'iso' | 'isodots' | 'polar'; spokes?: number };
   /** alignment guides from recently touched snap points */
   track: boolean;
   gridLock: boolean;
@@ -77,7 +78,11 @@ export interface Doc {
   handin?: HandIn;
   /** class worksheet: whose designs are on it */
   classList?: ClassEntry[];
+  /** for the laser: material, thickness and copies asked for (Hand in or Export → For the technician) */
+  job?: JobInfo;
 }
+/** What to cut a design from, sent with the file. */
+export interface JobInfo { material: string; thickness: number; copies: number; sheet?: number; note?: string; from?: string; at: string }
 /** What a student fills in when handing in. */
 export interface HandIn { name: string; cls: string; title: string; at: string; warnings: string[] }
 /** One student's design on a class worksheet. */

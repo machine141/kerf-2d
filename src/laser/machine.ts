@@ -17,7 +17,7 @@ export interface Machine {
   setUp: boolean;
 }
 /** A material saved by the user: settings for each colour (and for any other colour, by what it does). */
-export interface MyMaterial { id: string; name: string; colors: Record<string, PhaseSet>; phase: JobSettings }
+export interface MyMaterial { id: string; name: string; colors: Record<string, PhaseSet>; phase: JobSettings; /** mm (0 or missing: read from the name, e.g. "3 mm MDF") */ thickness?: number }
 /** Where something was already cut on this sheet of material (bed coordinates), so the next job can go beside it. */
 export interface Trace { when: string; name: string; parts: Point[][]; box: { x0: number; y0: number; x1: number; y1: number }; /** where the laser started cutting, and where the head was when it finished */ start: Point; end?: Point }
 export interface LaserState {
@@ -55,6 +55,10 @@ export interface LaserState {
   warnStep: boolean; warnUnder: boolean; warnTopRight: boolean;
   /** quick changes: how much one scroll or arrow changes a size or angle by; keep the shape when resizing */
   spinStep: number; keepShape: boolean;
+  /** the last job file applied (its time stamp), so opening the Laser screen again keeps the technician's own changes */
+  jobAt?: string;
+  /** the material test last set up (Material test screen) */
+  test?: import('./mattest').TestSpec;
 }
 
 /** Common laser sizes. Once Kerf is connected to a laser it will read the size from the laser itself. */

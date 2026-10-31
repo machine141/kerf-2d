@@ -3,6 +3,7 @@ import { splineSegs } from '../geometry/spline';
 import { type Point, P, TAU } from '../geometry/vec';
 import type { Editor } from '../editor/editor';
 import type { Overlay, GhostStyle } from '../editor/tool';
+import { isoDx } from '../snap/grid';
 import { COLORS, PAINTS, modeOf, sheetX, type Entity, type Shape } from '../model/types';
 import { hasBulge, segsOf } from '../geometry/path';
 import { keypoints , ext } from '../geometry/entity';
@@ -84,13 +85,7 @@ export class Renderer {
     for (let sk = 0; sk < nSheets; sk++) {
       const sx = sheetX(ed.doc, sk), tl = ed.w2s(P(sx, h));
       ctx.save(); ctx.shadowColor = C['--shadow']; ctx.shadowBlur = 14; ctx.shadowOffsetY = 2; ctx.fillStyle = C['--sheet']; ctx.fillRect(tl.x, tl.y, w * k, h * k); ctx.restore();
-      if (A.grid.show) {
-        let g = A.grid.spacing; while (g * k < 6) g *= 2;
-        ctx.save(); ctx.beginPath(); ctx.rect(tl.x, tl.y, w * k, h * k); ctx.clip(); ctx.lineWidth = 1;
-        for (let x = 0; x <= w + 1e-9; x += g) { const s = ed.w2s(P(sx + x, 0)); ctx.strokeStyle = Math.round(x / g) % 5 === 0 ? C['--grid-major'] : C['--grid']; ctx.beginPath(); ctx.moveTo(Math.round(s.x) + .5, tl.y); ctx.lineTo(Math.round(s.x) + .5, tl.y + h * k); ctx.stroke(); }
-        for (let y = 0; y <= h + 1e-9; y += g) { const s = ed.w2s(P(0, y)); ctx.strokeStyle = Math.round(y / g) % 5 === 0 ? C['--grid-major'] : C['--grid']; ctx.beginPath(); ctx.moveTo(tl.x, Math.round(s.y) + .5); ctx.lineTo(tl.x + w * k, Math.round(s.y) + .5); ctx.stroke(); }
-        ctx.restore();
-      }
+      if (A.grid.show) { ctx.save(); ctx.beginPath(); ctx.rect(tl.x, tl.y, w * k, h * k); ctx.clip(); drawGrid(ctx, ed, sx, w, h, k, C); ctx.restore(); }
       if (nSheets > 1) { ctx.save(); ctx.fillStyle = C['--muted'] || '#666'; ctx.font = '600 12px system-ui, sans-serif'; ctx.textBaseline = 'bottom'; ctx.fillText(`Sheet ${sk + 1}`, tl.x, tl.y - 4); ctx.restore(); }
     }
     // tools that keep something painted on the sheet (Hinge brush areas) draw it under the drawing
@@ -163,4 +158,49 @@ export class Renderer {
       if (A.attach.on && ed.tool.draws) { const b = A.attach.box; ctx.strokeRect(sp.x - b / 2 + .5, sp.y - b / 2 + .5, b, b); }
     }
   }
+}
+
+/**
+ * The background grid on one sheet (already clipped to the sheet). Lines (or dots) every `spacing` mm,
+ * with every fifth one darker; spacing doubles while the marks would be closer than about 6 px.
+ */
+function drawGrid(ctx: CanvasRenderingContext2D, ed: Editor, sx: number, w: number, h: number, k: number, C: Record<string, string>) {
+  const G = ed.doc.aids.grid, st = G.style || 'lines';
+  let g = G.spacing; while (g * k < (st === 'dots' || st === 'isodots' ? 8 : 6)) g *= 2;
+  // only the part of the sheet that is on screen
+  const a = ed.s2w(P(0, ed.view.H)), b = ed.s2w(P(ed.view.W, 0));
+  const x0 = Math.max(sx, a.x), x1 = Math.min(sx + w, b.x), y0 = Math.max(0, a.y), y1 = Math.min(h, b.y);
+  if (x1 < x0 || y1 < y0) return;
+  const major = (n: number) => Math.round(n) % 5 === 0;
+  const line = (p: Point, q: Point, maj: boolean) => { const u = ed.w2s(p), v = ed.w2s(q); ctx.strokeStyle = maj ? C['--grid-major'] : C['--grid']; ctx.beginPath(); ctx.moveTo(u.x, u.y); ctx.lineTo(v.x, v.y); ctx.stroke(); };
+  const dot = (p: Point, maj: boolean) => { const u = ed.w2s(p), r = maj ? 1.6 : 1.1; ctx.fillStyle = maj ? C['--grid-major'] : C['--grid']; ctx.fillRect(u.x - r, u.y - r, r * 2, r * 2); };
+  ctx.lineWidth = 1;
+  if (st === 'lines' || st === 'dots') {
+    const i0 = Math.ceil((x0 - sx) / g - 1e-9), i1 = Math.floor((x1 - sx) / g + 1e-9), j0 = Math.ceil(y0 / g - 1e-9), j1 = Math.floor(y1 / g + 1e-9);
+    if (st === 'lines') {
+      for (let i = i0; i <= i1; i++) { const s = ed.w2s(P(sx + i * g, 0)), X = Math.round(s.x) + .5; ctx.strokeStyle = major(i) ? C['--grid-major'] : C['--grid']; ctx.beginPath(); ctx.moveTo(X, ed.w2s(P(0, h)).y); ctx.lineTo(X, ed.w2s(P(0, 0)).y); ctx.stroke(); }
+      for (let j = j0; j <= j1; j++) { const s = ed.w2s(P(0, j * g)), Y = Math.round(s.y) + .5; ctx.strokeStyle = major(j) ? C['--grid-major'] : C['--grid']; ctx.beginPath(); ctx.moveTo(ed.w2s(P(sx, 0)).x, Y); ctx.lineTo(ed.w2s(P(sx + w, 0)).x, Y); ctx.stroke(); }
+    } else for (let i = i0; i <= i1; i++) for (let j = j0; j <= j1; j++) dot(P(sx + i * g, j * g), major(i) && major(j));
+    return;
+  }
+  if (st === 'iso' || st === 'isodots') {
+    // the same points the grid lock uses: measured from the drawing's origin, upright columns isoDx apart
+    const dx = isoDx(g), i0 = Math.floor(x0 / dx) - 1, i1 = Math.ceil(x1 / dx) + 1;
+    if (st === 'isodots') {
+      for (let i = i0; i <= i1; i++) { const off = (((i % 2) + 2) % 2) * g / 2; for (let j = Math.floor((y0 - off) / g); j <= Math.ceil((y1 - off) / g); j++) dot(P(i * dx, j * g + off), major(i) && major(j)); }
+      return;
+    }
+    for (let i = i0; i <= i1; i++) line(P(i * dx, y0), P(i * dx, y1), major(i));
+    // lines at +30° and −30°: y = ±x/√3 + n·g
+    const t = 1 / Math.sqrt(3);
+    for (const sgn of [1, -1]) {
+      const c0 = Math.min(y0 - sgn * t * x0, y0 - sgn * t * x1), c1 = Math.max(y1 - sgn * t * x0, y1 - sgn * t * x1);
+      for (let n = Math.floor(c0 / g); n <= Math.ceil(c1 / g); n++) { const c = n * g; line(P(x0, sgn * t * x0 + c), P(x1, sgn * t * x1 + c), major(n)); }
+    }
+    return;
+  }
+  // circles: rings every g from the middle of the sheet, spokes every few degrees
+  const c = P(sx + w / 2, h / 2), cs = ed.w2s(c), R = Math.hypot(w, h) / 2, sp = Math.max(1, G.spokes || 15);
+  for (let n = 1; n * g <= R; n++) { ctx.strokeStyle = major(n) ? C['--grid-major'] : C['--grid']; ctx.beginPath(); ctx.arc(cs.x, cs.y, n * g * k, 0, Math.PI * 2); ctx.stroke(); }
+  for (let d = 0, n = 0; d < 360 - 1e-9; d += sp, n++) { const r = d * Math.PI / 180; line(c, P(c.x + R * Math.cos(r), c.y + R * Math.sin(r)), d % 90 === 0); }
 }

@@ -14,6 +14,10 @@ import { handInFile, readDesign, newestOnly, clashes, uniqueOwners, toInitials, 
 import { unzipFiles } from '../io/unzip';
 import { sheetOf } from '../io/sheets';
 import { openNest } from './nest';
+import { COMMON_MATERIALS, COMMON_THICKNESS } from '../laser/jobinfo';
+import { loadState as loadLaser } from '../laser/machine';
+/** Material names for pupils to pick from: any saved on this computer (without their thickness), then a short common list. */
+const matNames = () => [...new Set([...loadLaser().myMaterials.map(m => m.name.replace(/\d+(?:[.,]\d+)?\s*mm\b/gi, '').trim()), ...COMMON_MATERIALS])].filter(Boolean);
 
 type Save = (name: string, text: string) => Promise<void> | void;
 const esc = (t: string) => String(t).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]!));
@@ -56,7 +60,7 @@ export function handInWhere(cls: string): string {
   return t ? esc(t).replace(/\{class\}/gi, '<b>' + esc(c) + '</b>') : `Now upload it to the <b>${esc(c)}</b> folder in Teams (or wherever your teacher asked).`;
 }
 
-export function openHandIn(ed: Editor, save: Save) {
+export function openHandIn(ed: Editor, save: Save, askLaser = false) {
   const checks = checkDesign(ed.doc), ok = canHandIn(checks);
   const title = ed.doc.handin?.title || (ed.doc.name && ed.doc.name !== 'Untitled' ? ed.doc.name : '');
   const ini0 = toInitials(ed.doc.handin?.name || remember.get('name')), cls0 = toClassCode(ed.doc.handin?.cls || remember.get('cls'));
@@ -66,6 +70,11 @@ export function openHandIn(ed: Editor, save: Save) {
       <label class="sl">Class code <input type="text" id="hCls" class="ini" autocomplete="off" spellcheck="false" maxlength="12" placeholder="9B" value="${esc(cls0)}"></label>
     </div>
     <label class="sl">Design name <input type="text" id="hTitle" placeholder="e.g. Star key ring" value="${esc(title)}"></label>
+    ${askLaser ? `<div class="hrow">
+      <label class="sl">Material <input type="text" id="hMat" list="hMats" placeholder="e.g. MDF" value="${esc(remember.get('jobMat'))}" autocomplete="off"></label><datalist id="hMats">${matNames().map(n => `<option value="${esc(n)}">`).join('')}</datalist>
+      <label class="sl">Thickness (mm) <input type="text" id="hTh" class="ini" list="hThs" inputmode="decimal" placeholder="3" value="${esc(remember.get('jobTh'))}"></label><datalist id="hThs">${COMMON_THICKNESS.map(n => `<option value="${n}">`).join('')}</datalist>
+      <label class="sl">How many <input type="text" id="hN" class="ini" inputmode="numeric" value="1"></label>
+    </div>` : ''}
     <p class="hint">Your file will be called <b class="mono" id="hFile"></b></p>
     <h4>Ready to cut?</h4>
     <ul class="checks">${checks.map((c, i) => `<li class="${c.level}">${mark(c.level)}<span>${esc(c.text)}</span>${c.at ? `<button type="button" class="link" data-i="${i}">Show me</button>` : ''}</li>`).join('')}</ul>
@@ -98,6 +107,13 @@ export function openHandIn(ed: Editor, save: Save) {
     if (!cls) { $('#hMsg').innerHTML = 'Please type your <b>class code</b> (e.g. <b>9B</b>).'; clsIn.focus(); return; }
     remember.set('name', name); remember.set('cls', cls);
     const f = handInFile(ed.doc, name, cls, t, checks);
+    if (askLaser) {
+      // what to cut it from goes in the handed-in file only, so the pupil's own drawing still opens as a drawing
+      const mat = $<HTMLInputElement>('#hMat').value.trim(), th = parseFloat($<HTMLInputElement>('#hTh').value.replace(',', '.')), n = Math.round(+$<HTMLInputElement>('#hN').value);
+      if (!mat) { $('#hMsg').innerHTML = 'Please say what to <b>cut it from</b> (e.g. <b>MDF</b>), so the technician knows.'; $('#hMat').focus(); return; }
+      remember.set('jobMat', mat); remember.set('jobTh', th > 0 ? String(th) : '');
+      const d = JSON.parse(f.text); d.job = { material: mat, thickness: th > 0 && th < 100 ? th : 0, copies: n >= 1 && n <= 50 ? n : 1, from: `${name} · ${cls}`, at: new Date().toISOString() }; f.text = JSON.stringify(d);
+    }
     // keep who made it with the drawing too, so a plain Save remembers it
     ed.doc.handin = JSON.parse(f.text).handin;
     await save(f.filename, f.text); close();

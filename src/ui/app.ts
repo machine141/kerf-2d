@@ -22,6 +22,9 @@ import { exportLaserSVG } from '../laser/export';
 import { regroupFills } from '../tools/bucket';
 import { withPaintedSlits } from '../tools/hingebrush';
 import { openLaser } from './laser';
+import { GRID_STYLES } from '../snap/grid';
+import { jobLabel, COMMON_MATERIALS, COMMON_THICKNESS } from '../laser/jobinfo';
+import { loadState as loadLaser } from '../laser/machine';
 import { exportDXF, importDXF, type DxfOptions } from '../io/dxf';
 import { zipOne } from '../io/zip';
 import { enterNodeEdit } from '../tools/select';
@@ -39,7 +42,9 @@ const esc = (s: string) => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<
 
 export function startUI(ed: Editor) {
   const cv = $<HTMLCanvasElement>('#cv'), R = new Renderer(cv, ed);
-  const prefs = loadPrefs(); if (prefs.joinTol != null) ed.opt.joinTol = prefs.joinTol; if (prefs.pickPx != null) ed.opt.pickPx = prefs.pickPx;
+  const prefs = loadPrefs();
+  // a teacher can share a link with ?laserinfo=1 to switch on "ask for material and thickness" on pupils' computers
+  try { const q = new URLSearchParams(location.search).get('laserinfo') ?? new URLSearchParams(location.hash.slice(1)).get('laserinfo'); if (q != null) { prefs.askLaser = q !== '0'; savePrefs(prefs); } } catch { /* no location */ } if (prefs.joinTol != null) ed.opt.joinTol = prefs.joinTol; if (prefs.pickPx != null) ed.opt.pickPx = prefs.pickPx;
   try { const fo = localStorage.getItem('kerf.fillOpacity'); if (fo && +fo > 0) ed.opt.fillOpacity = +fo; } catch { /* private window */ }
   const ui = { soft: 50, softC: 'both', simp: 35, helpShow: null as string | null, alignTo: 'sel' as 'sel' | 'page', ptsOpen: false, tab: 'props', spaceDown: false, lastTest: null as null | { results: TestResult[]; doc: string | null }, exportOpts: { splitArcs: false, includeHidden: false, curveTol: 0.01, skipDims: true, skipFills: false } as DxfOptions & { skipFills?: boolean } };
   let DL: any = null;
@@ -71,7 +76,8 @@ export function startUI(ed: Editor) {
   (async () => { try { DL = (window as any).claude?.use ? await (window as any).claude.use('downloads') : null; } catch { DL = null; } })();
 
   // ---------- canvas ----------
-  new ResizeObserver(() => { const first = ed.view.W === 800 && ed.view.H === 600; R.resize(); if (first) ed.fit(); R.request(); }).observe(cv);
+  // the page fills the window when the app opens and whenever the window is resized, until you zoom or pan yourself (Fit page brings it back)
+  new ResizeObserver(() => { R.resize(); if (ed.autoFit) ed.fit(); R.request(); }).observe(cv);
   const scheme = matchMedia('(prefers-color-scheme: dark)'); scheme.addEventListener('change', () => { R.readColors(); R.request(); });
   new MutationObserver(() => { R.readColors(); R.request(); }).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
   const evP = (ev: MouseEvent): Point => { const r = cv.getBoundingClientRect(); return P(ev.clientX - r.left, ev.clientY - r.top); };
@@ -111,7 +117,7 @@ export function startUI(ed: Editor) {
   // ---------- change routing ----------
   ed.on(k => {
     if (k === 'view') { R.request(); return; }
-    if (k === 'doc') { ed.state.simp = null; renderAttr(); renderPane(); syncButtons(); }
+    if (k === 'doc') { ed.state.simp = null; renderAttr(); renderPane(); syncButtons(); renderToggles(); }
     if (k === 'prompt' && ui.tab === 'props' && ed.state.node) renderPane();
     if (k === 'sel') { ed.state.simp = null;
       renderAttr(); if (ui.tab === 'props') renderPane();
@@ -233,7 +239,14 @@ export function startUI(ed: Editor) {
   }
   const undo = () => { if (!ed.store.canUndo) ed.toast('Nothing to undo'); else { ed.store.undo(); ed.toast('Undo'); } flash('#bUndo'); };
   const redo = () => { if (!ed.store.canRedo) ed.toast('Nothing to redo'); else { ed.store.redo(); ed.toast('Redo'); } flash('#bRedo'); };
-  function renderToggles() { $('#toggles').innerHTML = TOGGLES.map(([k, l, g, , f]) => `<button class="tg" data-k="${k}" aria-pressed="${g()}" title="${l} (${f})">${l} <span class="fk">${f}</span></button>`).join(''); $('#toggles').querySelectorAll<HTMLElement>('.tg').forEach(b => b.onclick = () => toggle(b.dataset.k!)); }
+  function renderToggles() {
+    const G = ed.doc.aids.grid, cur = G.show ? (G.style || 'lines') : 'plain';
+    // the background picker sits first: Plain turns the grid off, any other choice turns it on in that style
+    const bg = `<select class="tgsel" id="tgBg" title="Background: plain, squares, dots, isometric or circles" aria-label="Background">${[['plain', 'Plain'], ...GRID_STYLES.map(x => [x.k, x.label])].map(([k, l]) => `<option value="${k}" ${k === cur ? 'selected' : ''}>${l}</option>`).join('')}</select>`;
+    $('#toggles').innerHTML = bg + TOGGLES.map(([k, l, g, , f]) => `<button class="tg" data-k="${k}" aria-pressed="${g()}" title="${l} (${f})">${l} <span class="fk">${f}</span></button>`).join('');
+    $('#toggles').querySelectorAll<HTMLElement>('.tg').forEach(b => b.onclick = () => toggle(b.dataset.k!));
+    $<HTMLSelectElement>('#tgBg').onchange = e => { const v = (e.target as HTMLSelectElement).value, g = ed.doc.aids.grid; if (v === 'plain') g.show = false; else { g.show = true; g.style = v as any; } ed.changed('aids'); };
+  }
   function updatePrompt() { $('#prompt').innerHTML = `<b>${esc(ed.tool.label)}</b>${esc(ed.tool.prompt(ed))}`; }
   function updateReadout() { const r = ed.readout(); $('#readout').innerHTML = `<span>Abs <b>${fmt(r.p.x, 3)}, ${fmt(r.p.y, 3)}</b></span><span>Rel <b>${fmt(r.r.x, 3)}, ${fmt(r.r.y, 3)}</b></span><span>Dist <b>${fmt(r.dist, 3)}</b></span><span>Angle <b>${fmt(r.ang, 2)}°</b></span>`; }
 
@@ -303,16 +316,21 @@ export function startUI(ed: Editor) {
   }
   let exportSheet = 0;
   // ---------- Export: one window, three kinds of file; shows a picture of what will be saved, never the file's code ----------
-  type ExpKind = 'laser' | 'svg' | 'dxf';
+  type ExpKind = 'laser' | 'tech' | 'svg' | 'dxf';
   let expKind: ExpKind = 'laser';
   const laserOpts = { fills: false };
+  // Export → For the technician: what was last asked for (kept while Kerf is open; a file that already asks for something starts from that)
+  const techJob = { material: '', thickness: 0, copies: 1, note: '' };
   const EXP: Record<ExpKind, { title: string; sub: string; ext: string }> = {
     laser: { title: 'For the laser', sub: 'LightBurn-ready: best cut order, each colour on its own layer', ext: '-laser.svg' },
+    tech: { title: 'For the technician', sub: 'Kerf file that opens on the Laser screen with the material chosen', ext: '-for-laser.json' },
     svg: { title: 'SVG', sub: 'For Inkscape and other drawing software', ext: '.svg' },
     dxf: { title: 'DXF', sub: 'For CAD and other laser software', ext: '.dxf' },
   };
   function showExport(kind?: ExpKind) {
     if (kind) expKind = kind;
+    if (expKind === 'tech' && !prefs.askLaser) expKind = 'laser';
+    if (ed.doc.job && !techJob.material) Object.assign(techJob, { material: ed.doc.job.material, thickness: ed.doc.job.thickness, copies: ed.doc.job.copies, note: ed.doc.job.note || '' });
     const nS = Math.max(1, ed.doc.sheets || 1); if (exportSheet >= nS) exportSheet = 0;
     // what you see is what you export: painted hinge patterns go in even before Make cuts
     const src = () => { const d = withPaintedSlits(ed); return nS > 1 ? sheetDoc(d, exportSheet) : d; };
@@ -335,6 +353,14 @@ export function startUI(ed: Editor) {
           x.legend.map(l => `<tr><td><span class="sw" style="background:${l.kerfHex}"></span>${l.label}</td><td><span class="sw" style="background:${l.lbHex}"></span>${l.layer}</td><td>${l.does} <span class="hint">· ${l.count}</span></td></tr>`).join('') + `</table>` +
           `<details><summary>Opening it in LightBurn</summary><ol><li><b>File → Import</b> this file. Each colour lands on the layer shown above.</li><li>Set speed, power and passes for each layer as usual.</li><li>To cut in this order: in the Laser window open <b>Optimization Settings</b> and switch optimisation off.</li></ol></details>`;
         $('#mHint').textContent = (nS > 1 ? `Sheet ${exportSheet + 1} of ${nS} · export each sheet in turn · ` : '') + `${d.page.w} × ${d.page.h} mm`;
+      } else if (expKind === 'tech') {
+        const x = exportLaserSVG(d, laserOpts); picture(x.svg);
+        const j = { ...techJob, sheet: nS > 1 ? exportSheet : undefined, at: new Date().toISOString() };
+        text = JSON.stringify({ ...ed.doc, job: j });
+        info = `<div><b>Asks for:</b> ${esc(jobLabel(j))}${nS > 1 ? ` · sheet ${exportSheet + 1}` : ''}</div>` +
+          (x.result.paths.length ? '' : `<p class="bad">Nothing on this sheet is set to cut or engrave yet.</p>`) +
+          `<div class="hint">The technician opens this file in Kerf 2D (Open, or drag it in). It goes straight to the Laser screen on the right sheet, with ${techJob.copies > 1 ? techJob.copies + ' copies and ' : ''}the matching material chosen from their own list. Their laser settings and where they put it on the bed stay theirs.</div>`;
+        $('#mHint').textContent = (nS > 1 ? `Sheet ${exportSheet + 1} of ${nS} · ` : '') + `${d.page.w} × ${d.page.h} mm`;
       } else {
         text = expKind === 'svg' ? exportSVG(d, ui.exportOpts) : exportDXF(d, ui.exportOpts); picture(exportSVG(d, { ...ui.exportOpts, skipFills: expKind === 'dxf' || ui.exportOpts.skipFills }));
         const n = d.ents.filter(e => (ed.store.visible(e) || ui.exportOpts.includeHidden) && !(ui.exportOpts.skipDims && e.type === 'dim')).length;
@@ -347,18 +373,26 @@ export function startUI(ed: Editor) {
     };
     const opts = () => {
       const fills = ed.doc.ents.some(e => e.type === 'fill');
+      if (expKind === 'tech') {
+        const names = [...new Set([...loadLaser().myMaterials.map(m => m.name.replace(/\d+(?:[.,]\d+)?\s*mm\b/gi, '').trim()), ...COMMON_MATERIALS])].filter(Boolean);
+        return `<label class="chk">Material <input type="text" id="tjMat" list="tjMats" value="${esc(techJob.material)}" placeholder="e.g. MDF" style="width:130px"></label><datalist id="tjMats">${names.map(n => `<option value="${esc(n)}">`).join('')}</datalist>` +
+          `<label class="chk">Thickness <input type="text" id="tjTh" list="tjThs" inputmode="decimal" value="${techJob.thickness || ''}" placeholder="3" style="width:50px" class="mono"> mm</label><datalist id="tjThs">${COMMON_THICKNESS.map(n => `<option value="${n}">`).join('')}</datalist>` +
+          `<label class="chk">Copies <input type="text" id="tjN" inputmode="numeric" value="${techJob.copies}" style="width:44px" class="mono"></label>` +
+          `<label class="chk">Note <input type="text" id="tjNote" value="${esc(techJob.note || '')}" placeholder="optional" style="width:150px"></label>`;
+      }
       if (expKind === 'laser') return fills ? `<label class="tog"><input type="checkbox" role="switch" id="lxFills" ${laserOpts.fills ? 'checked' : ''}> Engrave paint-bucket fills</label>` : '';
       return `<label class="tog"><input type="checkbox" role="switch" id="xHidden" ${ui.exportOpts.includeHidden ? 'checked' : ''}> Hidden layers</label><label class="tog"><input type="checkbox" role="switch" id="xDims" ${ui.exportOpts.skipDims ? '' : 'checked'}> Dimensions</label>` +
         (fills ? (expKind === 'svg' ? `<label class="tog"><input type="checkbox" role="switch" id="xFills" ${ui.exportOpts.skipFills ? '' : 'checked'}> Fills (solid colours)</label>` : `<span class="hint">Fills are left out: DXF can't hold filled areas.</span>`) : '') +
         (expKind === 'dxf' ? `<label class="tog"><input type="checkbox" role="switch" id="xSplit" ${ui.exportOpts.splitArcs ? 'checked' : ''}> Arcs &amp; circles as short lines</label><label class="chk">Curve tolerance <input type="text" id="xTol" value="${ui.exportOpts.curveTol}" style="width:60px" class="mono"> mm</label>` : '');
     };
     const draw = () => {
-      $('#mOpts').innerHTML = `<div class="xkinds" role="radiogroup" aria-label="Kind of file">${(Object.keys(EXP) as ExpKind[]).map(k => `<button type="button" role="radio" data-k="${k}" aria-checked="${k === expKind}"><b>${EXP[k].title}</b><span>${EXP[k].sub}</span></button>`).join('')}</div>` +
+      $('#mOpts').innerHTML = `<div class="xkinds" role="radiogroup" aria-label="Kind of file">${(Object.keys(EXP) as ExpKind[]).filter(k => k !== 'tech' || prefs.askLaser).map(k => `<button type="button" role="radio" data-k="${k}" aria-checked="${k === expKind}"><b>${EXP[k].title}</b><span>${EXP[k].sub}</span></button>`).join('')}</div>` +
         (nS > 1 ? `<div>Sheet <div class="segc" id="xSheet" role="group">${Array.from({ length: nS }, (_, i) => `<button type="button" data-v="${i}" aria-pressed="${i === exportSheet}">${i + 1}</button>`).join('')}</div></div>` : '') + opts();
       $('#mOpts').querySelectorAll<HTMLElement>('.xkinds button').forEach(b => b.onclick = () => { expKind = b.dataset.k as ExpKind; draw(); });
       $('#mOpts').querySelectorAll<HTMLInputElement>('input').forEach(i => i.addEventListener('change', () => {
         const v = (id: string) => document.querySelector<HTMLInputElement>('#' + id);
         if (v('lxFills')) laserOpts.fills = v('lxFills')!.checked;
+        if (v('tjMat')) { techJob.material = v('tjMat')!.value.trim(); const t = parseFloat(v('tjTh')!.value.replace(',', '.')); techJob.thickness = t > 0 && t < 100 ? t : 0; const n = Math.round(+v('tjN')!.value); techJob.copies = n >= 1 && n <= 200 ? n : 1; v('tjN')!.value = String(techJob.copies); techJob.note = v('tjNote')!.value.trim(); }
         if (v('xHidden')) ui.exportOpts.includeHidden = v('xHidden')!.checked;
         if (v('xDims')) ui.exportOpts.skipDims = !v('xDims')!.checked;
         if (v('xFills')) ui.exportOpts.skipFills = !v('xFills')!.checked;
@@ -386,7 +420,7 @@ export function startUI(ed: Editor) {
   $('#bHelp').onclick = () => openHelp();
   $('#bBox').onclick = () => { closeMake(); openBox(ed); };
   $('#bNest').onclick = () => { closeMake(); openNest(ed); };
-  $('#bHandIn').onclick = () => openHandIn(ed, saveFile);
+  $('#bHandIn').onclick = () => openHandIn(ed, saveFile, !!prefs.askLaser);
   $('#bClassLoad').onclick = () => { closeMake(); $('#classIn').click(); };
   $('#bClassList').onclick = () => { closeMake(); openClassList(ed, saveFile); };
   $<HTMLInputElement>('#classIn').onchange = ev => { const inp = ev.target as HTMLInputElement, fs = [...(inp.files || [])]; inp.value = ''; if (fs.length) openClassLoad(ed, fs); };
@@ -422,7 +456,9 @@ export function startUI(ed: Editor) {
     if (isImage(f)) { openTrace(ed, f); return; }
     const text = await f.text();
     try {
-      if (/\.json$/i.test(f.name)) { const d = JSON.parse(text); if (!d.ents || !d.page) throw new Error('Not a Kerf 2D drawing'); ed.sel.clear(); ed.store.load(d); const rg = regroupFills(ed); ($('#docName') as HTMLInputElement).value = ed.doc.name; ed.fit(); ed.toast('Opened ' + f.name + (rg ? ` · ${rg} fill${rg > 1 ? 's' : ''} grouped with ${rg > 1 ? 'their shapes' : 'its shape'}` : '')); }
+      if (/\.json$/i.test(f.name)) { const d = JSON.parse(text); if (!d.ents || !d.page) throw new Error('Not a Kerf 2D drawing'); ed.sel.clear(); ed.store.load(d); const rg = regroupFills(ed); ($('#docName') as HTMLInputElement).value = ed.doc.name; ed.fit(); ed.toast('Opened ' + f.name + (rg ? ` · ${rg} fill${rg > 1 ? 's' : ''} grouped with ${rg > 1 ? 'their shapes' : 'its shape'}` : ''));
+        // a job for the laser (Hand in with material, or Export → For the technician) goes straight to the Laser screen
+        if (ed.doc.job) { openLaser(ed, saveFile); ed.toast(`Opened ${f.name} on the Laser screen · ${jobLabel(ed.doc.job)}`); } }
       else loadImported(/\.dxf$/i.test(f.name) ? importDXF(text) : importSVG(text), f.name);
     } catch (e: any) { ed.toast('Could not open ' + f.name + ': ' + e.message); }
   };
@@ -724,7 +760,9 @@ export function startUI(ed: Editor) {
         <label for="sPre">Size</label><select id="sPre">${Object.entries(PAGES).map(([k, v]) => `<option value="${k}">${v[2]}</option>`).join('')}</select>
         <label for="sW">Width mm</label><input type="text" id="sW" value="${pg.w}"><label for="sH">Height mm</label><input type="text" id="sH" value="${pg.h}"></div>
         <h3>Grid &amp; locks</h3><div class="grid2">
+        <label for="sGs">Background</label><select id="sGs">${[['plain', 'Plain (no grid)'], ...GRID_STYLES.map(x => [x.k, x.label + ' · ' + x.note])].map(([k, l]) => `<option value="${k}" ${k === (A.grid.show ? (A.grid.style || 'lines') : 'plain') ? 'selected' : ''}>${l}</option>`).join('')}</select>
         <label for="sG">Grid spacing</label><input type="text" id="sG" value="${A.grid.spacing}">
+        ${A.grid.style === 'polar' ? `<label for="sGp">Spokes every °</label><input type="text" id="sGp" value="${A.grid.spokes || 15}">` : ''}
         <label for="sSt">Step size</label><input type="text" id="sSt" value="${A.step}">
         <label for="sRs">Radial start °</label><input type="text" id="sRs" value="${A.radial.start}">
         <label for="sRp">Radial step °</label><input type="text" id="sRp" value="${A.radial.step}"></div>
@@ -738,8 +776,11 @@ export function startUI(ed: Editor) {
         <h3>Mouse &amp; trackpad</h3><div class="row"><label class="chk"><input type="radio" name="wh" value="zoom" ${prefs.wheelPans ? '' : 'checked'}>Wheel zooms at pointer</label><label class="chk"><input type="radio" name="wh" value="pan" ${prefs.wheelPans ? 'checked' : ''}>Two-finger scroll pans (pinch zooms)</label></div>
         <p class="hint">Click reach: how far from a line (in screen pixels) a click still picks it — the nearest line wins. Decimals shown: sizes are kept exactly; this only rounds what you see (hover a box for the exact value). Close gaps: Make Path and Trim treat ends this close as touching. Curve tolerance is how closely contours follow curves (mm). Smaller is more accurate but makes bigger files. These settings, except tolerance, are saved with the drawing.</p>
         <h3>Defaults</h3><div class="row"><button class="btn" id="sReset" title="Grid, snaps, dimensions, click reach, tool options… back to how they started. Your drawing is not changed.">Reset all settings to defaults</button></div>
+        <h3>Laser jobs</h3><div class="row"><label class="chk"><input type="checkbox" id="sAskLaser" ${prefs.askLaser ? 'checked' : ''}>Ask for material, thickness and copies</label></div>
+        <p class="hint">When this is on, <b>Hand in</b> asks pupils what to cut their design from, and <b>Export</b> gets a <b>For the technician</b> choice. Opening one of these files goes straight to the Laser screen with the matching material chosen. This setting is kept on this computer. To switch it on for a class, share the Kerf link with <span class="mono">?laserinfo=1</span> on the end.</p>
         <h3>Help</h3><div class="row"><label class="chk"><input type="checkbox" id="sTips" ${prefs.noTips ? '' : 'checked'}>Show a tip the first time each tool is used</label><button class="btn" id="sTipsAgain" title="Show the first-time tips again, for a new person on this computer">Show tips again</button></div>
         <p class="hint">Tip: click in any number box, then use the mouse wheel to change it (Shift = finer, Alt = coarser).</p>`;
+      $<HTMLInputElement>('#sAskLaser').onchange = e => { prefs.askLaser = (e.target as HTMLInputElement).checked; savePrefs(prefs); };
       $<HTMLInputElement>('#sTips').onchange = e => { prefs.noTips = !(e.target as HTMLInputElement).checked; savePrefs(prefs); };
       $('#sTipsAgain').onclick = () => { prefs.seen = []; prefs.noTips = false; savePrefs(prefs); renderPane(); ed.toast('Tips will show again the first time each tool is used'); };
       ($('#sPre') as HTMLSelectElement).value = pg.preset || 'CUSTOM';
@@ -749,7 +790,8 @@ export function startUI(ed: Editor) {
       const num = (id: string, f: (v: number) => void, unit = true) => { $(`#${id}`).onchange = (ev: Event) => { const t2 = (ev.target as HTMLInputElement).value, v = unit ? parseLength(t2) : parseFloat(t2); if (isFinite(v)) { f(v); ed.changed('view'); } }; };
       ($('#sPre') as HTMLSelectElement).onchange = ev => { const k = (ev.target as HTMLSelectElement).value, v = PAGES[k]; pg.preset = k; if (v[0]) { pg.w = v[0]; pg.h = v[1]; } renderPane(); ed.fit(); };
       num('sW', v => { pg.w = Math.max(1, v); pg.preset = 'CUSTOM'; ed.fit(); }); num('sH', v => { pg.h = Math.max(1, v); pg.preset = 'CUSTOM'; ed.fit(); });
-      num('sG', v => A.grid.spacing = Math.max(0.1, v)); num('sSt', v => A.step = Math.max(0.01, v));
+      num('sG', v => A.grid.spacing = Math.max(0.1, v)); if (document.querySelector('#sGp')) num('sGp', v => A.grid.spokes = Math.min(180, Math.max(1, v)), false);
+      $<HTMLSelectElement>('#sGs').onchange = e => { const v = (e.target as HTMLSelectElement).value; if (v === 'plain') A.grid.show = false; else { A.grid.show = true; A.grid.style = v as any; } ed.changed('aids'); }; num('sSt', v => A.step = Math.max(0.01, v));
       num('sRs', v => A.radial.start = v, false); num('sRp', v => A.radial.step = Math.max(0.1, v), false);
       num('sBox', v => at.box = Math.max(4, v), false); num('sDd', v => ed.doc.dim.dec = Math.min(6, Math.max(0, Math.round(v))), false); num('sDh', v => ed.doc.dim.textH = Math.max(0.5, v));
       num('sTol', v => { geomSettings.flatTol = Math.min(0.1, Math.max(0.0001, v)); });
@@ -790,6 +832,6 @@ export function startUI(ed: Editor) {
 export { clean, prims };
 
 /** Per-browser conveniences (never essential; storage may be unavailable). */
-interface Prefs { noTips?: boolean; seen?: string[]; wheelPans?: boolean; joinTol?: number; dp?: number; pickPx?: number }
+interface Prefs { /** ask for material, thickness and copies when handing in and offer Export → For the technician (off at first) */ askLaser?: boolean; noTips?: boolean; seen?: string[]; wheelPans?: boolean; joinTol?: number; dp?: number; pickPx?: number }
 function loadPrefs(): Prefs { try { return JSON.parse(localStorage.getItem('kerf2d.prefs') || '{}') || {}; } catch { return {}; } }
 function savePrefs(p: Prefs) { try { localStorage.setItem('kerf2d.prefs', JSON.stringify(p)); } catch { /* ignore */ } }
